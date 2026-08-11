@@ -1,0 +1,1 @@
+Release 0.7.4 improves onboarding layout behavior on compact displays and refreshes the Android release build.

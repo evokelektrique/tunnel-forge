@@ -1,0 +1,1 @@
+Release 0.7.3 improves reproducible Android builds, adds ABI-split packaging for F-Droid, and refreshes the release workflow.

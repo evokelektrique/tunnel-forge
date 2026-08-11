@@ -1,0 +1,1 @@
+Release 0.7.5 fixes L2TP Call Serial Number AVP encoding and aligns release metadata with the current version codes.
