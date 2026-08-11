@@ -1,6 +1,7 @@
 /*
- * ESP in UDP-encapsulated form (RFC 3948): decrypt with AES-CBC + HMAC-SHA1-96, replay window,
- * optional non-ESP marker; encrypt/send builds outer UDP/IP as needed for tunnel mode toward peer.
+ * ESP in UDP-encapsulated form (RFC 3948): decrypt with AES-CBC or 3DES-CBC + HMAC-SHA1-96,
+ * replay window, optional non-ESP marker; encrypt/send builds outer UDP/IP as needed for tunnel
+ * mode toward peer.
  */
 #include "esp_udp.h"
 
@@ -31,7 +32,7 @@ typedef enum {
   ESP_FAIL_REPLAY_OLD,
   ESP_FAIL_REPLAY_DUP,
   ESP_FAIL_HMAC,
-  ESP_FAIL_AES,
+  ESP_FAIL_CIPHER,
   ESP_FAIL_PLAIN_SHORT,
   ESP_FAIL_NEXT_HEADER,
   ESP_FAIL_PAD_LEN,
@@ -120,8 +121,8 @@ void esp_decrypt_last_fail_snprint(char *buf, size_t buflen) {
   case ESP_FAIL_HMAC:
     snprintf(buf, buflen, "hmac_mismatch head=%s", hex);
     break;
-  case ESP_FAIL_AES:
-    snprintf(buf, buflen, "aes_cbc_failed head=%s", hex);
+  case ESP_FAIL_CIPHER:
+    snprintf(buf, buflen, "cipher_cbc_failed head=%s", hex);
     break;
   case ESP_FAIL_PLAIN_SHORT:
     snprintf(buf, buflen, "plain_too_short olen=%zu head=%s", s_last_fail.sa, hex);
@@ -181,7 +182,7 @@ typedef struct {
   uint64_t replay_old;
   uint64_t replay_dup;
   uint64_t hmac_mismatch;
-  uint64_t aes_decrypt_failed;
+  uint64_t cipher_decrypt_failed;
   uint64_t plain_too_short;
   uint64_t next_header_bad;
   uint64_t pad_len_bad;
@@ -198,11 +199,11 @@ void esp_log_drop_counters(const char *ctx, int reset_after_log) {
   tunnel_engine_log(
       ANDROID_LOG_DEBUG, LOG_TAG,
       "esp drop counters [%s]: spi=%llu seq0=%llu replay_old=%llu replay_dup=%llu hmac=%llu "
-      "aes=%llu short=%llu nh=%llu pad_len=%llu pad_byte=%llu udp_len=%llu l2tp_len=%llu",
+      "cipher=%llu short=%llu nh=%llu pad_len=%llu pad_byte=%llu udp_len=%llu l2tp_len=%llu",
       ctx ? ctx : "n/a", (unsigned long long)s_esp_drop_stats.spi_mismatch,
       (unsigned long long)s_esp_drop_stats.replay_seq_zero, (unsigned long long)s_esp_drop_stats.replay_old,
       (unsigned long long)s_esp_drop_stats.replay_dup, (unsigned long long)s_esp_drop_stats.hmac_mismatch,
-      (unsigned long long)s_esp_drop_stats.aes_decrypt_failed, (unsigned long long)s_esp_drop_stats.plain_too_short,
+      (unsigned long long)s_esp_drop_stats.cipher_decrypt_failed, (unsigned long long)s_esp_drop_stats.plain_too_short,
       (unsigned long long)s_esp_drop_stats.next_header_bad, (unsigned long long)s_esp_drop_stats.pad_len_bad,
       (unsigned long long)s_esp_drop_stats.pad_byte_bad, (unsigned long long)s_esp_drop_stats.udp_len_bad,
       (unsigned long long)s_esp_drop_stats.l2tp_len_bad);
@@ -224,6 +225,25 @@ static void esp_ensure_drbg(void) {
   s_esp_drbg_inited = 1;
 }
 
+static const mbedtls_cipher_info_t *esp_cipher_info(const esp_keys_t *k, size_t *block_size) {
+  if (k == NULL || block_size == NULL)
+    return NULL;
+  switch (k->cipher) {
+  case ESP_CIPHER_AES_CBC:
+    if (k->enc_key_len != 16)
+      return NULL;
+    *block_size = 16;
+    return mbedtls_cipher_info_from_values(MBEDTLS_CIPHER_ID_AES, 128, MBEDTLS_MODE_CBC);
+  case ESP_CIPHER_3DES_CBC:
+    if (k->enc_key_len != 24)
+      return NULL;
+    *block_size = 8;
+    return mbedtls_cipher_info_from_type(MBEDTLS_CIPHER_DES_EDE3_CBC);
+  default:
+    return NULL;
+  }
+}
+
 /**
  * Validate and decrypt one inbound ESP datagram into its inner L2TP payload.
  *
@@ -233,7 +253,7 @@ static void esp_ensure_drbg(void) {
  * 2. ESP header minimum-length and responder SPI validation.
  * 3. Replay-window validation using a pending state update.
  * 4. HMAC-SHA1-96 verification over ESP header, IV, and ciphertext.
- * 5. AES-CBC decrypt with mbedTLS padding disabled.
+ * 5. Negotiated AES-CBC or 3DES-CBC decrypt with mbedTLS padding disabled.
  * 6. ESP trailer, incremental padding, next-header, inner UDP length, and L2TP capacity checks.
  *
  * Replay state is intentionally committed only after every authentication, decrypt, and inner-payload
@@ -285,8 +305,14 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
       left -= 4;
     }
   }
+  size_t block_size = 0;
+  const mbedtls_cipher_info_t *info = esp_cipher_info(k, &block_size);
+  if (info == NULL) {
+    esp_fail_capture(ESP_FAIL_CIPHER_SETUP, in_len, p, left < 8 ? left : 8, 0, 0, 0, 0, 0);
+    return -1;
+  }
   const uint8_t *esp_head = p;
-  const size_t esp_need = 8 + 16 + 12;
+  const size_t esp_need = 8 + block_size + 12;
   if (left < esp_need) {
     esp_fail_capture(ESP_FAIL_SHORT_ESP, in_len, esp_head, left < 8 ? left : 8, 0, 0, left, 0, 0);
     return -1;
@@ -355,8 +381,8 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
   p += 4;
   left -= 4;
   const uint8_t *iv = p;
-  p += 16;
-  left -= 16;
+  p += block_size;
+  left -= block_size;
   const size_t icv_len = 12;
   size_t ct_len = left - icv_len;
   const uint8_t *ct = p;
@@ -366,7 +392,7 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
    * Step 3: verify integrity with the inbound HMAC-SHA1-96 key.
    *
    * The ICV covers the ESP header through ciphertext and excludes the optional UDP/4500 non-ESP marker.
-   * AES decrypt must not run on packets that fail this check.
+   * CBC decrypt must not run on packets that fail this check.
    */
   uint8_t mac_calc[32];
   const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
@@ -394,20 +420,13 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
   }
 
   /**
-   * Step 4: decrypt the ciphertext with AES-CBC.
+   * Step 4: decrypt the ciphertext with the negotiated CBC cipher.
    *
    * mbedTLS padding is disabled because ESP has its own trailer layout:
    * payload || 1,2,3... padding || pad length || next header.
    */
   mbedtls_cipher_context_t ciph;
   mbedtls_cipher_init(&ciph);
-  const mbedtls_cipher_info_t *info =
-      mbedtls_cipher_info_from_values(MBEDTLS_CIPHER_ID_AES, (int)k->enc_key_len * 8, MBEDTLS_MODE_CBC);
-  if (info == NULL) {
-    mbedtls_cipher_free(&ciph);
-    esp_fail_capture(ESP_FAIL_CIPHER_SETUP, in_len, esp_head, 8, 0, 0, 0, 0, 0);
-    return -1;
-  }
   const uint8_t *enc_in = k->enc_key_len ? k->enc_key + k->enc_key_len : k->enc_key;
   if (mbedtls_cipher_setup(&ciph, info) != 0) {
     mbedtls_cipher_free(&ciph);
@@ -438,12 +457,14 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
   memcpy(tmp, ct, ct_len);
   size_t olen = 0;
   uint8_t ivbuf[16];
-  memcpy(ivbuf, iv, 16);
-  if (mbedtls_cipher_crypt(&ciph, ivbuf, 16, tmp, ct_len, out, &olen) != 0) {
+  memcpy(ivbuf, iv, block_size);
+  if (ct_len == 0 || (ct_len % block_size) != 0 ||
+      mbedtls_cipher_crypt(&ciph, ivbuf, block_size, tmp, ct_len, out, &olen) != 0) {
     mbedtls_cipher_free(&ciph);
-    s_esp_drop_stats.aes_decrypt_failed++;
-    esp_fail_capture(ESP_FAIL_AES, in_len, esp_head, 8, 0, 0, 0, 0, 0);
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp decrypt drop: aes-cbc decrypt failed");
+    s_esp_drop_stats.cipher_decrypt_failed++;
+    esp_fail_capture(ESP_FAIL_CIPHER, in_len, esp_head, 8, 0, 0, 0, 0, 0);
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp decrypt drop: cbc decrypt failed cipher=%u",
+                      (unsigned)k->cipher);
     return -1;
   }
   mbedtls_cipher_free(&ciph);
@@ -560,7 +581,7 @@ static uint16_t ipv4_udp_checksum(const uint8_t ip_src[4], const uint8_t ip_dst[
  *
  * Behavior:
  * - Wraps plaintext as inner UDP(L2TP) payload, then builds ESP header/IV/trailer.
- * - Applies AES-CBC encryption and appends 96-bit truncated HMAC-SHA1 ICV.
+ * - Applies the negotiated AES-CBC or 3DES-CBC encryption and appends 96-bit truncated HMAC-SHA1 ICV.
  * - Sends the final packet to connected peer endpoint and emits bounded diagnostics.
  *
  * @return sendto() byte count on success path, -1 on local build/encrypt/auth failures.
@@ -603,19 +624,23 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
   uint32_t seq_i = k->seq_i++;
   util_write_be32(buf + off, seq_i);
   off += 4;
+  size_t block_size = 0;
+  const mbedtls_cipher_info_t *info = esp_cipher_info(k, &block_size);
+  if (info == NULL)
+    return -1;
   uint8_t iv[16];
   esp_ensure_drbg();
   if (s_esp_drbg_inited) {
     if (mbedtls_ctr_drbg_random(&s_esp_drbg, iv, sizeof(iv)) != 0)
       return -1;
   } else {
-    for (size_t i = 0; i < 16; i++)
+    for (size_t i = 0; i < block_size; i++)
       iv[i] = (uint8_t)(k->seq_i + (uint32_t)i + esp_plain[0]);
   }
-  memcpy(buf + off, iv, 16);
-  off += 16;
+  memcpy(buf + off, iv, block_size);
+  off += block_size;
   /* ESP trailer: PKCS#7-style incremental pad bytes + pad length + next header(UDP). */
-  size_t pad_len = (16 - ((esp_plain_len + 2) % 16)) % 16;
+  size_t pad_len = (block_size - ((esp_plain_len + 2) % block_size)) % block_size;
   size_t ct_len = esp_plain_len + pad_len + 2;
   if (off + ct_len + 12 > sizeof(buf))
     return -1;
@@ -630,12 +655,6 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
 
   mbedtls_cipher_context_t ciph;
   mbedtls_cipher_init(&ciph);
-  const mbedtls_cipher_info_t *info =
-      mbedtls_cipher_info_from_values(MBEDTLS_CIPHER_ID_AES, (int)k->enc_key_len * 8, MBEDTLS_MODE_CBC);
-  if (info == NULL) {
-    mbedtls_cipher_free(&ciph);
-    return -1;
-  }
   if (mbedtls_cipher_setup(&ciph, info) != 0 ||
       mbedtls_cipher_setkey(&ciph, k->enc_key, (int)k->enc_key_len * 8, MBEDTLS_ENCRYPT) != 0) {
     mbedtls_cipher_free(&ciph);
@@ -647,8 +666,8 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
   }
   size_t olen = 0;
   uint8_t ivcopy[16];
-  memcpy(ivcopy, iv, 16);
-  if (mbedtls_cipher_crypt(&ciph, ivcopy, 16, tmp, ct_len, buf + off, &olen) != 0) {
+  memcpy(ivcopy, iv, block_size);
+  if (mbedtls_cipher_crypt(&ciph, ivcopy, block_size, tmp, ct_len, buf + off, &olen) != 0) {
     mbedtls_cipher_free(&ciph);
     return -1;
   }

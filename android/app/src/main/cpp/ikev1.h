@@ -32,7 +32,7 @@ typedef struct {
  * Establishes transport for L2TP/UDP to @p server.
  * If @p psk is empty, skips IKE/IPsec and uses plaintext UDP.
  * Otherwise: IKEv1 Main Mode (PSK) with AES-128-CBC or 3DES phase-1 (MODP2048), Quick Mode ESP-UDP
- * (AES-128-CBC / HMAC-SHA1-96). Without NAT-T, ESP+L2TP use UDP 1701 after IKE completes.
+ * (AES-128-CBC or 3DES-CBC / HMAC-SHA1-96). Without NAT-T, ESP+L2TP use UDP 1701 after IKE completes.
  * Returns 0 on success; fills @p esp with SPI/keys when IPsec is used.
  */
 int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp);

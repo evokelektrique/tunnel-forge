@@ -198,11 +198,19 @@ static int prf_hmac_sha1(const uint8_t *key, size_t keylen, const uint8_t *data,
   return 0;
 }
 
-static void strip_leading_zeros(uint8_t *buf, size_t *len) {
-  while (*len > 1 && buf[0] == 0) {
-    memmove(buf, buf + 1, *len - 1);
-    (*len)--;
+/* IKEv1 represents MODP public values and the shared secret at the negotiated
+ * group width.  Do not feed a shorter, minimally encoded MPI into HASH_* or
+ * SKEYID_* when the value starts with zero bytes. */
+static int normalize_dh_value(uint8_t *buf, size_t *len, size_t capacity, size_t width) {
+  if (buf == NULL || len == NULL || width == 0 || width > capacity || *len > width)
+    return -1;
+  if (*len < width) {
+    size_t pad = width - *len;
+    memmove(buf + pad, buf, *len);
+    memset(buf, 0, pad);
   }
+  *len = width;
+  return 0;
 }
 
 /**
@@ -545,17 +553,17 @@ static int parse_payload_chain(const uint8_t *in, int inlen, am2_t *o) {
 }
 
 static int derive_3des_key(const uint8_t skeyid_e[20], uint8_t key24[24]) {
-  uint8_t k1[20], k2[20], k3[20];
+  uint8_t k1[20], k2[20];
   uint8_t z = 0;
   if (prf_hmac_sha1(skeyid_e, 20, &z, 1, k1) != 0)
     return -1;
   if (prf_hmac_sha1(skeyid_e, 20, k1, sizeof(k1), k2) != 0)
     return -1;
-  if (prf_hmac_sha1(skeyid_e, 20, k2, sizeof(k2), k3) != 0)
-    return -1;
-  memcpy(key24, k1, 8);
-  memcpy(key24 + 8, k2, 8);
-  memcpy(key24 + 16, k3, 8);
+  /* RFC 2409 Appendix B expands SKEYID_e as K1 || K2 || ... and
+   * truncates the stream to the cipher key length.  SHA-1 produces
+   * 20-byte blocks, so a 3DES-192 key is all of K1 plus four bytes of K2. */
+  memcpy(key24, k1, sizeof(k1));
+  memcpy(key24 + sizeof(k1), k2, 24 - sizeof(k1));
   return 0;
 }
 
@@ -863,14 +871,14 @@ static size_t build_p1_sa(uint8_t *b, size_t cap) {
 }
 
 // Build Phase 2 ESP SA payload body (DOI + Situation + Proposal + Transform).
-// Proposes: ESP_AES (id=12), AES-128-CBC, HMAC-SHA1-96, Transport mode.
+// Proposes AES-128-CBC (id=12) and 3DES-CBC (id=3), both with HMAC-SHA1-96 and transport mode.
 // Phase 2 SA attribute types are from the IPSEC DOI (RFC 2407 sec 4.5):
 //   type 4 = ENCAPSULATION_MODE (2=Transport)
 //   type 5 = AUTH_ALGORITHM    (2=HMAC-SHA1-96)
 //   type 6  = KEY_LENGTH        (128 for AES-128)
 static size_t build_p2_esp_sa(uint8_t *b, size_t cap, uint32_t spi_be) {
   size_t o = 0;
-  if (o + 48 > cap)
+  if (o + 56 > cap)
     return 0;
   util_write_be32(b + o, 1);
   o += 4; /* DOI = IPSEC (1) */
@@ -884,11 +892,11 @@ static size_t build_p2_esp_sa(uint8_t *b, size_t cap, uint32_t spi_be) {
   b[o++] = 1; /* proposal # */
   b[o++] = 3; /* protocol = ESP */
   b[o++] = 4; /* SPI size */
-  b[o++] = 1; /* # transforms */
+  b[o++] = 2; /* # transforms */
   util_write_be32(b + o, spi_be);
   o += 4;
   size_t t0 = o;
-  b[o++] = 0; /* next transform = NONE */
+  b[o++] = IKE_PT_T; /* next transform */
   b[o++] = 0; /* reserved */
   size_t t_len_m = o;
   o += 2;
@@ -912,6 +920,28 @@ static size_t build_p2_esp_sa(uint8_t *b, size_t cap, uint32_t spi_be) {
   b[o++] = 0x00;
   b[o++] = 0x80;
   util_write_be16(b + t_len_m, (uint16_t)(o - t0));
+
+  size_t t1 = o;
+  b[o++] = IKE_PT_NONE; /* next transform = NONE */
+  b[o++] = 0;
+  size_t t1_len_m = o;
+  o += 2;
+  b[o++] = 2; /* transform # */
+  b[o++] = 3; /* transform ID = ESP_3DES (3) */
+  b[o++] = 0;
+  b[o++] = 0;
+  /* UDP-encapsulated transport mode. */
+  b[o++] = 0x80;
+  b[o++] = 0x04;
+  b[o++] = 0x00;
+  b[o++] = 0x04;
+  /* AUTH_ALGORITHM = HMAC-SHA1-96 (2). */
+  b[o++] = 0x80;
+  b[o++] = 0x05;
+  b[o++] = 0x00;
+  b[o++] = 0x02;
+  /* RFC 2407: fixed-length ciphers omit the KEY_LENGTH attribute. */
+  util_write_be16(b + t1_len_m, (uint16_t)(o - t1));
   util_write_be16(b + p_len_m, (uint16_t)(o - p0));
   return o;
 }
@@ -929,48 +959,117 @@ static int nat_need_4500(const am2_t *a, const uint8_t h_us[20], const uint8_t h
   return !(su && sp);
 }
 
+typedef struct {
+  uint32_t spi_r;
+  uint8_t cipher;
+  size_t enc_key_len;
+} esp_qm_selection_t;
+
+static int parse_qm_esp_transform(const uint8_t *transform, size_t transform_len, uint8_t *cipher,
+                                  size_t *enc_key_len) {
+  if (transform == NULL || cipher == NULL || enc_key_len == NULL || transform_len < 8)
+    return -1;
+  uint8_t id = transform[5];
+  if (id == ESP_CIPHER_AES_CBC) {
+    *cipher = ESP_CIPHER_AES_CBC;
+    *enc_key_len = 16;
+  } else if (id == ESP_CIPHER_3DES_CBC) {
+    *cipher = ESP_CIPHER_3DES_CBC;
+    *enc_key_len = 24;
+  } else {
+    return -1;
+  }
+
+  /* Validate attributes present in the selected transform without requiring optional extensions. */
+  size_t off = 8;
+  while (off + 4 <= transform_len) {
+    uint16_t attr_type = util_read_be16(transform + off);
+    uint16_t attr_value = util_read_be16(transform + off + 2);
+    int basic = (attr_type & 0x8000u) != 0;
+    size_t attr_size = basic ? 4u : 4u + attr_value;
+    if (attr_size == 0 || off + attr_size > transform_len)
+      return -1;
+    uint16_t type = (uint16_t)(attr_type & 0x7fffu);
+    if (type == 6 && ((!basic && attr_value != 2) || (basic && attr_value == 0)))
+      return -1;
+    if (type == 6) {
+      uint16_t bits = basic ? attr_value : util_read_be16(transform + off + 4);
+      if ((*cipher == ESP_CIPHER_AES_CBC && bits != 128) ||
+          (*cipher == ESP_CIPHER_3DES_CBC && bits != 192))
+        return -1;
+    }
+    off += attr_size;
+  }
+  return off == transform_len ? 0 : -1;
+}
+
 /* QM2 SA may contain multiple Proposal substructures; some servers echo the initiator SPI
- * before the responder SPI. Outbound ESP must use our spi_i; inbound keymat uses peer SPI.
- * Prefer the last non-zero ESP SPI that differs from our_esp_spi, else fall back to last seen. */
-static uint32_t extract_peer_esp_spi_from_qm2_sa(const uint8_t *sa_hdr, size_t sa_pl_len, uint32_t our_esp_spi) {
-  if (sa_pl_len < 4 + 12)
-    return 0;
+ * before the responder SPI. Outbound ESP must use our spi_i; inbound keymat uses peer SPI. */
+static int extract_qm2_esp_selection(const uint8_t *sa_hdr, size_t sa_pl_len, uint32_t our_esp_spi,
+                                     esp_qm_selection_t *out) {
+  if (sa_hdr == NULL || out == NULL || sa_pl_len < 4 + 16)
+    return -1;
   const uint8_t *b = sa_hdr + 4;
   size_t inner = sa_pl_len - 4;
+  if (inner < 8)
+    return -1;
   const uint8_t *p = b + 8;
   size_t left = inner - 8;
-  uint32_t last = 0;
-  uint32_t peer = 0;
-  while (left >= 12) {
+  uint32_t last_spi = 0;
+  uint32_t peer_spi = 0;
+  uint8_t selected_cipher = 0;
+  size_t selected_key_len = 0;
+  while (left >= 8) {
     uint16_t plen = util_read_be16(p + 2);
-    if (plen < 12 || plen > left)
-      break;
-    if (p[5] == 3 && p[6] == 4) {
+    if (plen < 8 || plen > left)
+      return -1;
+    uint8_t spi_size = p[6];
+    if (p[5] == 3 && spi_size == 4 && plen >= (size_t)8 + spi_size) {
       uint32_t spi = util_read_be32(p + 8);
       if (spi != 0) {
-        last = spi;
+        last_spi = spi;
         if (spi != our_esp_spi)
-          peer = spi;
+          peer_spi = spi;
       }
+      size_t transforms_off = 8u + spi_size;
+      size_t transform_left = plen - transforms_off;
+      const uint8_t *t = p + transforms_off;
+      while (transform_left >= 8) {
+        uint16_t tlen = util_read_be16(t + 2);
+        if (tlen < 8 || tlen > transform_left)
+          return -1;
+        uint8_t cipher = 0;
+        size_t key_len = 0;
+        if (parse_qm_esp_transform(t, tlen, &cipher, &key_len) == 0 && selected_cipher == 0) {
+          selected_cipher = cipher;
+          selected_key_len = key_len;
+        }
+        uint8_t next = t[0];
+        t += tlen;
+        transform_left -= tlen;
+        if (next == IKE_PT_NONE)
+          break;
+      }
+      if (transform_left != 0)
+        return -1;
     }
-    uint8_t np = p[0];
+    uint8_t next = p[0];
     p += plen;
     left -= plen;
-    if (np == 0)
+    if (next == IKE_PT_NONE)
       break;
   }
-  if (peer != 0)
-    return peer;
-  if (last == 0)
-    return 0;
-  if (last == our_esp_spi) {
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
-                      "Quick Mode SA parse ambiguous: only initiator SPI %08x seen in QM2 SA", (unsigned)our_esp_spi);
-    return 0;
+  if (left != 0 || selected_cipher == 0 || peer_spi == 0) {
+    if (peer_spi == 0 && last_spi == our_esp_spi)
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                        "Quick Mode SA parse ambiguous: only initiator SPI %08x seen in QM2 SA",
+                        (unsigned)our_esp_spi);
+    return -1;
   }
-  tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
-                    "Quick Mode SA parse fallback: responder SPI not explicit, using last seen %08x", (unsigned)last);
-  return last;
+  out->spi_r = peer_spi;
+  out->cipher = selected_cipher;
+  out->enc_key_len = selected_key_len;
+  return 0;
 }
 
 /* IKEv1 Quick Mode KEYMAT expansion (RFC 2409 Appendix B):
@@ -1367,6 +1466,10 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   }
   memcpy(ke_r_buf, am4.ke_r, am4.ke_r_len);
   ke_r_len = am4.ke_r_len;
+  if (normalize_dh_value(ke_r_buf, &ke_r_len, sizeof(ke_r_buf), IKE_DH_PUBKEY_BYTES) != 0) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM4: responder KE is not a valid MODP2048 value");
+    goto fail_fd;
+  }
   memcpy(nr_buf, am4.nr, am4.nr_len);
   nr_len = am4.nr_len;
 
@@ -1384,7 +1487,41 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     goto fail_fd;
   }
   mbedtls_dhm_free(&dhm);
-  strip_leading_zeros(gxy, &gxy_len);
+  if (normalize_dh_value(gxy, &gxy_len, sizeof(gxy), IKE_DH_PUBKEY_BYTES) != 0) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: DH shared secret is not a valid MODP2048 value");
+    goto fail_fd;
+  }
+
+  /* NAT-T is negotiated in MM3/MM4.  Libreswan expects encrypted MM5/MM6 on
+   * UDP 4500, so switch sockets before sending MM5 rather than after MM6. */
+  int use4500;
+  int prefix;
+  if (p1_prefix) {
+    use4500 = 1;
+    prefix = 1;
+    tunnel_log("NAT-T: Phase 1 already on UDP 4500; MM5 and Quick Mode will use the same socket");
+  } else {
+    use4500 = nat_need_4500(&am4, h_us, h_peer);
+    tunnel_log("NAT-T (UDP 4500) needed=%d natd_payloads=%d before MM5", use4500, am4.natd_count);
+    prefix = 0;
+    if (use4500) {
+      if (resolve_udp(server, NAT_T_PORT, &peer_active, &peer_active_len) != 0) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: resolve NAT-T :4500 failed");
+        goto fail_early;
+      }
+      ike_log_endpoint("IKE peer:4500", (struct sockaddr *)&peer_active, peer_active_len);
+      if (connect(fd, (struct sockaddr *)&peer_active, peer_active_len) != 0) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(4500) errno=%d", errno);
+        goto fail_fd;
+      }
+      p1_prefix = 1;
+      prefix = 1;
+      esp->udp_encap = 1;
+      tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "NAT-T: using UDP 4500 before MM5");
+    } else {
+      esp->udp_encap = 0;
+    }
+  }
 
   // SKEYID = prf(PSK, Ni | Nr) (RFC 2409 sec 5, PSK).
   uint8_t skeyid[20];
@@ -1725,45 +1862,6 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     tunnel_log("IKE MM: HASH_R ok (PSK verifies for Phase 1)");
   }
 
-  int use4500;
-  int prefix;
-  if (p1_prefix) {
-    use4500 = 1;
-    prefix = 1;
-    tunnel_log("NAT-T: Phase 1 already on UDP 4500 (MM1 fallback); Quick Mode will use same socket");
-  } else {
-    use4500 = nat_need_4500(&am4, h_us, h_peer);
-    tunnel_log("NAT-T (UDP 4500) needed=%d natd_payloads=%d", use4500, am4.natd_count);
-    memcpy(&peer_active, &peer500, l500);
-    peer_active_len = l500;
-    prefix = 0;
-    if (use4500) {
-      close(fd);
-      fd = -1;
-      if (resolve_udp(server, NAT_T_PORT, &peer_active, &peer_active_len) != 0) {
-        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: resolve NAT-T :4500 failed");
-        goto fail_early;
-      }
-      ike_log_endpoint("IKE peer:4500", (struct sockaddr *)&peer_active, peer_active_len);
-      fd = socket(peer_active.ss_family, SOCK_DGRAM, IPPROTO_UDP);
-      if (fd < 0) {
-        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: socket(4500) errno=%d", errno);
-        goto fail_early;
-      }
-      if (util_protect_fd(fd) != 0)
-        goto fail_fd;
-      if (connect(fd, (struct sockaddr *)&peer_active, peer_active_len) != 0) {
-        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(4500) errno=%d", errno);
-        goto fail_fd;
-      }
-      prefix = 1;
-      esp->udp_encap = 1;
-      tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "NAT-T: using UDP 4500");
-    } else {
-      esp->udp_encap = 0;
-    }
-  }
-
   size_t len_mark;
   uint32_t qm_mid;
   mbedtls_ctr_drbg_random(&ctr, (uint8_t *)&qm_mid, sizeof(qm_mid));
@@ -1992,6 +2090,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   size_t after_hash_off = 0;
   size_t qm2_payload_end = 0;
   uint32_t spi_r = 0;
+  esp_qm_selection_t qm_selection = {0};
   int qm2_chain_terminated = 0;
   int qm2_chain_malformed = 0;
   {
@@ -2010,7 +2109,11 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
         hash2_len = bl;
         after_hash_off = walk + pl;
       } else if (cur == IKE_PT_SA) {
-        spi_r = extract_peer_esp_spi_from_qm2_sa(dec_qm + walk, pl, spi_i);
+        if (extract_qm2_esp_selection(dec_qm + walk, pl, spi_i, &qm_selection) != 0) {
+          qm2_chain_malformed = 1;
+          break;
+        }
+        spi_r = qm_selection.spi_r;
       } else if (cur == IKE_PT_NONCE && nr_qm == NULL) {
         nr_qm = bd;
         nr_qm_len = bl;
@@ -2035,18 +2138,22 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
                       qm2_chain_terminated, qm2_chain_malformed, qm2_payload_end, dec_len);
     goto fail_fd;
   }
-  if (nr_qm == NULL || hash2 == NULL || spi_r == 0 || after_hash_off == 0 || after_hash_off >= qm2_payload_end) {
+  if (nr_qm == NULL || hash2 == NULL || spi_r == 0 || qm_selection.cipher == 0 || after_hash_off == 0 ||
+      after_hash_off >= qm2_payload_end) {
     tunnel_engine_log(
         ANDROID_LOG_ERROR, LOG_TAG,
-        "Quick Mode: missing required payloads nr=%p hash2=%p spi_r=%08x spi_i=%08x after_hash=%zu payload_end=%zu",
-        (void *)nr_qm, (void *)hash2, (unsigned)spi_r, (unsigned)spi_i, after_hash_off, qm2_payload_end);
+        "Quick Mode: missing required payloads nr=%p hash2=%p spi_r=%08x spi_i=%08x cipher=%u after_hash=%zu "
+        "payload_end=%zu",
+        (void *)nr_qm, (void *)hash2, (unsigned)spi_r, (unsigned)spi_i, (unsigned)qm_selection.cipher,
+        after_hash_off, qm2_payload_end);
     goto fail_fd;
   }
   if (nr_qm_len == 0 || nr_qm_len > 64) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode: unsupported Nr length=%zu", nr_qm_len);
     goto fail_fd;
   }
-  tunnel_log("Quick Mode: peer spi_r=%08x nr_len=%zu", (unsigned)spi_r, nr_qm_len);
+  tunnel_log("Quick Mode: peer spi_r=%08x cipher=%s nr_len=%zu", (unsigned)spi_r,
+             qm_selection.cipher == ESP_CIPHER_3DES_CBC ? "3DES-CBC" : "AES-128-CBC", nr_qm_len);
 
   // HASH(2) = prf(SKEYID_a, M-ID | Ni_b | <all payloads after HASH in QM2, with headers>).
   // RFC 2409 sec 5.5: message id concatenated with the entire message after HASH, including
@@ -2156,10 +2263,14 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   }
 
   /* KEYMAT interop matrix (A/B/C):
-   * A: per-SPI seeds (IKEv1-style expansion), B/C: single-stream split variants. */
-  uint8_t keymat_a_i[36], keymat_a_r[36];
-  uint8_t keymat_b_i[36], keymat_b_r[36];
-  uint8_t keymat_c_i[36], keymat_c_r[36];
+   * A: per-SPI seeds (IKEv1-style expansion), B/C: single-stream split variants.
+   * AES needs 16+20 bytes per direction; 3DES needs 24+20 bytes. */
+  const size_t esp_enc_key_len = qm_selection.enc_key_len;
+  const size_t esp_keymat_len = esp_enc_key_len + 20;
+  const size_t esp_keymat_total_len = esp_keymat_len * 2;
+  uint8_t keymat_a_i[44], keymat_a_r[44];
+  uint8_t keymat_b_i[44], keymat_b_r[44];
+  uint8_t keymat_c_i[44], keymat_c_r[44];
   {
     /* Variant A: per-SA, seed = proto|spi|Ni|Nr */
     uint8_t seed_r[1 + 4 + 16 + 64], seed_i[1 + 4 + 16 + 64];
@@ -2178,8 +2289,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     sl_i += sizeof(ni_qm);
     memcpy(seed_i + sl_i, nr_qm, nr_qm_len);
     sl_i += nr_qm_len;
-    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed_r, sl_r, keymat_a_r, sizeof(keymat_a_r)) != 0 ||
-        keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed_i, sl_i, keymat_a_i, sizeof(keymat_a_i)) != 0) {
+    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed_r, sl_r, keymat_a_r, esp_keymat_len) != 0 ||
+        keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed_i, sl_i, keymat_a_i, esp_keymat_len) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant A failed");
       goto fail_fd;
     }
@@ -2197,13 +2308,13 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     sl += sizeof(ni_qm);
     memcpy(seed + sl, nr_qm, nr_qm_len);
     sl += nr_qm_len;
-    uint8_t stream[72];
-    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed, sl, stream, sizeof(stream)) != 0) {
+    uint8_t stream[88];
+    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed, sl, stream, esp_keymat_total_len) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant B failed");
       goto fail_fd;
     }
-    memcpy(keymat_b_i, stream, 36);
-    memcpy(keymat_b_r, stream + 36, 36);
+    memcpy(keymat_b_i, stream, esp_keymat_len);
+    memcpy(keymat_b_r, stream + esp_keymat_len, esp_keymat_len);
   }
   {
     /* Variant C: one stream, seed = proto|spi_i|spi_r|Nr|Ni, split to i/r blocks */
@@ -2218,13 +2329,13 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     sl += nr_qm_len;
     memcpy(seed + sl, ni_qm, sizeof(ni_qm));
     sl += sizeof(ni_qm);
-    uint8_t stream[72];
-    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed, sl, stream, sizeof(stream)) != 0) {
+    uint8_t stream[88];
+    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed, sl, stream, esp_keymat_total_len) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant C failed");
       goto fail_fd;
     }
-    memcpy(keymat_c_i, stream, 36);
-    memcpy(keymat_c_r, stream + 36, 36);
+    memcpy(keymat_c_i, stream, esp_keymat_len);
+    memcpy(keymat_c_r, stream + esp_keymat_len, esp_keymat_len);
   }
 
   const uint8_t *keymat_i = keymat_a_i;
@@ -2246,16 +2357,17 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
    * client outbound must use the peer's inbound SPI/material from QM2. */
   esp->spi_i = spi_r;
   esp->spi_r = spi_i;
-  esp->enc_key_len = 16;
+  esp->enc_key_len = esp_enc_key_len;
   esp->auth_key_len = 20;
+  esp->cipher = qm_selection.cipher;
   memcpy(esp->ip_src, ip_us, 4);
   memcpy(esp->ip_dst, ip_peer, 4);
   // Outbound (us->peer): use responder material (keymat_r / spi_r from QM2 parse).
-  memcpy(esp->enc_key, keymat_r, 16);
-  memcpy(esp->auth_key, keymat_r + 16, 20);
+  memcpy(esp->enc_key, keymat_r, esp_enc_key_len);
+  memcpy(esp->auth_key, keymat_r + esp_enc_key_len, 20);
   // Inbound (peer->us): use initiator material (keymat_i / spi_i we proposed).
-  memcpy(esp->enc_key + 16, keymat_i, 16);
-  memcpy(esp->auth_key + 20, keymat_i + 16, 20);
+  memcpy(esp->enc_key + esp_enc_key_len, keymat_i, esp_enc_key_len);
+  memcpy(esp->auth_key + 20, keymat_i + esp_enc_key_len, 20);
   esp->seq_i = 1;
   esp->replay_bitmap = 0;
   esp->replay_top = 0;
@@ -2266,29 +2378,33 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
                       "IKE keymat probe: build=kmat-v3 macro=%d active=%s spi_i=%08x spi_r=%08x", active_keymat_variant,
                       keymat_variant, (unsigned)spi_i, (unsigned)spi_r);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                      "IKE keymat A: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3], keymat_a_r[16], keymat_a_r[17],
-                      keymat_a_r[18], keymat_a_r[19], keymat_a_i[0], keymat_a_i[1], keymat_a_i[2], keymat_a_i[3],
-                      keymat_a_i[16], keymat_a_i[17], keymat_a_i[18], keymat_a_i[19]);
+                      "IKE keymat A cipher=%u: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
+                      (unsigned)qm_selection.cipher, keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3],
+                      keymat_a_r[esp_enc_key_len], keymat_a_r[esp_enc_key_len + 1], keymat_a_r[esp_enc_key_len + 2],
+                      keymat_a_r[esp_enc_key_len + 3], keymat_a_i[0], keymat_a_i[1], keymat_a_i[2], keymat_a_i[3],
+                      keymat_a_i[esp_enc_key_len], keymat_a_i[esp_enc_key_len + 1], keymat_a_i[esp_enc_key_len + 2],
+                      keymat_a_i[esp_enc_key_len + 3]);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat A K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3], keymat_a_r[20], keymat_a_r[21],
-                      keymat_a_r[22], keymat_a_r[23]);
+                      keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3], keymat_a_r[esp_enc_key_len],
+                      keymat_a_r[esp_enc_key_len + 1], keymat_a_r[esp_enc_key_len + 2], keymat_a_r[esp_enc_key_len + 3]);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                       "IKE keymat B: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[16], keymat_b_r[17],
-                      keymat_b_r[18], keymat_b_r[19], keymat_b_i[0], keymat_b_i[1], keymat_b_i[2], keymat_b_i[3],
-                      keymat_b_i[16], keymat_b_i[17], keymat_b_i[18], keymat_b_i[19]);
+                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[esp_enc_key_len],
+                      keymat_b_r[esp_enc_key_len + 1], keymat_b_r[esp_enc_key_len + 2], keymat_b_r[esp_enc_key_len + 3],
+                      keymat_b_i[0], keymat_b_i[1], keymat_b_i[2], keymat_b_i[3], keymat_b_i[esp_enc_key_len],
+                      keymat_b_i[esp_enc_key_len + 1], keymat_b_i[esp_enc_key_len + 2], keymat_b_i[esp_enc_key_len + 3]);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat B K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[20], keymat_b_r[21],
-                      keymat_b_r[22], keymat_b_r[23]);
+                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[esp_enc_key_len],
+                      keymat_b_r[esp_enc_key_len + 1], keymat_b_r[esp_enc_key_len + 2], keymat_b_r[esp_enc_key_len + 3]);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                       "IKE keymat C: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[16], keymat_c_r[17],
-                      keymat_c_r[18], keymat_c_r[19], keymat_c_i[0], keymat_c_i[1], keymat_c_i[2], keymat_c_i[3],
-                      keymat_c_i[16], keymat_c_i[17], keymat_c_i[18], keymat_c_i[19]);
+                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[esp_enc_key_len],
+                      keymat_c_r[esp_enc_key_len + 1], keymat_c_r[esp_enc_key_len + 2], keymat_c_r[esp_enc_key_len + 3],
+                      keymat_c_i[0], keymat_c_i[1], keymat_c_i[2], keymat_c_i[3], keymat_c_i[esp_enc_key_len],
+                      keymat_c_i[esp_enc_key_len + 1], keymat_c_i[esp_enc_key_len + 2], keymat_c_i[esp_enc_key_len + 3]);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat C K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[20], keymat_c_r[21],
-                      keymat_c_r[22], keymat_c_r[23]);
+                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[esp_enc_key_len],
+                      keymat_c_r[esp_enc_key_len + 1], keymat_c_r[esp_enc_key_len + 2], keymat_c_r[esp_enc_key_len + 3]);
   }
 
 #if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
@@ -2296,18 +2412,20 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       ANDROID_LOG_DEBUG, LOG_TAG,
       "DEBUG_ESP_KEYMAT: spi_i=%08x spi_r=%08x variant=%s - compare keymat_* to gateway `ip xfrm state` (enc+auth)",
       (unsigned)spi_i, (unsigned)spi_r, keymat_variant);
-  ike_hex_dump("keymat_i out(enc|auth)", keymat_i, 36, 36);
-  ike_hex_dump("keymat_r in(enc|auth)", keymat_r, 36, 36);
+  ike_hex_dump("keymat_i out(enc|auth)", keymat_i, esp_keymat_len, esp_keymat_len);
+  ike_hex_dump("keymat_r in(enc|auth)", keymat_r, esp_keymat_len, esp_keymat_len);
 #endif
   if (s_ike_keymap_log_once == 0) {
     s_ike_keymap_log_once = 1;
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                      "IKE keymap one-shot: client_out_spi=%08x client_in_spi=%08x out_enc=%02x%02x%02x%02x "
+                      "IKE keymap one-shot: cipher=%u client_out_spi=%08x client_in_spi=%08x out_enc=%02x%02x%02x%02x "
                       "out_auth=%02x%02x%02x%02x in_enc=%02x%02x%02x%02x in_auth=%02x%02x%02x%02x",
-                      (unsigned)esp->spi_i, (unsigned)esp->spi_r, esp->enc_key[0], esp->enc_key[1], esp->enc_key[2],
-                      esp->enc_key[3], esp->auth_key[0], esp->auth_key[1], esp->auth_key[2], esp->auth_key[3],
-                      esp->enc_key[16], esp->enc_key[17], esp->enc_key[18], esp->enc_key[19], esp->auth_key[20],
-                      esp->auth_key[21], esp->auth_key[22], esp->auth_key[23]);
+                      (unsigned)esp->cipher, (unsigned)esp->spi_i, (unsigned)esp->spi_r, esp->enc_key[0],
+                      esp->enc_key[1], esp->enc_key[2], esp->enc_key[3], esp->auth_key[0], esp->auth_key[1],
+                      esp->auth_key[2], esp->auth_key[3], esp->enc_key[esp->enc_key_len],
+                      esp->enc_key[esp->enc_key_len + 1], esp->enc_key[esp->enc_key_len + 2],
+                      esp->enc_key[esp->enc_key_len + 3], esp->auth_key[20], esp->auth_key[21], esp->auth_key[22],
+                      esp->auth_key[23]);
   }
 
   memcpy(&ike->peer, &peer_active, peer_active_len);
@@ -2326,7 +2444,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
 
   mbedtls_ctr_drbg_free(&ctr);
   mbedtls_entropy_free(&entropy);
-  tunnel_log("IKE+QM ok spi_i=%08x spi_r=%08x udp_encap=%d", (unsigned)spi_i, (unsigned)spi_r, esp->udp_encap);
+  tunnel_log("IKE+QM ok spi_i=%08x spi_r=%08x cipher=%s udp_encap=%d", (unsigned)spi_i, (unsigned)spi_r,
+             esp->cipher == ESP_CIPHER_3DES_CBC ? "3DES-CBC" : "AES-128-CBC", esp->udp_encap);
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE QM SA map: outbound_spi=%08x inbound_spi=%08x profile=%s",
                     (unsigned)esp->spi_i, (unsigned)esp->spi_r, esp->outbound_profile ? "alt-direction" : "primary");
   tunnel_engine_log(

@@ -282,7 +282,7 @@ static void ingest_peer_ns(l2tp_session_t *s, uint16_t peer_ns) { s->recv_nr_exp
 static int esp_prepare_profile_variant(const esp_keys_t *src, esp_keys_t *dst, int swap_direction,
                                        int swap_split_order) {
   *dst = *src;
-  if (src->enc_key_len != 16 || src->auth_key_len != 20)
+  if ((src->enc_key_len != 16 && src->enc_key_len != 24) || src->auth_key_len != 20)
     return -1;
   if (src->spi_i == 0 || src->spi_r == 0)
     return -1;
@@ -291,12 +291,13 @@ static int esp_prepare_profile_variant(const esp_keys_t *src, esp_keys_t *dst, i
     return -1;
   }
 
-  uint8_t out_mat[36];
-  uint8_t in_mat[36];
-  memcpy(out_mat + 0, src->enc_key + 0, 16);
-  memcpy(out_mat + 16, src->auth_key + 0, 20);
-  memcpy(in_mat + 0, src->enc_key + 16, 16);
-  memcpy(in_mat + 16, src->auth_key + 20, 20);
+  size_t enc_len = src->enc_key_len;
+  uint8_t out_mat[44];
+  uint8_t in_mat[44];
+  memcpy(out_mat, src->enc_key, enc_len);
+  memcpy(out_mat + enc_len, src->auth_key, src->auth_key_len);
+  memcpy(in_mat, src->enc_key + enc_len, enc_len);
+  memcpy(in_mat + enc_len, src->auth_key + src->auth_key_len, src->auth_key_len);
 
   const uint8_t *chosen_out = swap_direction ? in_mat : out_mat;
   const uint8_t *chosen_in = swap_direction ? out_mat : in_mat;
@@ -304,10 +305,10 @@ static int esp_prepare_profile_variant(const esp_keys_t *src, esp_keys_t *dst, i
   dst->spi_i = swap_direction ? src->spi_r : src->spi_i;
   dst->spi_r = swap_direction ? src->spi_i : src->spi_r;
 
-  memcpy(dst->enc_key + 0, chosen_out + 0, 16);
-  memcpy(dst->auth_key + 0, chosen_out + 16, 20);
-  memcpy(dst->enc_key + 16, chosen_in + 0, 16);
-  memcpy(dst->auth_key + 20, chosen_in + 16, 20);
+  memcpy(dst->enc_key, chosen_out, enc_len);
+  memcpy(dst->auth_key, chosen_out + enc_len, src->auth_key_len);
+  memcpy(dst->enc_key + enc_len, chosen_in, enc_len);
+  memcpy(dst->auth_key + src->auth_key_len, chosen_in + enc_len, src->auth_key_len);
   dst->seq_i = 1;
   dst->replay_bitmap = 0;
   dst->replay_top = 0;

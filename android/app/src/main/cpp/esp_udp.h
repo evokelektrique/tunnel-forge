@@ -2,20 +2,29 @@
 #define TUNNEL_FORGE_ESP_UDP_H
 
 /*
- * ESP transport-mode keys and helpers: AES-CBC + HMAC-SHA1-96 over UDP (RFC 3948) or cleartext.
- * enc_key/auth_key layout: first enc_key_len / auth_key_len bytes are encrypt/sign material when
- * split keys are used; see esp_udp.c.
+ * ESP transport-mode keys and helpers: AES-CBC or 3DES-CBC + HMAC-SHA1-96 over UDP (RFC 3948)
+ * or cleartext. enc_key/auth_key layout: first enc_key_len / auth_key_len bytes are encrypt/sign
+ * material when split keys are used; see esp_udp.c.
  */
 
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/socket.h>
 
+enum {
+  ESP_CIPHER_3DES_CBC = 3,
+  ESP_CIPHER_AES_CBC = 12,
+};
+
 typedef struct {
-  uint8_t enc_key[32];
+  // Outbound and inbound keys are stored back-to-back: 16+16 for AES or
+  // 24+24 for 3DES.
+  uint8_t enc_key[48];
   uint8_t auth_key[64];
   size_t enc_key_len;
   size_t auth_key_len;
+  /** Negotiated IPsec ESP transform identifier (ESP_CIPHER_*). */
+  uint8_t cipher;
   uint32_t spi_i;
   uint32_t spi_r;
   uint32_t seq_i;
