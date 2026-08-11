@@ -987,7 +987,7 @@ static int parse_qm_esp_transform(const uint8_t *transform, size_t transform_len
     uint16_t attr_value = util_read_be16(transform + off + 2);
     int basic = (attr_type & 0x8000u) != 0;
     size_t attr_size = basic ? 4u : 4u + attr_value;
-    if (attr_size == 0 || off + attr_size > transform_len)
+    if (off + attr_size > transform_len)
       return -1;
     uint16_t type = (uint16_t)(attr_type & 0x7fffu);
     if (type == 6 && ((!basic && attr_value != 2) || (basic && attr_value == 0)))
@@ -1011,8 +1011,6 @@ static int extract_qm2_esp_selection(const uint8_t *sa_hdr, size_t sa_pl_len, ui
     return -1;
   const uint8_t *b = sa_hdr + 4;
   size_t inner = sa_pl_len - 4;
-  if (inner < 8)
-    return -1;
   const uint8_t *p = b + 8;
   size_t left = inner - 8;
   uint32_t last_spi = 0;
