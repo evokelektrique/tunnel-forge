@@ -29,6 +29,12 @@ int l2tp_avp_append_u16(uint8_t *buf, size_t cap, size_t *off, uint16_t attr_typ
   return l2tp_avp_append_raw(buf, cap, off, attr_type, tmp, sizeof(tmp));
 }
 
+int l2tp_avp_append_u32(uint8_t *buf, size_t cap, size_t *off, uint16_t attr_type, uint32_t value) {
+  uint8_t tmp[4];
+  util_write_be32(tmp, value);
+  return l2tp_avp_append_raw(buf, cap, off, attr_type, tmp, sizeof(tmp));
+}
+
 int l2tp_avp_append_result(uint8_t *buf, size_t cap, size_t *off, uint16_t result_code, uint16_t error_code) {
   uint8_t tmp[4];
   util_write_be16(tmp + 0, result_code);

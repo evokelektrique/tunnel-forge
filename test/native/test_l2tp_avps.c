@@ -133,6 +133,15 @@ int main(void) {
   if (assigned_session != 0x687fu) return fail("cdn assigned session value");
 
   ao = 0;
+  if (l2tp_avp_append_u32(avps, sizeof(avps), &ao, L2TP_AVP_CALL_SERIAL, 0x01020304u) != 0) {
+    return fail("append call serial");
+  }
+  if (ao != 10u) return fail("call serial length");
+  if (util_read_be16(avps + 0) != 0x800au) return fail("call serial avp length");
+  if (util_read_be16(avps + 4) != L2TP_AVP_CALL_SERIAL) return fail("call serial type");
+  if (util_read_be32(avps + 6) != 0x01020304u) return fail("call serial value");
+
+  ao = 0;
   memset(pkt, 0, sizeof(pkt));
   if (l2tp_avp_append_u16(avps, sizeof(avps), &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_STOPCCN) != 0) {
     return fail("append stop msg type");

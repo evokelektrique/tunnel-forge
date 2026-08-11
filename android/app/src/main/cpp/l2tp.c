@@ -613,10 +613,11 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   ao = 0;
   avp_u16(avps, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_ICRQ);
   avp_u16(avps, &ao, L2TP_AVP_ASSIGNED_SESSION, local_sid);
-  avp_u16(avps, &ao, 15, 1);
+  if (l2tp_avp_append_u32(avps, sizeof(avps), &ao, L2TP_AVP_CALL_SERIAL, 1u) != 0)
+    return -1;
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                     "l2tp icrq avps: msg_type=%u assigned_session=%u call_serial=%u call_serial_width=%u",
-                    (unsigned)L2TP_MSG_ICRQ, (unsigned)local_sid, 1u, 16u);
+                    (unsigned)L2TP_MSG_ICRQ, (unsigned)local_sid, 1u, 32u);
   if (send_ctrl(esp_fd, esp, peer, peer_len, s, avps, ao) != 0)
     return -1;
 

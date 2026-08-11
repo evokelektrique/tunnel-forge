@@ -8,6 +8,7 @@
 #define L2TP_AVP_RESULT_CODE 1
 #define L2TP_AVP_ASSIGNED_TUNNEL 9
 #define L2TP_AVP_ASSIGNED_SESSION 14
+#define L2TP_AVP_CALL_SERIAL 15
 
 #define L2TP_MSG_SCCRQ 1
 #define L2TP_MSG_SCCRP 2
@@ -24,6 +25,9 @@
 
 /** Append a mandatory uint16 AVP to an AVP buffer. */
 int l2tp_avp_append_u16(uint8_t *buf, size_t cap, size_t *off, uint16_t attr_type, uint16_t value);
+
+/** Append a mandatory uint32 AVP to an AVP buffer. */
+int l2tp_avp_append_u32(uint8_t *buf, size_t cap, size_t *off, uint16_t attr_type, uint32_t value);
 
 /** Append a mandatory Result Code AVP with result+error and no message. */
 int l2tp_avp_append_result(uint8_t *buf, size_t cap, size_t *off, uint16_t result_code, uint16_t error_code);
