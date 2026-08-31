@@ -295,7 +295,32 @@ jobs:
 
       - name: Verify reviewer APK
         if: github.event_name == 'pull_request' || inputs.pr_number != ''
-        run: apksigner verify --verbose build/app/outputs/flutter-apk/app-debug.apk
+        run: |
+          android_sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          if [[ -z "${android_sdk_root}" ]]; then
+            echo "Android SDK root is not set" >&2
+            exit 1
+          fi
+
+          apksigner_path="$(
+            find "${android_sdk_root}/build-tools" \
+              -maxdepth 2 \
+              -type f \
+              -name apksigner \
+              -executable |
+              sort -V |
+              tail -n 1
+          )"
+
+          if [[ -z "${apksigner_path}" ]]; then
+            echo "apksigner not found under ${android_sdk_root}/build-tools" >&2
+            exit 1
+          fi
+
+          echo "Using apksigner: ${apksigner_path}"
+          "${apksigner_path}" verify --verbose \
+            build/app/outputs/flutter-apk/app-debug.apk
 
       - name: Upload reviewer APK
         if: github.event_name == 'pull_request' || inputs.pr_number != ''
