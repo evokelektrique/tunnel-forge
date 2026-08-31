@@ -132,3 +132,55 @@ int ppp_mschapv2_response_value(const char *username, const char *password, cons
   value49_out[48] = 0;
   return 0;
 }
+
+int ppp_mschapv2_authenticator_response(const char *username, const char *password, const uint8_t auth_challenge[16],
+                                        const uint8_t peer_challenge[16], const uint8_t nt_response[24],
+                                        uint8_t digest_out[20]) {
+  static const uint8_t magic1[] = "Magic server to client signing constant";
+  static const uint8_t magic2[] = "Pad to make it do more than one iteration";
+  uint8_t password_hash[16];
+  uint8_t password_hash_hash[16];
+  uint8_t challenge[8];
+  uint8_t first_digest[20];
+
+  if (username == NULL || password == NULL || auth_challenge == NULL || peer_challenge == NULL || nt_response == NULL ||
+      digest_out == NULL)
+    return -1;
+  if (nt_password_hash(password, password_hash) != 0)
+    return -1;
+
+  mbedtls_md4_context md4;
+  mbedtls_md4_init(&md4);
+  if (mbedtls_md4_starts_ret(&md4) != 0 || mbedtls_md4_update_ret(&md4, password_hash, sizeof(password_hash)) != 0 ||
+      mbedtls_md4_finish_ret(&md4, password_hash_hash) != 0) {
+    mbedtls_md4_free(&md4);
+    return -1;
+  }
+  mbedtls_md4_free(&md4);
+
+  mbedtls_sha1_context sha1;
+  mbedtls_sha1_init(&sha1);
+  if (mbedtls_sha1_starts_ret(&sha1) != 0 ||
+      mbedtls_sha1_update_ret(&sha1, password_hash_hash, sizeof(password_hash_hash)) != 0 ||
+      mbedtls_sha1_update_ret(&sha1, nt_response, 24u) != 0 ||
+      mbedtls_sha1_update_ret(&sha1, magic1, sizeof(magic1) - 1u) != 0 ||
+      mbedtls_sha1_finish_ret(&sha1, first_digest) != 0) {
+    mbedtls_sha1_free(&sha1);
+    return -1;
+  }
+  mbedtls_sha1_free(&sha1);
+
+  if (challenge_hash(peer_challenge, auth_challenge, username, challenge) != 0)
+    return -1;
+
+  mbedtls_sha1_init(&sha1);
+  if (mbedtls_sha1_starts_ret(&sha1) != 0 || mbedtls_sha1_update_ret(&sha1, first_digest, sizeof(first_digest)) != 0 ||
+      mbedtls_sha1_update_ret(&sha1, challenge, sizeof(challenge)) != 0 ||
+      mbedtls_sha1_update_ret(&sha1, magic2, sizeof(magic2) - 1u) != 0 ||
+      mbedtls_sha1_finish_ret(&sha1, digest_out) != 0) {
+    mbedtls_sha1_free(&sha1);
+    return -1;
+  }
+  mbedtls_sha1_free(&sha1);
+  return 0;
+}

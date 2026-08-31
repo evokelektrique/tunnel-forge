@@ -8,6 +8,7 @@
 #include "engine.h"
 #include "esp_udp.h"
 #include "ipv4_dataplane.h"
+#include "ppp_eap_mschap.h"
 #include "ppp_mschap.h"
 
 #include <android/log.h>
@@ -26,6 +27,7 @@
 #define PROTO_LCP 0xc021u
 #define PROTO_PAP 0xc023u
 #define PROTO_CHAP 0xc223u
+#define PROTO_EAP 0xc227u
 #define PROTO_IPCP 0x8021u
 /** IPv6CP (IANA / RFC 5072); gateway may offer after IPv4 IPCP - we send LCP Protocol-Reject. */
 #define PROTO_IPV6CP 0x8057u
@@ -36,6 +38,7 @@
 typedef enum {
   PPP_AUTH_PAP = 0,
   PPP_AUTH_MSCHAPV2,
+  PPP_AUTH_EAP_MSCHAPV2,
   PPP_AUTH_CHAP_MD5,
 } ppp_auth_kind_t;
 
@@ -45,6 +48,8 @@ static const char *ppp_auth_name(ppp_auth_kind_t auth) {
     return "pap";
   case PPP_AUTH_MSCHAPV2:
     return "mschapv2";
+  case PPP_AUTH_EAP_MSCHAPV2:
+    return "eap-mschapv2";
   case PPP_AUTH_CHAP_MD5:
     return "chap-md5";
   default:
@@ -247,6 +252,10 @@ static int lcp_build_cr(uint8_t *out, size_t cap, uint8_t id, ppp_auth_kind_t au
       out[o++] = 0xc2;
       out[o++] = 0x23;
       out[o++] = 0x81;
+    } else if (auth == PPP_AUTH_EAP_MSCHAPV2) {
+      out[o++] = 4;
+      util_write_be16(out + o, PROTO_EAP);
+      o += 2;
     } else {
       /* RFC 1994 CHAP: Authentication-Protocol 0xc223 + algorithm 0x05 (MD5-Challenge). */
       out[o++] = 5;
@@ -275,6 +284,10 @@ static int lcp_parse_peer_auth(const uint8_t *lcp, size_t lcp_len, ppp_auth_kind
       uint16_t proto = ((uint16_t)opts[i + 2u] << 8) | opts[i + 3u];
       if (proto == PROTO_PAP) {
         *out = PPP_AUTH_PAP;
+        return 0;
+      }
+      if (proto == PROTO_EAP) {
+        *out = PPP_AUTH_EAP_MSCHAPV2;
         return 0;
       }
       if (proto == 0xc223u && ol >= 5u) {
@@ -565,8 +578,11 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
     if (code == 3 && rid == id) {
       /* Configure-Nak: adopt suggested auth family and resend with next id. */
       uint16_t lcp_len = util_read_be16(p + 4);
-      if (lcp_len >= 6 && (size_t)lcp_len <= len) {
-        if (lcp_nak_wants_pap(p + 6, (size_t)lcp_len - 6)) {
+      if (lcp_len >= 6u && (size_t)lcp_len + 2u <= len) {
+        ppp_auth_kind_t suggested_auth = auth;
+        if (lcp_parse_peer_auth(p + 2u, (size_t)lcp_len, &suggested_auth) == 0) {
+          auth = suggested_auth;
+        } else if (lcp_nak_wants_pap(p + 6, (size_t)lcp_len - 6)) {
           auth = PPP_AUTH_PAP;
         } else {
           auth = PPP_AUTH_CHAP_MD5;
@@ -714,6 +730,168 @@ static int ppp_auth_mschapv2(int esp_fd, esp_keys_t *esp, const struct sockaddr 
       }
     }
     return -1;
+  }
+  return -1;
+}
+
+static int ppp_send_eap(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                        l2tp_session_t *l2tp, const uint8_t *eap, size_t eap_len) {
+  uint8_t frame[768];
+  if (eap == NULL || eap_len + 4u > sizeof(frame))
+    return -1;
+  frame[0] = 0xff;
+  frame[1] = 0x03;
+  util_write_be16(frame + 2u, PROTO_EAP);
+  memcpy(frame + 4u, eap, eap_len);
+  return send_ppp(esp_fd, esp, peer, peer_len, l2tp, frame, eap_len + 4u);
+}
+
+static void ppp_log_eap_mschapv2_failure(const uint8_t *message, size_t message_len) {
+  ppp_mschapv2_failure_info_t failure;
+  if (ppp_mschapv2_parse_failure(message, message_len, &failure) == 0) {
+    char err[16];
+    char retry[16];
+    char version[16];
+    snprintf(err, sizeof(err), failure.has_error_code ? "%d" : "-", failure.error_code);
+    snprintf(retry, sizeof(retry), failure.has_retry ? "%d" : "-", failure.retry);
+    snprintf(version, sizeof(version), failure.has_version ? "%d" : "-", failure.version);
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: EAP MS-CHAPv2 failure E=%s R=%s V=%s M=%s", err, retry, version,
+                      failure.has_message ? failure.message : "-");
+  } else {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: EAP MS-CHAPv2 failure");
+  }
+}
+
+/** EAP type 26 wrapper for MS-CHAPv2, as negotiated by PPP Authentication-Protocol 0xc227. */
+static int ppp_auth_eap_mschapv2(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                                 l2tp_session_t *l2tp, const char *user, const char *password) {
+  uint8_t in[4096];
+  uint8_t response_eap[640];
+  int response_eap_len = -1;
+  uint8_t challenge_eap_id = 0u;
+  uint8_t challenge_mschap_id = 0u;
+  uint8_t success_eap_id = 0u;
+  int success_acknowledged = 0;
+  uint8_t expected_authenticator_response[20];
+  tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp auth: start eap-mschapv2");
+
+  for (int i = 0; i < 16 && response_eap_len < 0; i++) {
+    int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+    if (n <= 0)
+      continue;
+    const uint8_t *p = in;
+    size_t len = (size_t)n;
+    ppp_strip(in, (size_t)n, &p, &len);
+    uint16_t proto = 0u;
+    size_t proto_len = 0u;
+    if (ppp_read_protocol(p, len, &proto, &proto_len) != 0 || proto != PROTO_EAP || len < proto_len + 4u)
+      continue;
+    const uint8_t *eap = p + proto_len;
+    size_t eap_len = len - proto_len;
+    uint8_t identity_id = 0u;
+    if (ppp_eap_parse_identity_request(eap, eap_len, &identity_id) == 0) {
+      uint8_t identity_response[512];
+      int identity_response_len =
+          ppp_eap_build_identity_response(identity_response, sizeof(identity_response), identity_id, user);
+      if (identity_response_len < 0 ||
+          ppp_send_eap(esp_fd, esp, peer, peer_len, l2tp, identity_response, (size_t)identity_response_len) < 0)
+        return -1;
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp auth: sent eap identity response id=%u bytes=%d",
+                        (unsigned)identity_id, identity_response_len);
+      continue;
+    }
+    ppp_eap_mschapv2_challenge_t challenge;
+    if (ppp_eap_mschapv2_parse_challenge(eap, eap_len, &challenge) != 0) {
+      ppp_log_rx_summary(p, len, "auth-eap-mschapv2-skip");
+      continue;
+    }
+    ppp_log_rx_summary(p, len, "auth-eap-mschapv2-challenge");
+    uint8_t peer_chal[16];
+    if (urandom_bytes(peer_chal, sizeof(peer_chal)) != 0)
+      return -1;
+    uint8_t val49[49];
+    if (ppp_mschapv2_response_value(user, password, challenge.challenge, peer_chal, val49) != 0)
+      return -1;
+    if (ppp_mschapv2_authenticator_response(user, password, challenge.challenge, peer_chal, val49 + 24u,
+                                            expected_authenticator_response) != 0)
+      return -1;
+    response_eap_len = ppp_eap_mschapv2_build_response(response_eap, sizeof(response_eap), challenge.eap_identifier,
+                                                       challenge.mschapv2_identifier, val49, user);
+    if (response_eap_len < 0)
+      return -1;
+    challenge_eap_id = challenge.eap_identifier;
+    challenge_mschap_id = challenge.mschapv2_identifier;
+    if (ppp_send_eap(esp_fd, esp, peer, peer_len, l2tp, response_eap, (size_t)response_eap_len) < 0)
+      return -1;
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                      "ppp auth: sent eap-mschapv2 response eap_id=%u mschap_id=%u bytes=%d",
+                      (unsigned)challenge_eap_id, (unsigned)challenge_mschap_id, response_eap_len);
+  }
+  if (response_eap_len < 0)
+    return -1;
+
+  for (int i = 0; i < 16; i++) {
+    int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 5000);
+    if (n <= 0)
+      continue;
+    const uint8_t *p = in;
+    size_t len = (size_t)n;
+    ppp_strip(in, (size_t)n, &p, &len);
+    uint16_t proto = 0u;
+    size_t proto_len = 0u;
+    if (ppp_read_protocol(p, len, &proto, &proto_len) != 0 || proto != PROTO_EAP || len < proto_len + 4u)
+      continue;
+    const uint8_t *eap = p + proto_len;
+    size_t eap_len = len - proto_len;
+
+    uint8_t terminal_code = 0u;
+    uint8_t terminal_id = 0u;
+    if (ppp_eap_parse_terminal(eap, eap_len, &terminal_code, &terminal_id) == 0) {
+      tunnel_engine_log(terminal_code == PPP_EAP_CODE_SUCCESS ? ANDROID_LOG_DEBUG : ANDROID_LOG_ERROR, LOG_TAG,
+                        "ppp auth: terminal EAP code=%u id=%u", (unsigned)terminal_code, (unsigned)terminal_id);
+      if (terminal_code == PPP_EAP_CODE_FAILURE)
+        return -1;
+      if (success_acknowledged && terminal_id == success_eap_id)
+        return 0;
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp auth: ignored premature or mismatched EAP Success id=%u",
+                        (unsigned)terminal_id);
+      continue;
+    }
+
+    ppp_eap_mschapv2_challenge_t duplicate;
+    if (ppp_eap_mschapv2_parse_challenge(eap, eap_len, &duplicate) == 0 &&
+        duplicate.eap_identifier == challenge_eap_id && duplicate.mschapv2_identifier == challenge_mschap_id) {
+      if (ppp_send_eap(esp_fd, esp, peer, peer_len, l2tp, response_eap, (size_t)response_eap_len) < 0)
+        return -1;
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp auth: resent eap-mschapv2 response id=%u",
+                        (unsigned)challenge_eap_id);
+      continue;
+    }
+
+    ppp_eap_mschapv2_result_t result;
+    if (ppp_eap_mschapv2_parse_result(eap, eap_len, &result) != 0)
+      continue;
+    ppp_log_rx_summary(p, len,
+                       result.opcode == PPP_EAP_MSCHAPV2_OP_SUCCESS ? "auth-eap-mschapv2-success-request"
+                                                                    : "auth-eap-mschapv2-failure-request");
+    if (result.opcode == PPP_EAP_MSCHAPV2_OP_SUCCESS &&
+        ppp_eap_mschapv2_verify_authenticator_response(result.message, result.message_len,
+                                                       expected_authenticator_response) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp auth: invalid eap-mschapv2 authenticator response");
+      return -1;
+    }
+    uint8_t result_response[6];
+    if (ppp_eap_mschapv2_build_result_response(result_response, result.eap_identifier, result.opcode) < 0 ||
+        ppp_send_eap(esp_fd, esp, peer, peer_len, l2tp, result_response, sizeof(result_response)) < 0)
+      return -1;
+    if (result.opcode == PPP_EAP_MSCHAPV2_OP_FAILURE) {
+      ppp_log_eap_mschapv2_failure(result.message, result.message_len);
+      return -1;
+    }
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp auth: acknowledged eap-mschapv2 success request id=%u",
+                      (unsigned)result.eap_identifier);
+    success_eap_id = result.eap_identifier;
+    success_acknowledged = 1;
   }
   return -1;
 }
@@ -1349,6 +1527,11 @@ int ppp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, sock
   if (auth == PPP_AUTH_MSCHAPV2) {
     if (ppp_auth_mschapv2(esp_fd, esp, peer, peer_len, l2tp, user, password) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp negotiate: auth failure method=mschapv2");
+      return -1;
+    }
+  } else if (auth == PPP_AUTH_EAP_MSCHAPV2) {
+    if (ppp_auth_eap_mschapv2(esp_fd, esp, peer, peer_len, l2tp, user, password) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp negotiate: auth failure method=eap-mschapv2");
       return -1;
     }
   } else if (auth == PPP_AUTH_CHAP_MD5) {

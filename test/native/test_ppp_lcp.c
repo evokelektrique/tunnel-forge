@@ -2,13 +2,16 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define PROTO_PAP 0xc023u
 #define PROTO_LCP 0xc021u
+#define PROTO_EAP 0xc227u
 
 typedef enum {
   PPP_AUTH_PAP = 0,
   PPP_AUTH_MSCHAPV2,
+  PPP_AUTH_EAP_MSCHAPV2,
   PPP_AUTH_CHAP_MD5,
 } ppp_auth_kind_t;
 
@@ -59,6 +62,11 @@ static int lcp_build_cr(uint8_t *out, size_t cap, uint8_t id, ppp_auth_kind_t au
       out[o++] = 0xc2;
       out[o++] = 0x23;
       out[o++] = 0x81;
+    } else if (auth == PPP_AUTH_EAP_MSCHAPV2) {
+      if (o + 3u > cap) return -1;
+      out[o++] = 4;
+      util_write_be16(out + o, PROTO_EAP);
+      o += 2u;
     } else {
       if (o + 4u > cap) return -1;
       out[o++] = 5;
@@ -150,6 +158,16 @@ static int test_selected_mru_is_preserved(void) {
   return 0;
 }
 
+static int test_eap_authentication_option(void) {
+  uint8_t cr[32];
+  int n = lcp_build_cr(cr, sizeof(cr), 7, PPP_AUTH_EAP_MSCHAPV2, 1400, 1, 0, 1);
+  if (n != 16) return 1;
+  if (!lcp_has_option(cr, (size_t)n, 3)) return 2;
+  const uint8_t expected[] = {0x03, 0x04, 0xc2, 0x27};
+  if (memcmp(cr + 12u, expected, sizeof(expected)) != 0) return 3;
+  return 0;
+}
+
 static int test_reject_accm_and_auth_strips_future_cr(void) {
   uint8_t cr[128];
   int include_accm = 1;
@@ -212,6 +230,11 @@ int main(void) {
   rc = test_reject_accm_and_auth_strips_future_cr();
   if (rc != 0) {
     fprintf(stderr, "test_reject_accm_and_auth_strips_future_cr failed: %d\n", rc);
+    return 1;
+  }
+  rc = test_eap_authentication_option();
+  if (rc != 0) {
+    fprintf(stderr, "test_eap_authentication_option failed: %d\n", rc);
     return 1;
   }
   rc = test_reject_unrelated_option_keeps_accm_and_auth();

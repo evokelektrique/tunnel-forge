@@ -50,6 +50,7 @@ add_library(
   esp_udp.c
   l2tp_avps.c
   l2tp.c
+  ppp_eap_mschap.c
   ppp_mschap.c
   ppp.c
 )

@@ -20,6 +20,11 @@ typedef struct {
 int ppp_mschapv2_response_value(const char *username, const char *password, const uint8_t auth_challenge[16],
                                 uint8_t peer_challenge[16], uint8_t value49_out[49]);
 
+/** RFC 2759 GenerateAuthenticatorResponse digest before the `S=` hexadecimal encoding. */
+int ppp_mschapv2_authenticator_response(const char *username, const char *password, const uint8_t auth_challenge[16],
+                                        const uint8_t peer_challenge[16], const uint8_t nt_response[24],
+                                        uint8_t digest_out[20]);
+
 /** Consume ASCII digits at *idx; @return 0 and set *out when at least one digit read. */
 static inline int ppp_mschapv2_parse_uint_token(const uint8_t *p, size_t len, size_t *idx, int *out) {
   int value = 0;

@@ -26,6 +26,10 @@ add_executable(test_ppp_mschap_failure test_ppp_mschap_failure.c)
 target_include_directories(test_ppp_mschap_failure PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME ppp_mschap_failure COMMAND test_ppp_mschap_failure)
 
+add_executable(test_ppp_eap_mschap test_ppp_eap_mschap.c ../../android/app/src/main/cpp/ppp_eap_mschap.c)
+target_include_directories(test_ppp_eap_mschap PRIVATE ../../android/app/src/main/cpp)
+add_test(NAME ppp_eap_mschap COMMAND test_ppp_eap_mschap)
+
 add_executable(test_ppp_frame test_ppp_frame.c)
 add_test(NAME ppp_frame COMMAND test_ppp_frame)
 
