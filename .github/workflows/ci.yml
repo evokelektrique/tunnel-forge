@@ -10,12 +10,17 @@ on:
       - main
       - release/**
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Optional PR number to build a reviewer APK for
+        required: false
+        type: number
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -195,6 +200,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.pr_number != '' && format('refs/pull/{0}/merge', inputs.pr_number) || github.ref }}
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -243,7 +250,7 @@ jobs:
           } > local.properties
 
       - name: Configure Android release signing
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && inputs.pr_number == ''
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -266,7 +273,7 @@ jobs:
           chmod 600 "${TUNNEL_FORGE_ANDROID_KEYSTORE_PATH}"
 
       - name: Build release APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && inputs.pr_number == ''
         env:
           TUNNEL_FORGE_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
           TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -275,7 +282,7 @@ jobs:
         run: flutter build apk --release
 
       - name: Upload APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && inputs.pr_number == ''
         uses: actions/upload-artifact@v6
         with:
           name: tunnel-forge-release-apk
@@ -283,18 +290,18 @@ jobs:
           if-no-files-found: error
 
       - name: Build reviewer APK
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || inputs.pr_number != ''
         run: flutter build apk --debug
 
       - name: Verify reviewer APK
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || inputs.pr_number != ''
         run: apksigner verify --verbose build/app/outputs/flutter-apk/app-debug.apk
 
       - name: Upload reviewer APK
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || inputs.pr_number != ''
         uses: actions/upload-artifact@v6
         with:
-          name: tunnel-forge-pr-${{ github.event.pull_request.number }}-debug-apk
+          name: tunnel-forge-pr-${{ inputs.pr_number || github.event.pull_request.number }}-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 14
           if-no-files-found: error
