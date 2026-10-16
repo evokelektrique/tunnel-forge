@@ -494,6 +494,9 @@ static int recv_until_mt(int esp_fd, esp_keys_t *esp, const struct sockaddr *pee
   return -1;
 }
 
+static int l2tp_dispatch_control(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                                 l2tp_session_t *s, const uint8_t *data, size_t len);
+
 /**
  * Run L2TPv2 control-plane handshake (SCCRQ through ICCN) over the ESP/cleartext UDP path.
  *
@@ -635,11 +638,28 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   ao = 0;
   avp_u16(avps, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_ICCN);
   avp_u16(avps, &ao, L2TP_AVP_ASSIGNED_SESSION, local_sid);
+  /* RFC 2661 sec 6.7: ICCN MUST carry (Tx) Connect Speed (AVP 24) and Framing Type (AVP 19).
+   * Strict LNS implementations (mpd5 on pfSense/FreeBSD) drop the tunnel with
+   * "rec'd ICCN control message lacking required AVP #24" when they are missing. */
+  if (l2tp_avp_append_u32(avps, sizeof(avps), &ao, 24, 100000000u) != 0) /* Tx Connect Speed, bps */
+    return -1;
+  if (l2tp_avp_append_u32(avps, sizeof(avps), &ao, 19, 3u) != 0) /* Framing Type: sync | async */
+    return -1;
+  tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp ICCN: avp_len=%zu (tx_speed+framing included, build=iccn-v2)", ao);
   if (send_ctrl(esp_fd, esp, peer, peer_len, s, avps, ao) != 0)
     return -1;
 
   /* Drain stray post-handshake datagram so data-plane loop does not inherit stale control noise. */
-  (void)recv_plain(esp_fd, esp, NULL, NULL, in, sizeof(in), 1500);
+  {
+    int dl = recv_plain(esp_fd, esp, NULL, NULL, in, sizeof(in), 1500);
+    if (dl >= 2 && (util_read_be16(in) & 0x8000u) != 0) {
+      /* Ack (ZLB) whatever the LNS sent right after ICCN and stop early if it is a StopCCN/CDN. */
+      if (l2tp_dispatch_control(esp_fd, esp, peer, peer_len, s, in, (size_t)dl) == L2TP_DISPATCH_REMOTE_CLOSED) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: peer rejected the session right after ICCN");
+        return -1;
+      }
+    }
+  }
 
   tunnel_log("l2tp ok remote_tid=%u remote_sid=%u local_tid=%u local_sid=%u", (unsigned)s->tunnel_id,
              (unsigned)s->session_id, (unsigned)s->peer_tunnel_id, (unsigned)s->peer_session_id);
@@ -823,6 +843,15 @@ static int l2tp_dispatch_control(int esp_fd, esp_keys_t *esp, const struct socka
   }
 
   if (mt == L2TP_MSG_STOPCCN || mt == L2TP_MSG_CDN) {
+    {
+      uint16_t rc = 0, ec = 0;
+      char em[128];
+      em[0] = '\0';
+      if (l2tp_ctrl_result_details(data, len, &rc, &ec, em, sizeof(em)) == 0)
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: peer sent %s result=%u error=%u msg=%s",
+                          mt == L2TP_MSG_STOPCCN ? "StopCCN" : "CDN", (unsigned)rc, (unsigned)ec,
+                          em[0] != '\0' ? em : "-");
+    }
     l2tp_log_ctrl_result_details(mt, data, len);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp ctrl dataplane: remote teardown mt=%u peer_ns=%u peer_nr=%u",
                       (unsigned)mt, (unsigned)peer_ns, (unsigned)peer_nr);

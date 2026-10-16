@@ -2004,6 +2004,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   util_write_be32(pkt + len_mark, (uint32_t)o);
 
   tunnel_log("IKE Quick Mode msg1 -> %zu bytes (nat_t=%d)", o, prefix);
+  int qm_info_skips = 0;
+qm1_send_recv:
   inlen = ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 10000, prefix);
   if (inlen < 28) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode: no reply (timeout or send error; see ike_send_recv)");
@@ -2012,6 +2014,10 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   ike_log_isakmp_summary("Quick Mode reply (msg2)", in, inlen);
 
   if (in[18] == IKE_EXCH_INFO && (in[19] & IKE_FLAG_ENC)) {
+    /* Status notifies (type >= 16384, e.g. INITIAL-CONTACT 24578 sent by MikroTik right after Phase 1,
+     * or DPD R-U-THERE) are not errors: skip them and keep waiting for QM2. Only error notifies
+     * (type < 16384, e.g. NO-PROPOSAL-CHOSEN) or a DELETE abort Quick Mode. */
+    int info_fatal = 0;
     uint32_t info_mid = util_read_be32(in + 20);
     size_t info_enc_len = (size_t)inlen - 28;
     if (info_enc_len >= 16) {
@@ -2036,15 +2042,30 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
           break;
         if (info_np == IKE_PT_NOTIFY && pl >= 12) {
           uint16_t ntype = util_read_be16(info_plain + w + 4 + 6);
-          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
-                            "Quick Mode: server sent NOTIFY type=%u (0x%04x) - proposal rejected", (unsigned)ntype,
-                            (unsigned)ntype);
+          if (ntype < 16384u) {
+            info_fatal = 1;
+            tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                              "Quick Mode: server sent NOTIFY type=%u (0x%04x) - proposal rejected", (unsigned)ntype,
+                              (unsigned)ntype);
+          } else {
+            tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                              "Quick Mode: ignoring status NOTIFY type=%u (0x%04x) while waiting for QM2",
+                              (unsigned)ntype, (unsigned)ntype);
+          }
+        } else if (info_np == IKE_PT_DELETE) {
+          info_fatal = 1;
         }
         info_np = info_plain[w];
         w += pl;
         if (info_np == IKE_PT_NONE)
           break;
       }
+    }
+    if (!info_fatal && qm_info_skips < 4) {
+      qm_info_skips++;
+      tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                        "Quick Mode: non-fatal Informational received, waiting for QM2 (skip %d)", qm_info_skips);
+      goto qm1_send_recv;
     }
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
                       "Quick Mode: server replied with Informational Exchange (not QM2); ESP proposal likely rejected");
