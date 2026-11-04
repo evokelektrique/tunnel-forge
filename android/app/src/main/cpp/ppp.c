@@ -212,7 +212,7 @@ static int urandom_bytes(uint8_t *b, size_t n) {
 }
 
 static int lcp_build_cr(uint8_t *out, size_t cap, uint8_t id, ppp_auth_kind_t auth, uint16_t mru,
-                        int include_address_control, int include_accm, int include_auth) {
+                        int include_address_control, int include_accm, int include_auth, int include_mru) {
   size_t o = 0;
   if (include_address_control) {
     if (cap < 40)
@@ -234,10 +234,13 @@ static int lcp_build_cr(uint8_t *out, size_t cap, uint8_t id, ppp_auth_kind_t au
   out[o++] = id;
   size_t len_mark = o;
   o += 2;
-  out[o++] = 1;
-  out[o++] = 4;
-  util_write_be16(out + o, mru);
-  o += 2;
+  if (include_mru) {
+    /* MRU: dropped when the peer Configure-Rejects it (Windows RRAS rejects MRU over L2TP). */
+    out[o++] = 1;
+    out[o++] = 4;
+    util_write_be16(out + o, mru);
+    o += 2;
+  }
   if (include_accm) {
     /* ACCM 00 00 00 00: keep this unless peer explicitly Configure-Rejects it. */
     out[o++] = 2;
@@ -437,8 +440,9 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   int lcp_peer_framing_seen = 0;
   int lcp_accm_in_cr = 1;
   int lcp_auth_in_cr = 1;
+  int lcp_mru_in_cr = 1;
   /* Phase 1: send initial Configure-Request. */
-  int plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, 1, lcp_accm_in_cr, lcp_auth_in_cr);
+  int plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, 1, lcp_accm_in_cr, lcp_auth_in_cr, lcp_mru_in_cr);
   if (plen < 0)
     return -1;
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: send Configure-Request id=%u auth=%s mru=%u", (unsigned)id,
@@ -504,7 +508,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
             // Observed Configure-Reject body `03 05 c2 23 05` (CHAP) with MRU+ACCM+CHAP CR: omit
             // Authentication-Protocol from our CR; peer already proposed CHAP in their Configure-Request.
             lcp_auth_in_cr = 0;
-            plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr);
+            plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr, lcp_mru_in_cr);
             if (plen < 0)
               return -1;
             pending_resend_cr_after_ack = 1;
@@ -555,6 +559,23 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
         int removed_accm = 0;
         int removed_auth = 0;
         lcp_apply_conf_reject(p + 2u, (size_t)lcp_len, &lcp_accm_in_cr, &lcp_auth_in_cr, &removed_accm, &removed_auth);
+        {
+          /* Option type 1 (MRU) in the reject list: stop sending it (RFC 1661 sec 5.4). */
+          const uint8_t *ro = p + 2u + 4u;
+          size_t rrem = (size_t)lcp_len - 4u;
+          size_t ri = 0;
+          while (ri + 2u <= rrem) {
+            uint8_t rt = ro[ri];
+            uint8_t rl = ro[ri + 1u];
+            if (rl < 2u || ri + (size_t)rl > rrem)
+              break;
+            if (rt == 1u && lcp_mru_in_cr) {
+              lcp_mru_in_cr = 0;
+              tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: Configure-Reject removed opt mru (next CR mru=0)");
+            }
+            ri += (size_t)rl;
+          }
+        }
         if (removed_accm || removed_auth) {
           tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                             "ppp lcp: Configure-Reject removed opts accm=%d auth=%d (next CR accm=%d auth=%d)",
@@ -562,7 +583,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
         }
       }
       id++;
-      plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr);
+      plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr, lcp_mru_in_cr);
       if (plen < 0)
         return -1;
       tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: resend after Configure-Reject id=%u bytes=%d",
@@ -584,7 +605,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
         auth = PPP_AUTH_CHAP_MD5;
       }
       id++;
-      plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr);
+      plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr, lcp_mru_in_cr);
       if (plen < 0)
         return -1;
       tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: received NAK, resend Configure-Request id=%u auth=%s",
