@@ -223,6 +223,46 @@ static int normalize_dh_value(uint8_t *buf, size_t *len, size_t capacity, size_t
  *
  * @return received payload size on success, -1 on cancellation, timeout, poll/send/recv failures.
  */
+/**
+ * Wait for one more datagram on an already-connected IKE socket without re-sending anything.
+ * Used when the peer sends an Informational status notify before the expected reply.
+ * Strips the RFC 3948 non-ESP marker on NAT-T paths, like ike_send_recv().
+ */
+static int ike_recv_only(int fd, uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
+  int waited = 0;
+  struct pollfd pfd = {.fd = fd, .events = POLLIN};
+  while (waited < timeout_ms) {
+    if (tunnel_should_stop()) {
+      tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_recv_only: canceled while waiting");
+      return -1;
+    }
+    int slice = timeout_ms - waited;
+    if (slice > 200)
+      slice = 200;
+    int pr = poll(&pfd, 1, slice);
+    waited += slice;
+    if (pr < 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only: poll errno=%d", errno);
+      return -1;
+    }
+    if (pr == 0)
+      continue;
+    ssize_t n = recv(fd, in, in_cap, 0);
+    if (n <= 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only: recv ret=%zd errno=%d", n, errno);
+      return -1;
+    }
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ike_recv_only: got UDP datagram %zd bytes nat_t=%d", n, prefix4500);
+    if (prefix4500 && n >= 4 && util_read_be32(in) == 0u) {
+      memmove(in, in + 4, (size_t)n - 4);
+      n -= 4;
+    }
+    return (int)n;
+  }
+  tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only: no datagram within %d ms", timeout_ms);
+  return -1;
+}
+
 static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *out, size_t out_len,
                          uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
   uint8_t wr[4096];
@@ -2011,7 +2051,13 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   }
   ike_log_isakmp_summary("Quick Mode reply (msg2)", in, inlen);
 
+  int qm_status_skips = 0;
+qm2_check:
   if (in[18] == IKE_EXCH_INFO && (in[19] & IKE_FLAG_ENC)) {
+    /* Status notifies (type >= 16384, RFC 2408 sec 3.14.1, e.g. RESPONDER-LIFETIME from Windows) are not
+     * errors: ignore them and keep waiting for QM2. Only error notifies (< 16384) abort the exchange. */
+    int qm_info_notifies = 0;
+    int qm_info_errors = 0;
     uint32_t info_mid = util_read_be32(in + 20);
     size_t info_enc_len = (size_t)inlen - 28;
     if (info_enc_len >= 16) {
@@ -2036,15 +2082,36 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
           break;
         if (info_np == IKE_PT_NOTIFY && pl >= 12) {
           uint16_t ntype = util_read_be16(info_plain + w + 4 + 6);
-          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
-                            "Quick Mode: server sent NOTIFY type=%u (0x%04x) - proposal rejected", (unsigned)ntype,
-                            (unsigned)ntype);
+          qm_info_notifies++;
+          if (ntype >= 16384) {
+            tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                              "Quick Mode: server sent status NOTIFY type=%u (0x%04x) - not an error", (unsigned)ntype,
+                              (unsigned)ntype);
+          } else {
+            qm_info_errors++;
+            tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                              "Quick Mode: server sent NOTIFY type=%u (0x%04x) - proposal rejected", (unsigned)ntype,
+                              (unsigned)ntype);
+          }
         }
         info_np = info_plain[w];
         w += pl;
         if (info_np == IKE_PT_NONE)
           break;
       }
+    }
+    if (qm_info_notifies > 0 && qm_info_errors == 0 && qm_status_skips < 3) {
+      qm_status_skips++;
+      tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                        "Quick Mode: Informational with status notify only; waiting for QM2 (skip %d/3)",
+                        qm_status_skips);
+      inlen = ike_recv_only(fd, in, sizeof(in), 10000, prefix);
+      if (inlen < 28) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode: no QM2 after status notify");
+        goto fail_fd;
+      }
+      ike_log_isakmp_summary("Quick Mode reply (msg2)", in, inlen);
+      goto qm2_check;
     }
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
                       "Quick Mode: server replied with Informational Exchange (not QM2); ESP proposal likely rejected");
