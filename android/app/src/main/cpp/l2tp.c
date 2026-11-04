@@ -632,9 +632,18 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   s->session_id = remote_sid;
   s->peer_session_id = local_sid;
 
+  // RFC 2661 sec 6.9 ICCN: Tx Connect Speed and Framing Type are mandatory; Assigned Session ID is not part of
+  // ICCN. Strict LACs/LNSs (e.g. Windows RRAS) tear the session down when the mandatory AVPs are missing.
   ao = 0;
   avp_u16(avps, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_ICCN);
-  avp_u16(avps, &ao, L2TP_AVP_ASSIGNED_SESSION, local_sid);
+  {
+    uint8_t tx_speed[4] = {0x05, 0xF5, 0xE1, 0x00}; /* 100,000,000 bps */
+    avp_write(avps, &ao, 24, tx_speed, 4);
+  } /* Tx Connect Speed */
+  {
+    uint8_t framing[4] = {0, 0, 0, 1};
+    avp_write(avps, &ao, 19, framing, 4);
+  } /* Framing Type: synchronous */
   if (send_ctrl(esp_fd, esp, peer, peer_len, s, avps, ao) != 0)
     return -1;
 

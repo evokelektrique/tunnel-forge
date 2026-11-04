@@ -7,6 +7,7 @@
 
 #include "engine.h"
 #include "esp_udp.h"
+#include "l2tp_avps.h"
 #include "ipv4_dataplane.h"
 #include "ppp_mschap.h"
 
@@ -167,8 +168,16 @@ static int recv_ppp(int esp_fd, esp_keys_t *esp, l2tp_session_t *l2tp, uint8_t *
     size_t ppp_len = 0;
     if (l2tp_data_extract_ppp(plain, plen, l2tp, &ppp_ptr, &ppp_len, 0) != 0) {
       uint16_t flags = util_read_be16(plain + 0);
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv l2tp not-ppp-data flags=0x%04x plen=%zu", (unsigned)flags,
-                        plen);
+      uint16_t ctrl_mt = 0xffff;
+      uint16_t ctrl_result = 0xffff;
+      if (flags & 0x8000u) {
+        /* L2TP control message during PPP (e.g. CDN/StopCCN/HELLO): log its type and result code. */
+        (void)l2tp_avp_first_u16(plain, plen, L2TP_AVP_MSG_TYPE, &ctrl_mt);
+        (void)l2tp_avp_first_u16(plain, plen, L2TP_AVP_RESULT_CODE, &ctrl_result);
+      }
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                        "ppp recv l2tp not-ppp-data flags=0x%04x plen=%zu ctrl_msg_type=%u result_code=%u",
+                        (unsigned)flags, plen, (unsigned)ctrl_mt, (unsigned)ctrl_result);
       continue;
     }
     if (ppp_len > cap)
