@@ -202,6 +202,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
             AppText.pick(
               'This profile no longer exists.',
               'این پروفایل دیگر وجود ندارد.',
+              fr: "Ce profil n'existe plus.",
             ),
             error: true,
           ),
@@ -226,6 +227,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
                 AppText.pick(
                   'Couldn\'t open the incoming profile',
                   'پروفایل دریافتی باز نشد',
+                  fr: "Impossible d'ouvrir le profil reçu",
                 ),
             error: true,
           ),
@@ -249,13 +251,19 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         ('Clipboard', ProfileTransferContract.typeTfUri) => AppText.pick(
           'a clipboard share link',
           'یک پیوند اشتراک کلیپ‌بورد',
+          fr: "un lien de partage du presse-papiers",
         ),
-        ('Clipboard', _) => AppText.pick('the clipboard', 'کلیپ‌بورد'),
+        ('Clipboard', _) => AppText.pick(
+          'the clipboard',
+          'کلیپ‌بورد',
+          fr: "le presse-papiers",
+        ),
         (_, ProfileTransferContract.typeTfUri) => AppText.pick(
           'a share link',
           'یک پیوند اشتراک',
+          fr: "un lien de partage",
         ),
-        _ => AppText.pick('a .tfp file', 'یک فایل .tfp'),
+        _ => AppText.pick('a .tfp file', 'یک فایل .tfp', fr: "un fichier .tfp"),
       };
       emit(
         state.copyWith(
@@ -263,6 +271,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
             AppText.pick(
               'Imported profile "${imported.displayName}" from $source',
               'پروفایل «${imported.displayName}» از $source وارد شد',
+              fr: "Profil « ${imported.displayName} » importé depuis $source",
             ),
           ),
         ),
@@ -273,7 +282,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Couldn\'t import profile', 'پروفایل وارد نشد'),
+            AppText.pick(
+              'Couldn\'t import profile',
+              'پروفایل وارد نشد',
+              fr: "Impossible d'importer le profil",
+            ),
             error: true,
           ),
         ),
@@ -298,7 +311,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Profile removed', 'پروفایل حذف شد'),
+            AppText.pick(
+              'Profile removed',
+              'پروفایل حذف شد',
+              fr: "Profil supprimé",
+            ),
           ),
         ),
       );
@@ -306,7 +323,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Couldn\'t delete profile', 'پروفایل حذف نشد'),
+            AppText.pick(
+              'Couldn\'t delete profile',
+              'پروفایل حذف نشد',
+              fr: "Impossible de supprimer le profil",
+            ),
             error: true,
           ),
         ),
@@ -333,7 +354,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Share link copied', 'پیوند اشتراک کپی شد'),
+            AppText.pick(
+              'Share link copied',
+              'پیوند اشتراک کپی شد',
+              fr: "Lien de partage copié",
+            ),
           ),
         ),
       );
@@ -343,7 +368,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Couldn\'t copy share link', 'پیوند اشتراک کپی نشد'),
+            AppText.pick(
+              'Couldn\'t copy share link',
+              'پیوند اشتراک کپی نشد',
+              fr: "Impossible de copier le lien de partage",
+            ),
             error: true,
           ),
         ),
@@ -363,6 +392,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
             AppText.pick(
               'Profile file ready to save or share',
               'فایل پروفایل برای ذخیره یا اشتراک آماده است',
+              fr: "Fichier de profil prêt à être enregistré ou partagé",
             ),
           ),
         ),
@@ -373,7 +403,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Couldn\'t export .tfp file', 'خروجی .tfp ساخته نشد'),
+            AppText.pick(
+              'Couldn\'t export .tfp file',
+              'خروجی .tfp ساخته نشد',
+              fr: "Impossible d'exporter le fichier .tfp",
+            ),
             error: true,
           ),
         ),

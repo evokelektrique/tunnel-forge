@@ -230,6 +230,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         AppText.pick(
           'Enter a server hostname or address',
           'نام میزبان یا نشانی سرور را وارد کنید',
+          fr: "Saisissez le nom ou l'adresse du serveur",
         ),
         error: true,
       );
@@ -242,6 +243,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         AppText.pick(
           'Select a saved profile to start local proxy',
           'برای شروع پروکسی محلی یک پروفایل ذخیره‌شده انتخاب کنید',
+          fr: "Choisissez un profil enregistré pour démarrer le proxy local",
         ),
         error: true,
       );
@@ -257,6 +259,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         AppText.pick(
           'HTTP and SOCKS5 ports must be different',
           'درگاه‌های HTTP و SOCKS5 باید متفاوت باشند',
+          fr: "Les ports HTTP et SOCKS5 doivent être différents",
         ),
         error: true,
       );
@@ -276,6 +279,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         AppText.pick(
           'Open "Select apps" and choose at least one app for inclusive split tunneling.',
           '«انتخاب برنامه‌ها» را باز کنید و حداقل یک برنامه برای تونل‌سازی شامل انتخاب کنید.',
+          fr: "Ouvrez « Choisir les applications » et sélectionnez au moins une application pour le tunnel fractionné inclusif.",
         ),
         error: true,
       );
@@ -317,6 +321,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
             AppText.pick(
               'VPN permission is required',
               'مجوز وی‌پی‌ان لازم است',
+              fr: "L'autorisation VPN est nécessaire",
             ),
             error: true,
           );
@@ -385,8 +390,16 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
       _toast(
         emit,
         proxyMode
-            ? AppText.pick('Starting proxy...', 'در حال شروع پروکسی...')
-            : AppText.pick('Connecting...', 'در حال اتصال...'),
+            ? AppText.pick(
+                'Starting proxy...',
+                'در حال شروع پروکسی...',
+                fr: "Démarrage du proxy…",
+              )
+            : AppText.pick(
+                'Connecting...',
+                'در حال اتصال...',
+                fr: "Connexion…",
+              ),
       );
     } on PlatformException catch (error) {
       _logError(
@@ -532,7 +545,11 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
                 ? update.detail
                 : proxyMode
                 ? t.proxyReady
-                : AppText.pick('VPN connected', 'وی‌پی‌ان متصل شد'),
+                : AppText.pick(
+                    'VPN connected',
+                    'وی‌پی‌ان متصل شد',
+                    fr: "VPN connecté",
+                  ),
           );
         }
         break;
@@ -580,6 +597,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
               ? AppText.pick(
                   'Couldn\'t establish the tunnel',
                   'تونل برقرار نشد',
+                  fr: "Impossible d'établir le tunnel",
                 )
               : update.detail,
           error: true,

@@ -212,6 +212,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
               value: AppLanguage.persian,
               label: Text(t.persian),
             ),
+            ButtonSegment<AppLanguage>(
+              value: AppLanguage.french,
+              label: Text(t.french),
+            ),
           ],
           selected: {widget.language},
           onSelectionChanged: (next) {

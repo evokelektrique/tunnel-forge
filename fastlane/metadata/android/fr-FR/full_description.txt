@@ -1,0 +1,16 @@
+TunnelForge est un client VPN Android pour les réseaux qui reposent encore sur L2TP/IPsec avec IKEv1.
+
+Android 12 a supprimé les options VPN L2TP et PPTP intégrées. TunnelForge offre un client maintenu aux entreprises, écoles, universités et réseaux personnels qui ne peuvent pas remplacer immédiatement leurs serveurs L2TP/IPsec.
+
+Fonctionnalités :
+
+* L2TP avec IPsec IKEv1 facultatif
+* Mode tunnel VPN pour tout l'appareil
+* Mode proxy seul, avec ports d'écoute HTTP et SOCKS5 locaux
+* Routage par application, en liste d'inclusion ou d'exclusion
+* Plusieurs profils, avec stockage local des identifiants
+* Options DNS personnalisées : UDP, TCP, TLS et HTTPS
+* MTU réglable
+* État de la connexion et journal local détaillé
+
+TunnelForge ne fournit ni service ni compte VPN : vous devez avoir accès à un serveur VPN compatible.

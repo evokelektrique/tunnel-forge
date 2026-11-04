@@ -337,6 +337,7 @@ class ConnectivityCheckSettings {
       return AppText.pick(
         'Enter a valid absolute HTTP or HTTPS URL',
         'یک نشانی کامل و معتبر HTTP یا HTTPS وارد کنید',
+        fr: "Saisissez une adresse HTTP ou HTTPS complète et valide",
       );
     }
     final scheme = uri.scheme.toLowerCase();
@@ -344,6 +345,7 @@ class ConnectivityCheckSettings {
       return AppText.pick(
         'Only HTTP and HTTPS URLs are supported',
         'فقط نشانی‌های HTTP و HTTPS پشتیبانی می‌شوند',
+        fr: "Seules les adresses HTTP et HTTPS sont acceptées",
       );
     }
     return null;
@@ -356,12 +358,14 @@ class ConnectivityCheckSettings {
       return AppText.pick(
         'Enter a whole number of milliseconds',
         'یک عدد صحیح بر حسب میلی‌ثانیه وارد کنید',
+        fr: "Saisissez un nombre entier de millisecondes",
       );
     }
     if (value <= 0) {
       return AppText.pick(
         'Enter a timeout greater than 0 ms',
         'مهلت باید بیشتر از ۰ میلی‌ثانیه باشد',
+        fr: "Saisissez un délai supérieur à 0 ms",
       );
     }
     return null;
@@ -561,16 +565,23 @@ class Profile {
       DnsProtocol.dnsOverTcp || DnsProtocol.dnsOverUdp => AppText.pick(
         'hostname or IPv4',
         'نام میزبان یا IPv4',
+        fr: "nom d'hôte ou IPv4",
       ),
-      DnsProtocol.dnsOverTls => AppText.pick('hostname', 'نام میزبان'),
+      DnsProtocol.dnsOverTls => AppText.pick(
+        'hostname',
+        'نام میزبان',
+        fr: "nom d'hôte",
+      ),
       DnsProtocol.dnsOverHttps => AppText.pick(
         'hostname or HTTPS URL',
         'نام میزبان یا نشانی HTTPS',
+        fr: "nom d'hôte ou adresse HTTPS",
       ),
     };
     return AppText.pick(
       '$label: use $requirement',
       '$label: از $requirement استفاده کنید',
+      fr: "$label : utilisez $requirement",
     );
   }
 

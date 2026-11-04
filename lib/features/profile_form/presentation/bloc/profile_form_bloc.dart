@@ -241,16 +241,25 @@ class ProfileFormState extends Equatable {
 String? _mtuValidationMessage(String value) {
   final normalized = value.trim();
   if (normalized.isEmpty) {
-    return AppText.pick('Enter an MTU value', 'مقدار MTU را وارد کنید');
+    return AppText.pick(
+      'Enter an MTU value',
+      'مقدار MTU را وارد کنید',
+      fr: "Saisissez une valeur de MTU",
+    );
   }
   final mtuParsed = int.tryParse(normalized);
   if (mtuParsed == null) {
-    return AppText.pick('MTU must be a whole number', 'MTU باید عدد صحیح باشد');
+    return AppText.pick(
+      'MTU must be a whole number',
+      'MTU باید عدد صحیح باشد',
+      fr: "Le MTU doit être un nombre entier",
+    );
   }
   if (mtuParsed < Profile.minVpnMtu || mtuParsed > Profile.maxVpnMtu) {
     return AppText.pick(
       'MTU must be between ${Profile.minVpnMtu} and ${Profile.maxVpnMtu}',
       'MTU باید بین ${Profile.minVpnMtu} و ${Profile.maxVpnMtu} باشد',
+      fr: "Le MTU doit être compris entre ${Profile.minVpnMtu} et ${Profile.maxVpnMtu}",
     );
   }
   return null;
@@ -314,7 +323,11 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           profileId: _profilesRepository.newProfileId(),
           loading: false,
           clearLoadError: true,
-          displayName: AppText.pick('New profile', 'پروفایل جدید'),
+          displayName: AppText.pick(
+            'New profile',
+            'پروفایل جدید',
+            fr: "Nouveau profil",
+          ),
           server: 'vpn.example.com',
           user: '',
           password: '',
@@ -339,6 +352,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           loadError: AppText.pick(
             'This profile no longer exists.',
             'این پروفایل دیگر وجود ندارد.',
+            fr: "Ce profil n'existe plus.",
           ),
         ),
       );
@@ -373,7 +387,11 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     if (serverTrim.isEmpty) {
       emit(
         _messageState(
-          AppText.pick('Enter a server address', 'نشانی سرور را وارد کنید'),
+          AppText.pick(
+            'Enter a server address',
+            'نشانی سرور را وارد کنید',
+            fr: "Saisissez l'adresse du serveur",
+          ),
         ),
       );
       return;
@@ -428,6 +446,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
             AppText.pick(
               'Enter at least one DNS server or enable Automatic',
               'حداقل یک سرور DNS وارد کنید یا حالت خودکار را فعال کنید',
+              fr: "Saisissez au moins un serveur DNS ou activez « Automatique »",
             ),
           ),
         );
@@ -466,7 +485,11 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     } catch (_) {
       emit(
         _messageState(
-          AppText.pick('Could not save changes', 'تغییرات ذخیره نشد'),
+          AppText.pick(
+            'Could not save changes',
+            'تغییرات ذخیره نشد',
+            fr: "Impossible d'enregistrer les modifications",
+          ),
           saving: false,
         ),
       );

@@ -479,6 +479,13 @@ class _LanguageChoiceList extends StatelessWidget {
           selected: selectedLanguage == AppLanguage.persian,
           onTap: () => onLanguageChanged(AppLanguage.persian),
         ),
+        const SizedBox(height: 12),
+        _LanguageChoiceTile(
+          language: AppLanguage.french,
+          title: t.french,
+          selected: selectedLanguage == AppLanguage.french,
+          onTap: () => onLanguageChanged(AppLanguage.french),
+        ),
       ],
     );
   }
