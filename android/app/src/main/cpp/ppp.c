@@ -451,7 +451,10 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   int lcp_out_include_ac = 1;
   int lcp_peer_framing_seen = 0;
   int lcp_accm_in_cr = 1;
-  int lcp_auth_in_cr = 1;
+  /* Do not put Authentication-Protocol in our Configure-Request: that option asks the PEER to authenticate to
+   * us. Windows RRAS acks it and then waits for our own CHAP challenge before entering the network phase, so
+   * IPCP is never answered. The client authenticates to the server, not the other way round (as pppd). */
+  int lcp_auth_in_cr = 0;
   int lcp_mru_in_cr = 1;
   /* Phase 1: send initial Configure-Request. */
   int plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, 1, lcp_accm_in_cr, lcp_auth_in_cr, lcp_mru_in_cr);
