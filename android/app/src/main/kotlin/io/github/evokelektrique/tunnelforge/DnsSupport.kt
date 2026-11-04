@@ -531,6 +531,9 @@ internal class DirectDnsExchangeClient(
     }
 
     private fun orderedRoutes(server: ResolvedDnsServerConfig, candidateIp: String): List<DnsUpstreamRoute> {
+        // A DNS server on a private address (e.g. a corporate resolver such as 10.0.0.53) is only reachable
+        // through the tunnel: never send it outside the VPN, whatever the protocol (UDP has no other fallback).
+        if (isPrivateIpv4(candidateIp)) return listOf(DnsUpstreamRoute.UnprotectedFallback)
         if (!server.protocol.supportsRouteFallback) return listOf(DnsUpstreamRoute.Protected)
         val preferred = preferredUpstreams[server.key]
         if (preferred?.candidateIp == candidateIp && preferred.route == DnsUpstreamRoute.UnprotectedFallback) {
@@ -585,6 +588,18 @@ internal class DirectDnsExchangeClient(
                 DnsUpstreamRoute.Protected -> "protected"
                 DnsUpstreamRoute.UnprotectedFallback -> "vpn"
             }
+
+    /** RFC 1918 private ranges and RFC 6598 shared address space (100.64.0.0/10). */
+    private fun isPrivateIpv4(ip: String): Boolean {
+        val parts = ip.trim().split('.')
+        if (parts.size != 4) return false
+        val a = parts[0].toIntOrNull() ?: return false
+        val b = parts[1].toIntOrNull() ?: return false
+        return a == 10 ||
+            (a == 172 && b in 16..31) ||
+            (a == 192 && b == 168) ||
+            (a == 100 && b in 64..127)
+    }
 
     private val DnsProtocol.supportsRouteFallback: Boolean
         get() = this == DnsProtocol.dnsOverTcp || this == DnsProtocol.dnsOverTls || this == DnsProtocol.dnsOverHttps
