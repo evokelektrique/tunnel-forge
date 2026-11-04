@@ -93,6 +93,10 @@ static long long ppp_now_ms(void) {
  *
  * @return PPP payload length on success; -1 on cancel, timeout, socket error, or oversize payload.
  */
+/* Peer endpoint of the current negotiation, so recv_ppp() can ZLB-ack L2TP control messages (e.g. SLI). */
+static const struct sockaddr *s_neg_peer = NULL;
+static socklen_t s_neg_peer_len = 0;
+
 static int recv_ppp(int esp_fd, esp_keys_t *esp, l2tp_session_t *l2tp, uint8_t *out, size_t cap, int ms) {
   struct timeval start;
   gettimeofday(&start, NULL);
@@ -178,6 +182,14 @@ static int recv_ppp(int esp_fd, esp_keys_t *esp, l2tp_session_t *l2tp, uint8_t *
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
                         "ppp recv l2tp not-ppp-data flags=0x%04x plen=%zu ctrl_msg_type=%u result_code=%u",
                         (unsigned)flags, plen, (unsigned)ctrl_mt, (unsigned)ctrl_result);
+      if ((flags & 0x8000u) && s_neg_peer != NULL) {
+        /* Acknowledge control messages (ZLB) so the peer stops retransmitting them; stop on CDN/StopCCN. */
+        int d = l2tp_dispatch_incoming(esp_fd, esp, s_neg_peer, s_neg_peer_len, l2tp, plain, plen, NULL, NULL);
+        if (d == L2TP_DISPATCH_REMOTE_CLOSED) {
+          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp recv: peer closed the L2TP session during negotiation");
+          return -1;
+        }
+      }
       continue;
     }
     if (ppp_len > cap)
@@ -683,7 +695,9 @@ static int ppp_auth_mschapv2(int esp_fd, esp_keys_t *esp, const struct sockaddr 
     if (plen < 8 || plen > len)
       continue;
     uint8_t vs = p[6];
-    if (vs != 16 || (size_t)plen < 7u + vs)
+    /* plen is the CHAP length (code..end, without the 2-byte PPP protocol field): code+id+len(4) + value-size(1)
+     * + value. Windows sends the challenge with an empty Name, so plen == 5 + 16 exactly. */
+    if (vs != 16 || (size_t)plen < 5u + vs)
       continue;
     const uint8_t *auth_chal = p + 7;
     uint8_t peer_chal[16];
@@ -767,7 +781,7 @@ static int ppp_auth_chap_md5(int esp_fd, esp_keys_t *esp, const struct sockaddr 
     if (plen < 8 || plen > len)
       continue;
     uint8_t vs = p[6];
-    if (vs == 0 || (size_t)plen < 7u + vs)
+    if (vs == 0 || (size_t)plen < 5u + vs) /* CHAP length excludes the 2-byte protocol field */
       continue;
     const uint8_t *chal = p + 7;
     uint8_t md[16];
@@ -1365,6 +1379,8 @@ static size_t ppp_write_frame_prefix(uint8_t *buf, size_t cap, uint16_t proto, c
 
 int ppp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *l2tp,
                   const char *user, const char *password, int tun_mtu, ppp_session_t *ppp) {
+  s_neg_peer = peer;
+  s_neg_peer_len = peer_len;
   memset(ppp, 0, sizeof(*ppp));
   ppp->link_mtu = ppp_sanitize_link_mtu(tun_mtu);
   ppp->tcp_mss = ppp_tcp_mss_for_link_mtu(ppp->link_mtu);
