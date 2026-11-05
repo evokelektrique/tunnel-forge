@@ -18,6 +18,7 @@ typedef struct {
   /** Control-plane sequence: next Ns to send; Nr to send (= last peer Ns + 1 mod 2^16). */
   uint16_t send_ns;
   uint16_t recv_nr_expected;
+  int lcp_opened;
 } l2tp_session_t;
 
 typedef struct {
