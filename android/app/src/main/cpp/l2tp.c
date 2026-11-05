@@ -664,7 +664,7 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
     return -1;
   if (l2tp_avp_append_u32(avps, sizeof(avps), &ao, 19, 1u) != 0) /* Framing Type: sync | async */
     return -1;
-  tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp ICCN: avp_len=%zu (tx_speed+framing included, build=iccn-v2)", ao);
+  tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp ICCN: avp_len=%zu (tx_speed+framing included)", ao);
   if (send_ctrl(esp_fd, esp, peer, peer_len, s, avps, ao) != 0)
     return -1;
 

@@ -547,8 +547,6 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
     int n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 3000);
     if (n == -2 || tunnel_should_stop())
       return -1;
-    if (n == -2)
-      return -1;
     if (n < 8) {
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp lcp: recv below minimum n=%d round=%d", n, round);
       if (tunnel_should_stop())
