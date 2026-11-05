@@ -1,1 +1,1 @@
-Release 0.7.6 adds ESP 3DES-CBC support for L2TP/IPsec servers that require IKEv1 3DES/SHA1/DH14 and HMAC-SHA1-96. AES support remains available.
+- Added ESP 3DES-CBC support for L2TP/IPsec servers using IKEv1 3DES/SHA1, DH Group 14, and HMAC-SHA1-96.
