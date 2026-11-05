@@ -2,6 +2,7 @@
 *.class
 *.log
 *.pyc
+__pycache__/
 *.swp
 .DS_Store
 .atom/
@@ -47,6 +48,8 @@ app.*.map.json
 
 # Root local environment
 .env
+.env.*
+!.env.example
 
 # Local VPN debug logs
 .vpn-debug/
@@ -55,6 +58,11 @@ app.*.map.json
 .gradle-home/
 
 # Android signing keys
-upload-keystore.jks
-upload-keystore.jks.base64
+*.jks
+*.jks.base64
+*.keystore
 android/.kotlin/
+.opencode/
+
+# Local notes and verification reports (existing tracked docs remain tracked)
+/docs/
