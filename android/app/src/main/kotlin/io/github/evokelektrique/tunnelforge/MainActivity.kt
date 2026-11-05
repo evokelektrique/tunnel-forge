@@ -2,6 +2,7 @@ package io.github.evokelektrique.tunnelforge
 
 import android.Manifest
 import android.app.Activity
+import android.app.UiModeManager
 import android.app.ForegroundServiceStartNotAllowedException
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -59,6 +60,19 @@ class MainActivity : FlutterActivity() {
             }
         appInfoChannel.setMethodCallHandler { call, result ->
             when (call.method) {
+                AppInfoContract.SET_THEME_MODE -> {
+                    // Android 12+ renders the starting window before Flutter starts.
+                    // Persist the app override with Android so that splash matches it.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val mode = when (call.arguments as? String) {
+                            "dark" -> UiModeManager.MODE_NIGHT_YES
+                            "light" -> UiModeManager.MODE_NIGHT_NO
+                            else -> UiModeManager.MODE_NIGHT_AUTO
+                        }
+                        getSystemService(UiModeManager::class.java).setApplicationNightMode(mode)
+                    }
+                    result.success(null)
+                }
                 AppInfoContract.GET_INSTALLED_VERSION -> {
                     try {
                         result.success(installedVersionInfo())

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tunnel_forge/core/platform/app_info_contract.dart';
 
 import '../domain/theme_repository.dart';
 
@@ -40,12 +43,27 @@ class SharedPrefsThemeRepository implements ThemeRepository {
   @override
   Future<ThemeMode> loadThemeMode() async {
     final prefs = await _prefs();
-    return themeModeFromStorage(prefs.getString(kThemeModePrefsKey));
+    final mode = themeModeFromStorage(prefs.getString(kThemeModePrefsKey));
+    await _syncAndroidTheme(mode);
+    return mode;
   }
 
   @override
   Future<void> saveThemeMode(ThemeMode mode) async {
     final prefs = await _prefs();
     await prefs.setString(kThemeModePrefsKey, themeModeToStorage(mode));
+    await _syncAndroidTheme(mode);
+  }
+
+  Future<void> _syncAndroidTheme(ThemeMode mode) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await const MethodChannel(AppInfoContract.channel).invokeMethod<void>(
+        AppInfoContract.setThemeMode,
+        themeModeToStorage(mode),
+      );
+    } on MissingPluginException {
+      // The native appearance channel is unavailable in widget tests.
+    }
   }
 }
