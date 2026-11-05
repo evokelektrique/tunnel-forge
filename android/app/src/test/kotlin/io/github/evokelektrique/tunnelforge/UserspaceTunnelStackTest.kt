@@ -1093,11 +1093,18 @@ class UserspaceTunnelStackTest {
     fun inboundPayloadAfterLocalFinKeepsSessionMatchedUntilRemoteFin() {
         val backend = CapturingBackend()
         val logs = CopyOnWriteArrayList<String>()
+        val pumpFinished = CountDownLatch(1)
         val stack =
             BridgeUserspaceTunnelStack(
                 bridge = ProxyPacketBridge(backend = backend),
                 clientIpv4 = "10.0.0.2",
-                logger = { _, message -> logs.add(message) },
+                logger = { _, message ->
+                    logs.add(message)
+                    if (message.contains("reason=fin-in")) {
+                        // Give a prematurely awakened pump time to publish its terminal state.
+                        pumpFinished.await(1, TimeUnit.SECONDS)
+                    }
+                },
             )
         assertTrue(stack.waitUntilReady(timeoutMs = 50, pollIntervalMs = 5))
 
@@ -1107,8 +1114,12 @@ class UserspaceTunnelStackTest {
         ServerSocket(0).use { server ->
             val pumpThread =
                 Thread {
-                    server.accept().use { accepted ->
-                        session.pumpBidirectional(accepted.asProxyClientConnection())
+                    try {
+                        server.accept().use { accepted ->
+                            session.pumpBidirectional(accepted.asProxyClientConnection())
+                        }
+                    } finally {
+                        pumpFinished.countDown()
                     }
                 }
             pumpThread.start()

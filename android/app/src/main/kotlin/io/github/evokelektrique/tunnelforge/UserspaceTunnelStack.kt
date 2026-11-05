@@ -577,13 +577,14 @@ internal class BridgeUserspaceTunnelStack(
 
         if (deliveredFin) {
             clientAttachments[runtime.sessionId]?.shutdownOutput()
-            runtime.markRemoteClosed()
-            logger(Log.DEBUG, "proxy tcp close sid=${runtime.sessionId} reason=fin-in")
             updateSessionState(
                 runtime.sessionId,
                 UserspaceSessionState.established,
                 "Observed TCP FIN from ${ipv4.sourceIp}:${tcp.sourcePort}; awaiting local close",
             )
+            // Publish the half-close before waking the pump, which can mark the session closed.
+            runtime.markRemoteClosed()
+            logger(Log.DEBUG, "proxy tcp close sid=${runtime.sessionId} reason=fin-in")
         }
     }
 
