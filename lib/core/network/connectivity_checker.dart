@@ -11,21 +11,31 @@ class ConnectivityPingResult {
     this.latencyMs,
     this.statusCode,
     this.error,
+    this.setupMs,
+    this.totalMs,
   });
 
   final bool reachable;
+
+  /// HTTP request-to-response-headers time, excluding connection setup and body.
   final int? latencyMs;
   final int? statusCode;
   final String? error;
+  final int? setupMs;
+  final int? totalMs;
 
   factory ConnectivityPingResult.success({
     required int latencyMs,
     required int statusCode,
+    int? setupMs,
+    int? totalMs,
   }) {
     return ConnectivityPingResult(
       reachable: true,
       latencyMs: latencyMs,
       statusCode: statusCode,
+      setupMs: setupMs,
+      totalMs: totalMs,
     );
   }
 
@@ -129,16 +139,20 @@ class HttpConnectivityChecker implements ConnectivityChecker {
 
     try {
       final httpRequest = await client.getUrl(uri).timeout(effectiveTimeout);
+      final setupMs = watch.elapsedMilliseconds;
       httpRequest.followRedirects = true;
       final response = await httpRequest.close().timeout(effectiveTimeout);
+      final responseMs = watch.elapsedMilliseconds - setupMs;
       await response.drain<void>().timeout(effectiveTimeout);
       watch.stop();
 
       final code = response.statusCode;
       if (code >= 200 && code < 400) {
         return ConnectivityPingResult.success(
-          latencyMs: watch.elapsedMilliseconds,
+          latencyMs: responseMs,
           statusCode: code,
+          setupMs: setupMs,
+          totalMs: watch.elapsedMilliseconds,
         );
       }
       return ConnectivityPingResult.failure(

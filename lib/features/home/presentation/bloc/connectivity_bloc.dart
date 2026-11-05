@@ -101,6 +101,8 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
       _log(
         LogLevel.info,
         'Connectivity OK: ${result.latencyMs} ms'
+        '${result.setupMs == null ? '' : ' setup=${result.setupMs} ms'}'
+        '${result.totalMs == null ? '' : ' total=${result.totalMs} ms'}'
         '${result.statusCode == null ? '' : ' status=${result.statusCode}'}',
         tag: 'connectivity',
       );
