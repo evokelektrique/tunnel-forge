@@ -18,6 +18,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DnsSupportTest {
+    @Test
+    fun privateDnsUsesTunnelForEveryProtocol() {
+        val client = DirectDnsExchangeClient(emptyList(), { _, _ -> })
+        val routes = DirectDnsExchangeClient::class.java.getDeclaredMethod(
+            "orderedRoutes", ResolvedDnsServerConfig::class.java, String::class.java,
+        ).apply { isAccessible = true }
+        for (protocol in DnsProtocol.entries) {
+            for (ip in listOf("10.0.0.53", "172.16.0.1", "172.31.255.254", "192.168.1.1", "100.64.0.1", "100.127.255.254")) {
+                val server = ResolvedDnsServerConfig(host = ip, protocol = protocol, resolvedIpv4 = ip)
+                val result = routes.invoke(client, server, ip) as List<*>
+                assertEquals(listOf("UnprotectedFallback"), result.map { it.toString() })
+            }
+            for (ip in listOf("8.8.8.8", "172.15.0.1", "172.32.0.1", "100.63.0.1", "100.128.0.1")) {
+                val server = ResolvedDnsServerConfig(host = ip, protocol = protocol, resolvedIpv4 = ip)
+                assertEquals("Protected", (routes.invoke(client, server, ip) as List<*>).first().toString())
+            }
+        }
+    }
+
 
     @Test
     fun `dns-over-https accepts custom endpoint path and preserves it`() {
