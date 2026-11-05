@@ -6,7 +6,7 @@ import 'package:equatable/equatable.dart';
 import '../../domain/app_exit_controller.dart';
 import '../../domain/onboarding_repository.dart';
 
-const int kOnboardingAgreeCountdownSeconds = 20;
+const int kOnboardingAgreeCountdownSeconds = 10;
 
 enum OnboardingFlowStatus { loading, presenting, accepted, exiting }
 

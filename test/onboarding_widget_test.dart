@@ -171,9 +171,15 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.pump(
-        const Duration(seconds: kOnboardingAgreeCountdownSeconds),
-      );
+      expect(kOnboardingAgreeCountdownSeconds, 10);
+      await tester.pump(const Duration(seconds: 9));
+      await tester.pump();
+      expect(find.text('Confirm in 1s'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('onboarding_agree_button')));
+      await tester.pump();
+      expect(repository.savedVersion, isNull);
+
+      await tester.pump(const Duration(seconds: 1));
       await tester.pump();
       expect(find.text('Confirm'), findsOneWidget);
 

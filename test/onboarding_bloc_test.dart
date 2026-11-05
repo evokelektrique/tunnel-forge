@@ -80,7 +80,7 @@ void main() {
 
         expect(bloc.state.status, OnboardingFlowStatus.presenting);
         expect(bloc.state.step, OnboardingStep.acknowledgement);
-        expect(bloc.state.secondsRemaining, 19);
+        expect(bloc.state.secondsRemaining, 9);
       },
     );
 
