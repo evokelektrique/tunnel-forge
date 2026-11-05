@@ -1,7 +1,14 @@
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+
 allprojects {
     repositories {
         google()
         mavenCentral()
+    }
+    repositories.withType<MavenArtifactRepository>().configureEach {
+        if (url.toString().contains("/download.flutter.io")) {
+            content { includeGroup("io.flutter") }
+        }
     }
 }
 
