@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
+#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -263,7 +264,7 @@ static int recv_plain(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt, int *use
 
 static void avp_write(uint8_t *buf, size_t *off, uint16_t attr_type, const void *val, uint16_t vlen) {
   uint16_t tot = (uint16_t)(6 + vlen);
-  uint16_t hdr = (uint16_t)(0x8000u | tot);
+  uint16_t hdr = (uint16_t)((attr_type == 6u ? 0u : 0x8000u) | tot);
   util_write_be16(buf + *off + 0, hdr);
   util_write_be16(buf + *off + 2, 0);
   util_write_be16(buf + *off + 4, attr_type);
@@ -396,6 +397,18 @@ int l2tp_send_teardown(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer,
   return rc;
 }
 
+static int new_tunnel_id(uint16_t *id) {
+  do {
+    ssize_t n;
+    do {
+      n = getrandom(id, sizeof(*id), 0);
+    } while (n < 0 && errno == EINTR);
+    if (n != sizeof(*id))
+      return -1;
+  } while (*id == 0);
+  return 0;
+}
+
 static uint16_t pick_local_id(uint16_t remote, uint16_t salt) {
   uint16_t x = (uint16_t)((remote ^ salt ^ 0x5a5du) | 1u);
   if (x == remote)
@@ -426,7 +439,8 @@ static int recv_ctrl_update_nr(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt,
   if (l2tp_ctrl_get_ns_nr(in, (size_t)ilen, &peer_ns, &peer_nr) != 0)
     return -1;
   (void)peer_nr;
-  ingest_peer_ns(s, peer_ns);
+  if (ilen > (int)L2TP_CTRL_HDR)
+    ingest_peer_ns(s, peer_ns);
   if (l2tp_ctrl_result_ok(in, (size_t)ilen) != 0) {
     uint16_t mt_dbg = 0;
     uint16_t result_code = 0;
@@ -494,6 +508,9 @@ static int recv_until_mt(int esp_fd, esp_keys_t *esp, const struct sockaddr *pee
   return -1;
 }
 
+static int l2tp_dispatch_control(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                                 l2tp_session_t *s, const uint8_t *data, size_t len);
+
 /**
  * Run L2TPv2 control-plane handshake (SCCRQ through ICCN) over the ESP/cleartext UDP path.
  *
@@ -512,7 +529,9 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   s_recv_plain_info_budget = 64;
   esp_reset_drop_counters();
 
-  uint16_t local_tid = 0x1001;
+  uint16_t local_tid;
+  if (new_tunnel_id(&local_tid) != 0)
+    return -1;
   s->peer_tunnel_id = local_tid;
 
   uint8_t avps[512];
@@ -587,6 +606,12 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   }
   if (ilen < 0)
     return -1;
+  if (mt == 0) {
+    ilen = recv_until_mt(esp_fd, esp, peer, peer_len, in, sizeof(in), s, L2TP_MSG_SCCRP);
+    if (ilen < 0)
+      return -1;
+    mt = L2TP_MSG_SCCRP;
+  }
   if (mt != L2TP_MSG_SCCRP) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: expected SCCRP got %u", (unsigned)mt);
     return -1;
@@ -596,8 +621,6 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
     return -1;
 
   s->tunnel_id = remote_tid;
-  if (local_tid == remote_tid)
-    local_tid = (uint16_t)(remote_tid + 1u);
   s->peer_tunnel_id = local_tid;
 
   ao = 0;
@@ -634,12 +657,16 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
 
   ao = 0;
   avp_u16(avps, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_ICCN);
-  avp_u16(avps, &ao, L2TP_AVP_ASSIGNED_SESSION, local_sid);
+  /* RFC 2661 sec 6.8: ICCN MUST carry (Tx) Connect Speed (AVP 24) and Framing Type (AVP 19).
+   * Strict LNS implementations (mpd5 on pfSense/FreeBSD) drop the tunnel with
+   * "rec'd ICCN control message lacking required AVP #24" when they are missing. */
+  if (l2tp_avp_append_u32(avps, sizeof(avps), &ao, 24, 100000000u) != 0) /* Tx Connect Speed, bps */
+    return -1;
+  if (l2tp_avp_append_u32(avps, sizeof(avps), &ao, 19, 1u) != 0) /* Framing Type: sync | async */
+    return -1;
+  tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp ICCN: avp_len=%zu (tx_speed+framing included, build=iccn-v2)", ao);
   if (send_ctrl(esp_fd, esp, peer, peer_len, s, avps, ao) != 0)
     return -1;
-
-  /* Drain stray post-handshake datagram so data-plane loop does not inherit stale control noise. */
-  (void)recv_plain(esp_fd, esp, NULL, NULL, in, sizeof(in), 1500);
 
   tunnel_log("l2tp ok remote_tid=%u remote_sid=%u local_tid=%u local_sid=%u", (unsigned)s->tunnel_id,
              (unsigned)s->session_id, (unsigned)s->peer_tunnel_id, (unsigned)s->peer_session_id);
@@ -823,6 +850,15 @@ static int l2tp_dispatch_control(int esp_fd, esp_keys_t *esp, const struct socka
   }
 
   if (mt == L2TP_MSG_STOPCCN || mt == L2TP_MSG_CDN) {
+    {
+      uint16_t rc = 0, ec = 0;
+      char em[128];
+      em[0] = '\0';
+      if (l2tp_ctrl_result_details(data, len, &rc, &ec, em, sizeof(em)) == 0)
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: peer sent %s result=%u error=%u msg=%s",
+                          mt == L2TP_MSG_STOPCCN ? "StopCCN" : "CDN", (unsigned)rc, (unsigned)ec,
+                          em[0] != '\0' ? em : "-");
+    }
     l2tp_log_ctrl_result_details(mt, data, len);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp ctrl dataplane: remote teardown mt=%u peer_ns=%u peer_nr=%u",
                       (unsigned)mt, (unsigned)peer_ns, (unsigned)peer_nr);
