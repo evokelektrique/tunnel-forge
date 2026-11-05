@@ -136,12 +136,17 @@ make format
 make check
 make test
 make build-debug
+make build-release
 ```
 
 - `make format` formats Dart and Android native C sources.
 - `make check` runs Flutter analysis, Android lint, and native C checks.
 - `make test` runs Flutter, Android unit, and native C tests.
 - `make build-debug` builds the Android debug APK.
+- `make build-release` loads release signing credentials from the root `.env`
+  and builds signed split-ABI APKs in `build/app/outputs/flutter-apk/`. Set either
+  `TUNNEL_FORGE_ANDROID_KEYSTORE_PATH` or `TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64`,
+  plus the keystore password, key alias, and key password from `.env.example`.
 
 For focused targets, run:
 
