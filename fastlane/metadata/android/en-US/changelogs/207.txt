@@ -1,0 +1,1 @@
+Release 0.7.7 improves compatibility with legacy L2TP/IPsec servers, fixes PPP negotiation and private DNS routing, and matches the Android splash screen to the app theme. The connectivity badge now shows HTTP response time. Security notice review is 10 seconds.
