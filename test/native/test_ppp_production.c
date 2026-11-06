@@ -116,6 +116,30 @@ int main(void) {
   assert(mru == 0 && accm == 1 && auth == 0);
   int n = lcp_build_cr(packet, sizeof(packet), 1, PPP_AUTH_MSCHAPV2, 1400, 1, 0, 0, mru);
   assert(n == 8 && util_read_be16(packet + 6) == 4);
+  /* pppd with plain `auth`: MRU 1410, ACCM, auth EAP, magic. EAP must be Nak'd with MS-CHAPv2, never acked. */
+  const uint8_t eap_cr[] = {0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 24, 1, 4, 0x05, 0x82, 2, 6, 0, 0, 0, 0,
+                            3, 4, 0xc2, 0x27, 5, 6, 0x56, 0xef, 0x1e, 0x20};
+  ppp_auth_kind_t peer_auth = PPP_AUTH_PAP;
+  assert(lcp_parse_peer_auth(eap_cr + 4, sizeof(eap_cr) - 4, &peer_auth) == -1 && peer_auth == PPP_AUTH_PAP);
+  assert(lcp_build_reject_for_unsupported(eap_cr, 2, eap_cr + 2, sizeof(eap_cr) - 2, packet, sizeof(packet)) == 0);
+  n = lcp_build_nak_for_unsupported_auth(eap_cr, 2, eap_cr + 2, sizeof(eap_cr) - 2, packet, sizeof(packet));
+  const uint8_t eap_nak[] = {0xff, 0x03, 0xc0, 0x21, 3, 1, 0, 9, 3, 5, 0xc2, 0x23, 0x81};
+  assert(n == (int)sizeof(eap_nak) && memcmp(packet, eap_nak, sizeof(eap_nak)) == 0);
+  /* MS-CHAPv1 (algorithm 0x80) is not implemented either. */
+  uint8_t chap_cr[] = {0xc0, 0x21, 1, 2, 0, 9, 3, 5, 0xc2, 0x23, 0x80};
+  assert(lcp_parse_peer_auth(chap_cr + 2, sizeof(chap_cr) - 2, &peer_auth) == -1);
+  assert(lcp_build_nak_for_unsupported_auth(chap_cr, 0, chap_cr, sizeof(chap_cr), packet, sizeof(packet)) == 11);
+  assert(packet[2] == 3 && packet[3] == 2 && packet[10] == 0x81);
+  /* Supported protocols are acked and adopted. */
+  chap_cr[10] = 0x81;
+  assert(lcp_build_nak_for_unsupported_auth(chap_cr, 0, chap_cr, sizeof(chap_cr), packet, sizeof(packet)) == 0);
+  assert(lcp_parse_peer_auth(chap_cr + 2, sizeof(chap_cr) - 2, &peer_auth) == 0 && peer_auth == PPP_AUTH_MSCHAPV2);
+  chap_cr[10] = 0x05;
+  assert(lcp_build_nak_for_unsupported_auth(chap_cr, 0, chap_cr, sizeof(chap_cr), packet, sizeof(packet)) == 0);
+  assert(lcp_parse_peer_auth(chap_cr + 2, sizeof(chap_cr) - 2, &peer_auth) == 0 && peer_auth == PPP_AUTH_CHAP_MD5);
+  const uint8_t pap_cr[] = {0xc0, 0x21, 1, 3, 0, 8, 3, 4, 0xc0, 0x23};
+  assert(lcp_build_nak_for_unsupported_auth(pap_cr, 0, pap_cr, sizeof(pap_cr), packet, sizeof(packet)) == 0);
+  assert(lcp_parse_peer_auth(pap_cr + 2, sizeof(pap_cr) - 2, &peer_auth) == 0 && peer_auth == PPP_AUTH_PAP);
   uint8_t challenge[23] = {0xc2, 0x23, 1, 7, 0, 21, 16};
   assert(chap_challenge_valid(challenge, sizeof(challenge), 1));
   assert(chap_challenge_valid(challenge, sizeof(challenge), 0));
