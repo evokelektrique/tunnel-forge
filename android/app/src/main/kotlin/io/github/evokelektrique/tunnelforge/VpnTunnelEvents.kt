@@ -55,13 +55,14 @@ object VpnTunnelEvents {
         }
     }
 
-    fun emit(state: String, detail: String?, attemptId: String? = null) {
+    fun emit(state: String, detail: String?, attemptId: String? = null, failure: Map<String, Any>? = null) {
         invokeOnMain(
             VpnContract.ON_TUNNEL_STATE,
             mapOf(
                 VpnContract.ARG_ATTEMPT_ID to (attemptId ?: ""),
                 VpnContract.ARG_TUNNEL_STATE to state,
                 VpnContract.ARG_TUNNEL_DETAIL to (detail ?: ""),
+                VpnContract.ARG_TUNNEL_FAILURE to failure,
             ),
         )
     }

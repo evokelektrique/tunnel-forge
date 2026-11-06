@@ -1,5 +1,7 @@
 // VPN [MethodChannel] client: Flutter invokes prepare/connect/disconnect; Android pushes state and engine logs.
 import 'package:flutter/services.dart';
+import 'package:tunnel_forge/features/home/domain/log_redaction.dart';
+import 'package:tunnel_forge/features/tunnel/domain/tunnel_failure.dart';
 
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
@@ -9,7 +11,12 @@ import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
 
 /// Host -> Dart: [VpnTunnelState] value, a human-readable [detail], and the originating [attemptId].
 typedef VpnTunnelHostCallback =
-    void Function(String state, String detail, String attemptId);
+    void Function(
+      String state,
+      String detail,
+      String attemptId,
+      TunnelFailure? failure,
+    );
 
 /// Host -> Dart: one engine log line ([VpnContract.argEngineLogLevel] is an Android log priority).
 typedef VpnEngineLogCallback =
@@ -43,7 +50,13 @@ class VpnClient {
         final state = raw[VpnContract.argTunnelState]?.toString() ?? '';
         final detail = raw[VpnContract.argTunnelDetail]?.toString() ?? '';
         final attemptId = raw[VpnContract.argAttemptId]?.toString() ?? '';
-        _onTunnelState?.call(state, detail, attemptId);
+        final failure = raw[VpnContract.argTunnelFailure] == null
+            ? null
+            : TunnelFailure.fromMap(
+                raw[VpnContract.argTunnelFailure],
+                detail: redactLogMessage(detail),
+              );
+        _onTunnelState?.call(state, detail, attemptId, failure);
       }
       return;
     }

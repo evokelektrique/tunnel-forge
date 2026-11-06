@@ -269,9 +269,9 @@ class TunnelVpnService : VpnService() {
         return matches
     }
 
-    private fun emitAttemptState(attemptId: String, state: String, detail: String): Boolean {
+    private fun emitAttemptState(attemptId: String, state: String, detail: String, failure: Map<String, Any>? = null): Boolean {
         if (!shouldHandleAttempt(attemptId, "state:$state")) return false
-        VpnTunnelEvents.emit(state, detail, attemptId)
+        VpnTunnelEvents.emit(state, detail, attemptId, failure)
         return true
     }
 
@@ -407,7 +407,7 @@ class TunnelVpnService : VpnService() {
                 return
             }
             if (negResult != 0) {
-                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(negResult))
+                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(negResult), VpnBridge.failure(negResult))
                 running.set(false)
                 VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}Tunnel failed during negotiation code=$negResult")
                 stopServiceForAttempt(attemptId)
@@ -580,7 +580,7 @@ class TunnelVpnService : VpnService() {
                             val code = VpnBridge.nativeStartLoop(tunFd)
                             VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeStartLoop exited with code=$code")
                             if (code != 0) {
-                                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(code))
+                                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(code), VpnBridge.failure(code))
                             } else {
                                 emitAttemptState(attemptId, VpnContract.TUNNEL_STOPPED, "Tunnel closed normally")
                             }

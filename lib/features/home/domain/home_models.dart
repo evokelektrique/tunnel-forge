@@ -1,18 +1,25 @@
 import 'package:equatable/equatable.dart';
+import 'package:tunnel_forge/features/tunnel/domain/tunnel_failure.dart';
 
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 
 class HomeMessage extends Equatable {
-  const HomeMessage({required this.id, required this.text, this.error = false});
+  const HomeMessage({
+    required this.id,
+    required this.text,
+    this.error = false,
+    this.failure,
+  });
 
   final int id;
   final String text;
   final bool error;
+  final TunnelFailure? failure;
 
   @override
-  List<Object?> get props => [id, text, error];
+  List<Object?> get props => [id, text, error, failure];
 }
 
 class ProfileSecretRow extends Equatable {
@@ -35,14 +42,16 @@ class TunnelHostUpdate extends Equatable {
     required this.state,
     required this.detail,
     this.attemptId = '',
+    this.failure,
   });
 
   final String state;
   final String detail;
   final String attemptId;
+  final TunnelFailure? failure;
 
   @override
-  List<Object?> get props => [state, detail, attemptId];
+  List<Object?> get props => [state, detail, attemptId, failure];
 }
 
 class EngineLogMessage extends Equatable {

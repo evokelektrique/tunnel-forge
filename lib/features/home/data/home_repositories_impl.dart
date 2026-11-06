@@ -409,9 +409,10 @@ class TunnelRepositoryImpl implements TunnelRepository {
     _client =
         client ??
         VpnClient(
-          onTunnelState: (state, detail, attemptId) {
+          onTunnelState: (state, detail, attemptId, failure) {
             _tunnelStateController.add(
               TunnelHostUpdate(
+                failure: failure,
                 state: state,
                 detail: detail,
                 attemptId: attemptId,

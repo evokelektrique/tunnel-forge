@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:get_it/get_it.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:tunnel_forge/features/home/presentation/widgets/tunnel_error_dialog.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:tunnel_forge/app/ui/app_scaffold_messenger.dart';
@@ -178,7 +180,24 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     final message = current.message;
     if (message != null && message.id != _lastTunnelMessageId) {
       _lastTunnelMessageId = message.id;
-      _toast(message.text, error: message.error);
+      final failure = message.failure;
+      if (failure != null) {
+        // The message ID is consumed before opening the dialog, so rebuilds
+        // cannot display the same error twice.
+        unawaited(
+          showDialog<void>(
+            context: context,
+            barrierDismissible: true,
+            builder: (_) => TunnelErrorDialog(
+              failure: failure,
+              onExportLogs: () =>
+                  _shareDebugLogs(context.read<LogsBloc>().state),
+            ),
+          ),
+        );
+      } else {
+        _toast(message.text, error: message.error);
+      }
     }
     final settingsState = context.read<SettingsBloc>().state;
     if (!_lastTunnelUp && current.tunnelUp && !current.stopRequested) {

@@ -253,11 +253,22 @@ static int tunnel_sanitize_mtu(int tun_mtu) {
   return tun_mtu;
 }
 
+static _Thread_local int worker_failure[3];
+
+void tunnel_set_failure(int kind, int code, int general_error) {
+  worker_failure[0] = kind;
+  worker_failure[1] = code;
+  worker_failure[2] = general_error;
+}
+
+void tunnel_get_failure(int out[3]) { memcpy(out, worker_failure, sizeof(worker_failure)); }
+
 int tunnel_negotiate(const char *server, const char *user, const char *password, const char *psk, int tun_mtu) {
   if (g_state.ready) {
     tunnel_close_active_session("new negotiation", 1);
   }
   g_state.ready = 0;
+  tunnel_set_failure(0, 0, 0);
   atomic_store(&g_stop, 0);
   tun_mtu = tunnel_sanitize_mtu(tun_mtu);
   tunnel_log("tunnel negotiate server=%s tun_mtu=%d", server, tun_mtu);

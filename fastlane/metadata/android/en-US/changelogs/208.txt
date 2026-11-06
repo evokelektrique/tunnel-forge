@@ -1,0 +1,4 @@
+- Connection errors now show a code, a short description and suggested fixes. Codes and descriptions are also saved in the logs.
+- Error dialogs have copy and log export icons, a Close button and tap-outside dismissal. Extra details can be expanded.
+- Copy and export actions show toast feedback. Export opens the Android share sheet with the debug logs.
+- CHAP and PAP login rejections now show an authentication error instead of a generic PPP failure.

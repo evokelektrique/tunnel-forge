@@ -8,6 +8,7 @@ import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_contract.dart';
+import 'package:tunnel_forge/features/tunnel/domain/tunnel_failure.dart';
 import '../../../home/domain/home_models.dart';
 import '../../../home/domain/home_repositories.dart';
 import '../../../home/domain/log_redaction.dart';
@@ -393,7 +394,16 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'Platform error: ${error.code} ${error.message ?? ''} attempt=$attemptId',
         tag: 'tunnel',
       );
-      _toast(emit, error.message ?? error.code, error: true);
+      _toast(
+        emit,
+        error.message ?? error.code,
+        error: true,
+        failure: TunnelFailure(
+          namespace: 'android',
+          code: error.code,
+          detail: redactLogMessage(error.message ?? ''),
+        ),
+      );
       emit(
         state.copyWith(
           busy: false,
@@ -440,7 +450,16 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'Disconnect error: ${error.code} ${error.message ?? ''}',
         tag: 'tunnel',
       );
-      _toast(emit, error.message ?? error.code, error: true);
+      _toast(
+        emit,
+        error.message ?? error.code,
+        error: true,
+        failure: TunnelFailure(
+          namespace: 'android',
+          code: error.code,
+          detail: redactLogMessage(error.message ?? ''),
+        ),
+      );
       emit(state.copyWith(stopRequested: false));
       _cancelDisconnectTimer();
     } finally {
@@ -570,7 +589,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           ),
         );
         _logError(
-          'Android${state.activeAttemptId == null ? '' : ' attempt=${state.activeAttemptId!}'}: tunnel failed: ${update.detail}',
+          'Android${currentAttemptId == null ? '' : ' attempt=$currentAttemptId'}: tunnel failed: ${update.detail}',
           source: LogSource.kotlin,
           tag: 'TunnelState',
         );
@@ -583,6 +602,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
                 )
               : update.detail,
           error: true,
+          failure: update.failure,
         );
         break;
       case VpnTunnelState.stopped:
@@ -838,11 +858,27 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     );
   }
 
-  void _toast(Emitter<TunnelState> emit, String text, {bool error = false}) {
+  void _toast(
+    Emitter<TunnelState> emit,
+    String text, {
+    bool error = false,
+    TunnelFailure? failure,
+  }) {
+    final reportedFailure = error
+        ? failure ?? TunnelFailure.fromMap(null, detail: redactLogMessage(text))
+        : null;
+    if (reportedFailure != null) {
+      _logError(reportedFailure.summary, tag: 'TunnelFailure');
+    }
     _messageId += 1;
     emit(
       state.copyWith(
-        message: HomeMessage(id: _messageId, text: text, error: error),
+        message: HomeMessage(
+          id: _messageId,
+          text: text,
+          error: error,
+          failure: reportedFailure,
+        ),
       ),
     );
   }

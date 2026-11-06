@@ -42,6 +42,11 @@ int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char
 /** Phase 1: IKE + L2TP + PPP negotiation (no TUN fd needed). Call before VPN establish(). */
 int tunnel_negotiate(const char *server, const char *user, const char *password, const char *psk, int tun_mtu);
 
+/* Worker-local failure: kind 1=MS-CHAP, 2=StopCCN, 3=CDN, 4=CHAP, 5=PAP.
+ * No peer-provided text or credentials cross this diagnostic boundary. */
+void tunnel_set_failure(int kind, int code, int general_error);
+void tunnel_get_failure(int out[3]);
+
 /** After successful tunnel_negotiate(), copies negotiated PPP client IPv4 (same as IPCP local_ip). */
 void tunnel_negotiated_client_ipv4(uint8_t out[4]);
 void tunnel_negotiated_dns_ipv4(uint8_t primary_out[4], uint8_t secondary_out[4]);

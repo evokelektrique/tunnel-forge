@@ -854,6 +854,7 @@ static int ppp_auth_mschapv2(int esp_fd, esp_keys_t *esp, const struct sockaddr 
         return 0;
       }
       if (chap_result_code(p, len) == 4) {
+        tunnel_set_failure(4, 4, 0);
         uint16_t chap_len = len >= 6 ? util_read_be16(p + 4) : 0u;
         ppp_mschapv2_failure_info_t failure;
         if (chap_len >= 4u && (size_t)chap_len + 2u <= len &&
@@ -862,6 +863,8 @@ static int ppp_auth_mschapv2(int esp_fd, esp_keys_t *esp, const struct sockaddr 
           char retry[16];
           char version[16];
           snprintf(err, sizeof(err), failure.has_error_code ? "%d" : "-", failure.error_code);
+          if (failure.has_error_code)
+            tunnel_set_failure(1, failure.error_code, 0);
           snprintf(retry, sizeof(retry), failure.has_retry ? "%d" : "-", failure.retry);
           snprintf(version, sizeof(version), failure.has_version ? "%d" : "-", failure.version);
           tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: MS-CHAPv2 failure E=%s R=%s V=%s M=%s", err, retry,
@@ -962,6 +965,7 @@ static int ppp_auth_chap_md5(int esp_fd, esp_keys_t *esp, const struct sockaddr 
       }
       if (chap_result_code(p, len) == 4) {
         ppp_log_rx_summary(p, len, "auth-chap-md5-failure");
+        tunnel_set_failure(4, 4, 0);
         return -1;
       }
     }
@@ -1001,11 +1005,19 @@ static int ppp_auth_pap(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer
     int n = recv_ppp(esp_fd, esp, peer, peer_len, l2tp, in, sizeof(in), 5000);
     if (n == -2 || tunnel_should_stop())
       return -1;
-    if (n < 8)
+    if (n < 7)
       continue;
     const uint8_t *p = in;
     size_t len = (size_t)n;
     ppp_strip(in, (size_t)n, &p, &len);
+    /* Only a complete Authenticate-Nak for our request proves rejection. */
+    if (len >= 7 && util_read_be16(p) == PROTO_PAP && p[2] == 3 && p[3] == 1) {
+      uint16_t pap_len = util_read_be16(p + 4);
+      if (pap_len >= 5 && (size_t)pap_len + 2 <= len && p[6] <= pap_len - 5) {
+        tunnel_set_failure(5, 3, 0);
+        return -1;
+      }
+    }
     if (len >= 4 && util_read_be16(p) == PROTO_PAP && p[2] == 2) {
       ppp_log_rx_summary(p, len, "auth-pap-ack");
       return 0;

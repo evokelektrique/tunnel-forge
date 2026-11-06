@@ -108,6 +108,17 @@ cleanup:
   return out;
 }
 
+static jintArray native_failure(JNIEnv *env, jclass clazz) {
+  (void)clazz;
+  int failure[3];
+  tunnel_get_failure(failure);
+  jint values[3] = {failure[0], failure[1], failure[2]};
+  jintArray out = (*env)->NewIntArray(env, 3);
+  if (out != NULL)
+    (*env)->SetIntArrayRegion(env, out, 0, 3, values);
+  return out;
+}
+
 static void native_set_socket_protection_enabled(JNIEnv *env, jclass clazz, jboolean enabled) {
   (void)env;
   (void)clazz;
@@ -401,6 +412,7 @@ static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
       {"nativeRunTunnel", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)I",
        (void *)native_run_tunnel},
+      {"nativeFailure", "()[I", (void *)native_failure},
       {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I[I[I[I)I",
        (void *)native_negotiate},
       {"nativeSetSocketProtectionEnabled", "(Z)V", (void *)native_set_socket_protection_enabled},

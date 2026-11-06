@@ -10,8 +10,52 @@ import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_contract.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
+import 'package:tunnel_forge/features/tunnel/domain/tunnel_failure.dart';
 
 void main() {
+  final failureLogs = _FakeLogsRepository();
+  const authFailure = TunnelFailure(namespace: 'mschap', code: '691');
+  blocTest<TunnelBloc, TunnelState>(
+    'reports a structured failure once and logs its code and label',
+    build: () => TunnelBloc(_FakeTunnelRepository(), failureLogs),
+    seed: () => const TunnelState(
+      activeAttemptId: 'attempt-auth',
+      awaitingTunnel: true,
+    ),
+    act: (bloc) {
+      const event = TunnelHostStateReceived(
+        TunnelHostUpdate(
+          state: VpnTunnelState.failed,
+          detail: 'PPP negotiation failed.',
+          attemptId: 'attempt-auth',
+          failure: authFailure,
+        ),
+      );
+      bloc.add(event);
+      bloc.add(event);
+    },
+    expect: () => [
+      const TunnelState(),
+      const TunnelState(
+        message: HomeMessage(
+          id: 1,
+          text: 'PPP negotiation failed.',
+          error: true,
+          failure: authFailure,
+        ),
+      ),
+    ],
+    verify: (_) {
+      expect(
+        failureLogs.entries
+            .where((entry) => entry.tag == 'TunnelFailure')
+            .single
+            .message,
+        authFailure.summary,
+      );
+    },
+  );
+
   blocTest<TunnelBloc, TunnelState>(
     'ignores stale failure from an older attempt while a newer tunnel is up',
     build: () => TunnelBloc(_FakeTunnelRepository(), _FakeLogsRepository()),
@@ -56,6 +100,11 @@ void main() {
           id: 1,
           text: 'L2TP handshake failed.',
           error: true,
+          failure: TunnelFailure(
+            namespace: 'app',
+            code: 'UNKNOWN',
+            detail: 'L2TP handshake failed.',
+          ),
         ),
       ),
     ],

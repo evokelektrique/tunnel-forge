@@ -31,6 +31,27 @@ object VpnBridge {
     external fun nativeSetSocketProtectionEnabled(enabled: Boolean)
 
     @JvmStatic
+    external fun nativeFailure(): IntArray
+
+    /** Read on the same worker that negotiated/ran the native tunnel. */
+    fun failure(exitCode: Int? = null): Map<String, Any>? {
+        val values = nativeFailure()
+        val namespace = when (values[0]) {
+            1 -> "mschap"
+            2 -> "l2tp-stopccn"
+            3 -> "l2tp-cdn"
+            4 -> "chap"
+            5 -> "pap"
+            else -> if (exitCode != null) "engine" else return null
+        }
+        return mapOf(
+            "namespace" to namespace,
+            "code" to (if (namespace == "engine") exitCode!! else values[1]),
+            "generalError" to values[2],
+        )
+    }
+
+    @JvmStatic
     external fun nativeStartLoop(tunFd: Int): Int
 
     @JvmStatic

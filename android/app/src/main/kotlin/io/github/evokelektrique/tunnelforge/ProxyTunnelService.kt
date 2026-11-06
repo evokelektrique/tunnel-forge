@@ -212,7 +212,7 @@ class ProxyTunnelService : Service() {
                 return
             }
             if (negResult != 0) {
-                emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(negResult))
+                emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(negResult), VpnBridge.failure(negResult))
                 return
             }
             val effectiveDnsServers =
@@ -245,17 +245,21 @@ class ProxyTunnelService : Service() {
             )
             val loopThread = Thread(
                 {
+                    var loopFailure: Map<String, Any>? = null
                     ProxyTunnelLoopRunner.run(
                         attemptId = attemptId,
                         emitEngineLog = { level, message ->
                             VpnTunnelEvents.emitEngineLog(level, TAG, message)
                         },
                         startLoop = { VpnBridge.nativeStartProxyLoop() },
-                        detailForCode = ::tunnelExitDetail,
+                        detailForCode = { code ->
+                            loopFailure = VpnBridge.failure(code)
+                            tunnelExitDetail(code)
+                        },
                         isStopRequested = { stopRequested },
                         isConnected = { connectedEmitted },
                         emitTerminal = { terminalAttemptId, state, detail ->
-                            emitAttemptTerminalState(terminalAttemptId, state, detail)
+                            emitAttemptTerminalState(terminalAttemptId, state, detail, loopFailure)
                         },
                         onLoopCrash = { throwable ->
                             AppLog.e(TAG, "${prefixAttempt(attemptId)}nativeStartProxyLoop failed", throwable)
@@ -763,15 +767,15 @@ class ProxyTunnelService : Service() {
         return true
     }
 
-    private fun emitAttemptTerminalState(attemptId: String, state: String, detail: String): Boolean {
+    private fun emitAttemptTerminalState(attemptId: String, state: String, detail: String, failure: Map<String, Any>? = null): Boolean {
         if (!shouldHandleAttempt(attemptId, "state:$state")) return false
-        emitTerminalState(state, detail, attemptId)
+        emitTerminalState(state, detail, attemptId, failure)
         return true
     }
 
-    private fun emitTerminalState(state: String, detail: String, attemptId: String) {
+    private fun emitTerminalState(state: String, detail: String, attemptId: String, failure: Map<String, Any>? = null) {
         if (!terminalEventEmitted.compareAndSet(false, true)) return
-        VpnTunnelEvents.emit(state, detail, attemptId)
+        VpnTunnelEvents.emit(state, detail, attemptId, failure)
     }
 
     private fun buildNotification(text: String): Notification {

@@ -3,6 +3,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 int tunnel_should_stop(void) { return 0; }
+static int failure[3];
+void tunnel_set_failure(int kind, int code, int general_error) {
+  failure[0] = kind;
+  failure[1] = code;
+  failure[2] = general_error;
+}
 void tunnel_engine_log(int prio, const char *tag, const char *fmt, ...) {
   (void)prio;
   (void)tag;
@@ -67,6 +73,13 @@ int main(void) {
   assert(send(sockets[0], incoming, length, 0) == (ssize_t)length);
   assert(recv_until_mt(sockets[1], &esp, NULL, 0, incoming, sizeof(incoming), &session, L2TP_MSG_SCCRP) == (int)length);
   assert(session.recv_nr_expected == 1);
+  off = 0;
+  assert(l2tp_avp_append_u16(avps, sizeof(avps), &off, L2TP_AVP_MSG_TYPE, 4) == 0);
+  assert(l2tp_avp_append_result(avps, sizeof(avps), &off, 2, 8) == 0);
+  assert(l2tp_ctrl_build(incoming, sizeof(incoming), 0, 0, 1, 1, avps, off, &length) == 0);
+  assert(send(sockets[0], incoming, length, 0) == (ssize_t)length);
+  assert(recv_ctrl_update_nr(sockets[1], &esp, NULL, incoming, sizeof(incoming), 100, &session, &mt, NULL) == -1);
+  assert(failure[0] == 2 && failure[1] == 2 && failure[2] == 8);
   close(sockets[0]);
   close(sockets[1]);
   return 0;

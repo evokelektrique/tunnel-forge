@@ -325,11 +325,13 @@ void main() {
       String? seenState;
       String? seenDetail;
       String? seenAttemptId;
+      String? seenFailureSummary;
       final client = VpnClient(
-        onTunnelState: (state, detail, attemptId) {
+        onTunnelState: (state, detail, attemptId, failure) {
           seenState = state;
           seenDetail = detail;
           seenAttemptId = attemptId;
+          seenFailureSummary = failure?.summary;
         },
       );
       const codec = StandardMethodCodec();
@@ -338,6 +340,11 @@ void main() {
           VpnContract.argTunnelState: VpnTunnelState.failed,
           VpnContract.argTunnelDetail: 'L2TP handshake failed.',
           VpnContract.argAttemptId: 'attempt-2',
+          'failure': {
+            'namespace': 'l2tp-stopccn',
+            'code': 2,
+            'generalError': 8,
+          },
         }),
       );
       await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -348,6 +355,7 @@ void main() {
       expect(seenState, VpnTunnelState.failed);
       expect(seenDetail, 'L2TP handshake failed.');
       expect(seenAttemptId, 'attempt-2');
+      expect(seenFailureSummary, contains('Unsupported mandatory attribute'));
     });
 
     test('setLogLevel', () async {

@@ -10,6 +10,13 @@ static ssize_t fake_recv(int fd, void *buf, size_t n, int flags);
 #include <assert.h>
 /* Script the transport, keeping the real CHAP parser, MD5 and authentication loop. */
 static unsigned received, sent;
+static int test_mode;
+static int failure[3];
+void tunnel_set_failure(int kind, int code, int general_error) {
+  failure[0] = kind;
+  failure[1] = code;
+  failure[2] = general_error;
+}
 static uint8_t response_ids[8];
 static uint8_t response_hashes[8][16];
 static int fake_poll(struct pollfd *fds, nfds_t n, int timeout) {
@@ -24,11 +31,19 @@ static ssize_t fake_recv(int fd, void *buf, size_t n, int flags) {
   uint8_t frame[31] = {0x40, 2};
   uint8_t *chap = frame + 8;
   util_write_be16(chap, PROTO_CHAP);
-  chap[2] = received < 3 ? 1 : 3;
+  chap[2] = received < 3 ? 1 : (test_mode == 1 ? 4 : 3);
   chap[3] = received == 0 ? 7 : 8;
   util_write_be16(chap + 4, received < 3 ? 21 : 4);
   chap[6] = 16;
   size_t length = received++ < 3 ? sizeof(frame) : 14;
+  if (test_mode >= 2) {
+    util_write_be16(chap, PROTO_PAP);
+    chap[2] = 3;
+    chap[3] = 1;
+    util_write_be16(chap + 4, 5);
+    chap[6] = test_mode == 3 ? 1 : 0; /* Mode 3 truncates the NAK message. */
+    length = 15;
+  }
   if (length > n)
     return -1;
   memcpy(buf, frame, length);
@@ -82,6 +97,11 @@ int l2tp_send_ppp(int fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_
   (void)peer;
   (void)plen;
   (void)s;
+  if (test_mode >= 2) {
+    assert(n >= 8 && util_read_be16(in + 2) == PROTO_PAP);
+    sent++;
+    return (int)n;
+  }
   assert(n >= 25 && in[4] == 2 && sent < sizeof(response_ids));
   memcpy(response_hashes[sent], in + 9, 16);
   response_ids[sent++] = in[5];
@@ -115,5 +135,18 @@ int main(void) {
   assert(response_ids[0] == 7 && response_ids[1] == 8 && response_ids[2] == 8);
   assert(memcmp(response_hashes[0], response_hashes[1], 16) != 0);
   assert(memcmp(response_hashes[1], response_hashes[2], 16) == 0);
+  received = sent = 0;
+  test_mode = 1;
+  assert(ppp_auth_chap_md5(0, &esp, NULL, 0, &session, "fixture", "fixture") == -1);
+  assert(failure[0] == 4 && failure[1] == 4);
+  received = sent = 0;
+  test_mode = 2;
+  assert(ppp_auth_pap(0, &esp, NULL, 0, &session, "fixture", "fixture") == -1);
+  assert(failure[0] == 5 && failure[1] == 3);
+  received = sent = 0;
+  test_mode = 3;
+  tunnel_set_failure(0, 0, 0);
+  assert(ppp_auth_pap(0, &esp, NULL, 0, &session, "fixture", "fixture") == -1);
+  assert(received == 12 && failure[0] == 0);
   return 0;
 }

@@ -449,6 +449,8 @@ static int recv_ctrl_update_nr(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt,
     error_msg[0] = '\0';
     int details = l2tp_ctrl_result_details(in, (size_t)ilen, &result_code, &error_code, error_msg, sizeof(error_msg));
     (void)l2tp_ctrl_msg_type(in, (size_t)ilen, &mt_dbg);
+    if (details == 0 && (mt_dbg == 4 || mt_dbg == 14))
+      tunnel_set_failure(mt_dbg == 4 ? 2 : 3, result_code, error_code);
     tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
                       "l2tp ctrl result-not-ok: mt=%u ilen=%d flags=0x%04x peer_ns=%u peer_nr=%u result=%u error=%u "
                       "details=%d msg=%s",
@@ -807,6 +809,8 @@ static void l2tp_log_ctrl_result_details(uint16_t mt, const uint8_t *data, size_
   int details = l2tp_ctrl_result_details(data, len, &result_code, &error_code, error_msg, sizeof(error_msg));
   if (details != 0)
     return;
+  if (mt == 4 || mt == 14)
+    tunnel_set_failure(mt == 4 ? 2 : 3, result_code, error_code);
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp ctrl result: mt=%u result=%u error=%u msg=%s", (unsigned)mt,
                     (unsigned)result_code, (unsigned)error_code, error_msg[0] != '\0' ? error_msg : "-");
 }

@@ -65,6 +65,7 @@ abstract final class VpnContract {
 
   static const String argTunnelState = 'tunnelState';
   static const String argTunnelDetail = 'tunnelDetail';
+  static const String argTunnelFailure = 'failure';
 
   /// Android -> Dart: engine log lines; [argEngineLogLevel] uses `android.util.Log` priorities.
   static const String onEngineLog = 'onEngineLog';
