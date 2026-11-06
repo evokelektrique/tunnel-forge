@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
@@ -105,7 +106,7 @@ class _LogsPanelState extends State<LogsPanel> {
         padding: EdgeInsets.fromLTRB(8, 6, 8, widget.stickToBottom ? 10 : 64),
         itemCount: logs.length,
         addAutomaticKeepAlives: false,
-        cacheExtent: 900,
+        scrollCacheExtent: const ScrollCacheExtent.pixels(900),
         itemBuilder: (context, i) {
           final entry = logs[i];
           final stripe = i.isEven
