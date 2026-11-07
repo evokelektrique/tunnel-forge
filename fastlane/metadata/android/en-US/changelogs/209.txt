@@ -1,0 +1,1 @@
+- Fixed connections to servers that offer EAP authentication first; the app now requests MS-CHAPv2 instead of hanging after PPP negotiation.
