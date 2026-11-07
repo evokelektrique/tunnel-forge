@@ -81,6 +81,8 @@ static void ppp_log_rx_summary(const uint8_t *p, size_t len, const char *stage) 
 
 static int lcp_build_reject_for_unsupported(const uint8_t *frame, size_t prefix, const uint8_t *body, size_t body_len,
                                             uint8_t *out, size_t cap);
+static int lcp_build_nak_for_unsupported_auth(const uint8_t *frame, size_t prefix, const uint8_t *body, size_t body_len,
+                                              uint8_t *out, size_t cap);
 
 static long long ppp_now_ms(void) {
   struct timeval now;
@@ -200,6 +202,8 @@ static int recv_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, so
       if (ll >= pre + 6u && util_read_be16(lb + pre) == PROTO_LCP && lb[pre + 2u] == 1u) {
         uint8_t rsp[256];
         int rl = lcp_build_reject_for_unsupported(lb, pre, lb + pre, ll - pre, rsp, sizeof(rsp));
+        if (rl == 0)
+          rl = lcp_build_nak_for_unsupported_auth(lb, pre, lb + pre, ll - pre, rsp, sizeof(rsp));
         if (rl == 0 && ll <= sizeof(rsp)) {
           memcpy(rsp, lb, ll);
           rsp[pre + 2u] = 2u; /* Configure-Ack */
@@ -208,7 +212,8 @@ static int recv_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, so
         if (rl > 0) {
           (void)l2tp_send_ppp(esp_fd, esp, peer, peer_len, l2tp, rsp, (size_t)rl);
           tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp: answered late LCP Configure-Request id=%u (%s)",
-                            (unsigned)lb[pre + 3u], rsp[pre + 2u] == 2u ? "ack" : "reject");
+                            (unsigned)lb[pre + 3u],
+                            rsp[pre + 2u] == 2u ? "ack" : (rsp[pre + 2u] == 3u ? "nak auth" : "reject"));
         }
         continue;
       }
@@ -303,6 +308,16 @@ static int lcp_build_cr(uint8_t *out, size_t cap, uint8_t id, ppp_auth_kind_t au
   return (int)o;
 }
 
+/** Authentication-Protocol option (type 3, [opt] = type byte) this client implements: PAP, CHAP-MD5, MS-CHAPv2. */
+static int lcp_auth_option_supported(const uint8_t *opt, uint8_t ol) {
+  if (ol < 4u)
+    return 0;
+  uint16_t proto = util_read_be16(opt + 2u);
+  if (proto == PROTO_PAP)
+    return 1;
+  return proto == PROTO_CHAP && ol >= 5u && (opt[4] == 0x05u || opt[4] == 0x81u);
+}
+
 /* Read Authentication-Protocol from peer LCP Configure-Request ([lcp] = first byte is code). */
 static int lcp_parse_peer_auth(const uint8_t *lcp, size_t lcp_len, ppp_auth_kind_t *out) {
   if (lcp_len < 6u || out == NULL)
@@ -315,21 +330,14 @@ static int lcp_parse_peer_auth(const uint8_t *lcp, size_t lcp_len, ppp_auth_kind
     uint8_t ol = opts[i + 1u];
     if (ol < 2u || i + (size_t)ol > rem)
       break;
-    if (t == 3u && ol >= 4u) {
-      uint16_t proto = ((uint16_t)opts[i + 2u] << 8) | opts[i + 3u];
-      if (proto == PROTO_PAP) {
+    /* Unsupported protocols (EAP, MS-CHAPv1, ...) are Configure-Nak'd, never adopted. */
+    if (t == 3u && lcp_auth_option_supported(opts + i, ol)) {
+      uint16_t proto = util_read_be16(opts + i + 2u);
+      if (proto == PROTO_PAP)
         *out = PPP_AUTH_PAP;
-        return 0;
-      }
-      if (proto == 0xc223u && ol >= 5u) {
-        uint8_t algo = opts[i + 4u];
-        if (algo == 0x81u) {
-          *out = PPP_AUTH_MSCHAPV2;
-          return 0;
-        }
-        *out = PPP_AUTH_CHAP_MD5;
-        return 0;
-      }
+      else
+        *out = opts[i + 4u] == 0x81u ? PPP_AUTH_MSCHAPV2 : PPP_AUTH_CHAP_MD5;
+      return 0;
     }
     i += (size_t)ol;
   }
@@ -486,6 +494,49 @@ static int lcp_build_reject_for_unsupported(const uint8_t *frame, size_t prefix,
   return (int)o;
 }
 
+/**
+ * Build an LCP Configure-Nak suggesting MS-CHAPv2 when the peer Configure-Request asks us to authenticate with a
+ * protocol this client does not implement. pppd without require-* options (plain `auth`) proposes
+ * EAP first and falls back on a Nak; acking EAP leaves the server's EAP Identity requests unanswered.
+ * Same framing contract as lcp_build_reject_for_unsupported(); call it only when nothing needs rejecting (RFC 1661).
+ * @return nak frame length (>0) when the auth option must be refused, 0 when the request can be acked, -1 on error.
+ */
+static int lcp_build_nak_for_unsupported_auth(const uint8_t *frame, size_t prefix, const uint8_t *body, size_t body_len,
+                                              uint8_t *out, size_t cap) {
+  if (body_len < 6u)
+    return -1;
+  uint16_t lcp_len = util_read_be16(body + 4);
+  if (lcp_len < 4u || 2u + (size_t)lcp_len > body_len || prefix + 11u > cap)
+    return -1;
+  const uint8_t *opts = body + 6u;
+  size_t rem = (size_t)lcp_len - 4u;
+  size_t i = 0;
+  int unsupported = 0;
+  while (i + 2u <= rem) {
+    uint8_t t = opts[i];
+    uint8_t ol = opts[i + 1u];
+    if (ol < 2u || i + (size_t)ol > rem)
+      return -1;
+    if (t == 3u && !lcp_auth_option_supported(opts + i, ol))
+      unsupported = 1;
+    i += (size_t)ol;
+  }
+  if (!unsupported)
+    return 0;
+  memcpy(out, frame, prefix + 2u); /* address/control (if any) + protocol */
+  size_t o = prefix + 2u;
+  out[o++] = 3; /* Configure-Nak */
+  out[o++] = body[3];
+  util_write_be16(out + o, 9u);
+  o += 2u;
+  out[o++] = 3; /* Authentication-Protocol: CHAP (0xc223) with MS-CHAPv2 (0x81) */
+  out[o++] = 5;
+  out[o++] = 0xc2;
+  out[o++] = 0x23;
+  out[o++] = 0x81;
+  return (int)o;
+}
+
 /* Set once LCP is negotiated: late peer Configure-Requests (retransmits that crossed our Ack) are acked
  * inside recv_ppp() so the server does not time out LCP while we wait for CHAP/IPCP. */
 
@@ -607,6 +658,17 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
             return -1;
           tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
                             "ppp lcp: rejected unsupported options (Multilink/Callback) in peer CR id=%u",
+                            (unsigned)rid);
+          continue;
+        }
+        rl = lcp_build_nak_for_unsupported_auth(in, (size_t)(p - in), p, len, rejbuf, sizeof(rejbuf));
+        if (rl < 0)
+          continue;
+        if (rl > 0) {
+          if (send_ppp(esp_fd, esp, peer, peer_len, l2tp, rejbuf, (size_t)rl) < 0)
+            return -1;
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                            "ppp lcp: nak'd unsupported auth (e.g. EAP) in peer CR id=%u, suggested MS-CHAPv2",
                             (unsigned)rid);
           continue;
         }
