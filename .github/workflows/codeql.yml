@@ -244,9 +244,69 @@ jobs:
             **/external/**
 
       - name: Install native build tools
+        id: install_native_tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+          cache_dir="${RUNNER_TEMP}/native-tools-apt-cache"
+          mkdir -p "${cache_dir}"
+          rm -f "${cache_dir}"/*.deb
+
+          os_id="$(. /etc/os-release && printf '%s-%s' "${ID:-linux}" "${VERSION_ID:-unknown}")"
+          echo "os_id=${os_id}" >> "${GITHUB_OUTPUT}"
+
+          sudo apt-get clean
+          if sudo apt-get update && \
+             sudo apt-get install -y --download-only -o APT::Keep-Downloaded-Packages=true cmake ninja-build; then
+            if compgen -G "/var/cache/apt/archives/*.deb" >/dev/null; then
+              cp /var/cache/apt/archives/*.deb "${cache_dir}/"
+              sudo apt-get install -y --no-download cmake ninja-build
+              packages_hash="$(find "${cache_dir}" -maxdepth 1 -name '*.deb' -printf '%f\n' | LC_ALL=C sort | sha256sum | awk '{print $1}')"
+              echo "has_debs=true" >> "${GITHUB_OUTPUT}"
+              echo "packages_hash=${packages_hash}" >> "${GITHUB_OUTPUT}"
+            else
+              echo "has_debs=false" >> "${GITHUB_OUTPUT}"
+            fi
+            echo "download_failed=false" >> "${GITHUB_OUTPUT}"
+          else
+            rm -f "${cache_dir}"/*.deb
+            echo "::warning::Failed to download cmake and ninja-build via apt-get; falling back to latest cached packages."
+            echo "has_debs=false" >> "${GITHUB_OUTPUT}"
+            echo "download_failed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Check native build tools cache
+        id: check_native_tools_cache
+        if: steps.install_native_tools.outputs.download_failed == 'false' && steps.install_native_tools.outputs.has_debs == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/native-tools-apt-cache
+          key: native-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.install_native_tools.outputs.os_id }}-${{ steps.install_native_tools.outputs.packages_hash }}
+          lookup-only: true
+
+      - name: Save native build tools cache
+        if: steps.install_native_tools.outputs.download_failed == 'false' && steps.install_native_tools.outputs.has_debs == 'true' && steps.check_native_tools_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/native-tools-apt-cache
+          key: native-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.install_native_tools.outputs.os_id }}-${{ steps.install_native_tools.outputs.packages_hash }}
+
+      - name: Restore cached native build tools
+        if: steps.install_native_tools.outputs.download_failed == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/native-tools-apt-cache
+          key: native-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.install_native_tools.outputs.os_id }}-fallback-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            native-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.install_native_tools.outputs.os_id }}-
+
+      - name: Install cached native build tools
+        if: steps.install_native_tools.outputs.download_failed == 'true'
+        run: |
+          cache_dir="${RUNNER_TEMP}/native-tools-apt-cache"
+          if ! compgen -G "${cache_dir}/*.deb" >/dev/null; then
+            echo "::error::Package download failed and no cached native build tools were found under ${cache_dir}." >&2
+            exit 1
+          fi
+          sudo dpkg -i "${cache_dir}"/*.deb
 
       - name: Locate Android NDK
         run: |
