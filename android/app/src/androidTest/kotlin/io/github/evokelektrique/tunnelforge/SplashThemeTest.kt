@@ -22,7 +22,8 @@ class SplashThemeTest {
             Configuration.UI_MODE_NIGHT_YES to Color.rgb(14, 17, 20),
         )) {
             val configuration = Configuration(context.resources.configuration).apply {
-                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightMode
+                val baseUiMode = uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()
+                uiMode = baseUiMode or nightMode
             }
             val themedContext = context.createConfigurationContext(configuration)
             val theme = themedContext.resources.newTheme().apply {
