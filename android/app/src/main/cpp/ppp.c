@@ -344,26 +344,6 @@ static int lcp_parse_peer_auth(const uint8_t *lcp, size_t lcp_len, ppp_auth_kind
   return -1;
 }
 
-static int lcp_parse_peer_mru(const uint8_t *lcp, size_t lcp_len, uint16_t *mru_out) {
-  if (lcp_len < 6u || mru_out == NULL)
-    return -1;
-  const uint8_t *opts = lcp + 4u;
-  size_t rem = lcp_len - 4u;
-  size_t i = 0;
-  while (i + 2u <= rem) {
-    uint8_t t = opts[i];
-    uint8_t ol = opts[i + 1u];
-    if (ol < 2u || i + (size_t)ol > rem)
-      break;
-    if (t == 1u && ol >= 4u) {
-      *mru_out = ((uint16_t)opts[i + 2u] << 8) | opts[i + 3u];
-      return 0;
-    }
-    i += (size_t)ol;
-  }
-  return -1;
-}
-
 static int lcp_nak_wants_pap(const uint8_t *opt, size_t opt_len) {
   size_t i = 0;
   while (i + 2 <= opt_len) {
