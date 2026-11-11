@@ -6,7 +6,6 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -60,12 +59,13 @@ fun hostNdkPrebuiltDir(): String {
 // keeps clang-tidy aligned with the Android compiler/sysroot used by CMake.
 fun findAndroidNdkTool(name: String): File? {
     val ndkRoot = androidSdkPath?.let { file(it).resolve("ndk") } ?: return null
-    val executableName = if (System.getProperty("os.name").lowercase().contains("windows")) "$name.exe" else name
+    val isWindows = System.getProperty("os.name").lowercase().contains("windows")
     val prebuiltDir = hostNdkPrebuiltDir()
+    val candidates = if (isWindows) listOf("$name.cmd", "$name.exe", name) else listOf(name)
     return ndkRoot
         .listFiles()
         ?.sortedByDescending { it.name }
-        ?.map { it.resolve("toolchains/llvm/prebuilt/$prebuiltDir/bin/$executableName") }
+        ?.flatMap { ndk -> candidates.map { candidate -> ndk.resolve("toolchains/llvm/prebuilt/$prebuiltDir/bin/$candidate") } }
         ?.firstOrNull { it.isFile }
 }
 
@@ -103,6 +103,15 @@ val gradleWrapperCommand =
     } else {
         "./gradlew"
     }
+val goCommand =
+    providers.environmentVariable("GOROOT").orNull?.let { File(it, if (System.getProperty("os.name").lowercase().contains("windows")) "bin/go.exe" else "bin/go") }?.takeIf { it.isFile }?.absolutePath
+        ?: findPathTool("go")
+        ?: listOf(
+            File("C:/Program Files/Go/bin/go.exe"),
+            File("/usr/local/go/bin/go"),
+            File("/opt/homebrew/bin/go"),
+        ).firstOrNull { it.isFile }?.absolutePath
+        ?: "go"
 val androidGoJniLibsDir = layout.buildDirectory.dir("androidGoJniLibs")
 
 android {
@@ -111,7 +120,7 @@ android {
     val keymatVariant = providers.gradleProperty("tunnelForgeKeymatVariant").orNull
     val mbedtlsSourceDir = providers.gradleProperty("tunnelForgeMbedtlsSourceDir").orNull
     namespace = "io.github.evokelektrique.tunnelforge"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     dependenciesInfo {
@@ -127,7 +136,7 @@ android {
     defaultConfig {
         applicationId = "io.github.evokelektrique.tunnelforge"
         minSdk = 31
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -205,7 +214,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            jniLibs.srcDir(androidGoJniLibsDir)
+            jniLibs.srcDir(androidGoJniLibsDir.get().asFile)
         }
     }
 
@@ -278,25 +287,29 @@ tasks.register("buildAndroidGoNative") {
         androidGoAbis.forEach { abi ->
             val outDir = androidGoJniLibsDir.get().asFile.resolve(abi.abi)
             outDir.mkdirs()
-            exec {
-                workingDir = androidGoModuleDir
-                executable = "go"
-                args(
-                    "build",
-                    "-buildmode=c-shared",
-                    "-trimpath",
-                    "-buildvcs=false",
-                    "-ldflags=-buildid= -s -w -extldflags=-Wl,--build-id=none",
-                    "-o",
-                    outDir.resolve("libtunnel_gvisor.so").absolutePath,
-                    ".",
-                )
-                environment("CGO_ENABLED", "1")
-                environment("GOOS", "android")
-                environment("GOARCH", abi.goArch)
-                abi.goArm?.let { environment("GOARM", it) }
-                environment("CC", androidNdkClang(abi.clangName))
-                environment("GOCACHE", goBuildCache.absolutePath)
+            val pb = ProcessBuilder(
+                goCommand,
+                "build",
+                "-buildmode=c-shared",
+                "-trimpath",
+                "-buildvcs=false",
+                "-ldflags=-buildid= -s -w -extldflags=-Wl,--build-id=none",
+                "-o",
+                outDir.resolve("libtunnel_gvisor.so").absolutePath,
+                ".",
+            ).directory(androidGoModuleDir)
+            val env = pb.environment()
+            env["CGO_ENABLED"] = "1"
+            env["GOOS"] = "android"
+            env["GOARCH"] = abi.goArch
+            abi.goArm?.let { env["GOARM"] = it }
+            env["CC"] = androidNdkClang(abi.clangName)
+            env["GOCACHE"] = goBuildCache.absolutePath
+            pb.inheritIO()
+            val proc = pb.start()
+            val exitCode = proc.waitFor()
+            if (exitCode != 0) {
+                throw GradleException("Failed to build Android Go native library for ${abi.abi} (exit code: $exitCode)")
             }
         }
     }

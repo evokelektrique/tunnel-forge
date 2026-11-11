@@ -11,6 +11,8 @@
 -dontwarn jdk.jfr.**
 -dontwarn org.apache.log4j.**
 -dontwarn org.apache.logging.log4j.**
+-dontwarn org.osgi.annotation.bundle.Export
+-dontwarn org.slf4j.**
 -dontwarn reactor.blockhound.**
 
 # Optional Netty SSL/compression/native integrations are not shipped on Android.

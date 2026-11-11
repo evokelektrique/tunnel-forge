@@ -1,6 +1,6 @@
 module tunnel_forge_gvisor
 
-go 1.25.9
+go 1.27.3
 
 require (
 	github.com/google/btree v1.1.2 // indirect
