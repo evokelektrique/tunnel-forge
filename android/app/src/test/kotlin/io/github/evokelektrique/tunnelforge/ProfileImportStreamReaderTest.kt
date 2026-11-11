@@ -1,11 +1,13 @@
 package io.github.evokelektrique.tunnelforge
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.nio.charset.CharacterCodingException
+import java.util.concurrent.atomic.AtomicLong
 
 class ProfileImportStreamReaderTest {
     @Test
@@ -47,33 +49,26 @@ class ProfileImportStreamReaderTest {
 
     @Test
     fun abortsInfiniteStreamPromptlyWithoutReadingUnboundedData() {
-        var totalRead = 0L
+        val totalRead = AtomicLong(0L)
         val endlessStream = object : InputStream() {
             override fun read(): Int {
-                totalRead += 1
+                totalRead.incrementAndGet()
                 return 'x'.code
             }
 
             override fun read(b: ByteArray, off: Int, len: Int): Int {
                 b.fill('x'.code.toByte(), off, off + len)
-                totalRead += len
+                totalRead.addAndGet(len.toLong())
                 return len
             }
         }
 
         val maxBytes = 1024
-        var threw = false
-        try {
+        assertThrows(ProfileImportTooLargeException::class.java) {
             ProfileImportStreamReader.readBoundedUtf8Text(endlessStream, maxBytes = maxBytes)
-        } catch (_: ProfileImportTooLargeException) {
-            threw = true
         }
 
-        assertTrue("Expected ProfileImportTooLargeException", threw)
-        assertTrue(
-            "Expected reader to stop near limit ($maxBytes), but read $totalRead bytes",
-            totalRead <= maxBytes + 8192L,
-        )
+        assertEquals(maxBytes + 1L, totalRead.get())
     }
 
     @Test
@@ -82,17 +77,13 @@ class ProfileImportStreamReaderTest {
         val input = ByteArrayInputStream(invalidUtf8)
 
         val error =
-            try {
+            assertThrows(IllegalArgumentException::class.java) {
                 ProfileImportStreamReader.readBoundedUtf8Text(input, maxBytes = 64)
-                null
-            } catch (e: IllegalArgumentException) {
-                e
             }
 
-        assertTrue("Expected IllegalArgumentException for invalid UTF-8", error != null)
         assertTrue(
-            "Expected CharacterCodingException cause, was ${error?.cause}",
-            error?.cause is CharacterCodingException,
+            "Expected CharacterCodingException cause, was ${error.cause}",
+            error.cause is CharacterCodingException,
         )
     }
 }
