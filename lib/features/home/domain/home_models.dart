@@ -214,7 +214,7 @@ class AppVersionInfo extends Equatable {
 
 enum AppUpdateErrorKind { http, timeout, network, tls, response, unknown }
 
-class AppUpdateException with EquatableMixin implements Exception {
+class AppUpdateException with Equatable implements Exception {
   const AppUpdateException({
     required this.kind,
     required this.userMessage,

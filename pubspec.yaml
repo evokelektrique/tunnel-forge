@@ -12,19 +12,19 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-  archive: ^4.0.7
-  bloc: ^9.0.0
-  cross_file: ^0.3.4+2
-  cupertino_icons: ^1.0.8
-  file_picker: ^10.3.2
-  equatable: ^2.0.7
+  archive: ^4.6.0
+  bloc: ^9.2.1
+  cross_file: ^0.3.5+5
+  cupertino_icons: ^2.0.0
+  file_picker: ^13.3.2
+  equatable: ^3.0.0
   flutter_bloc: ^9.1.1
-  flutter_secure_storage: ^10.0.0
-  get_it: ^8.2.0
-  package_info_plus: ^8.3.1
-  share_plus: ^11.1.0
-  shared_preferences: ^2.5.3
-  url_launcher: ^6.3.2
+  flutter_secure_storage: ^11.2.0
+  get_it: ^9.3.0
+  package_info_plus: ^10.2.2
+  share_plus: ^13.3.1
+  shared_preferences: ^2.5.6
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   bloc_test: ^10.0.0
@@ -34,8 +34,8 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
-  flutter_native_splash: ^2.4.7
-  mocktail: ^1.0.4
+  flutter_native_splash: ^2.4.8
+  mocktail: ^1.0.5
 
 flutter:
   uses-material-design: true

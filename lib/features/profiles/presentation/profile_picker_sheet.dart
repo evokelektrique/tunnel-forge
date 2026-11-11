@@ -146,16 +146,17 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
 
   Future<void> _importFromFile() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final file = await FilePicker.pickFile(
         type: FileType.custom,
-        withData: true,
+
         allowedExtensions: const [ProfileTransferEnvelope.fileExtension],
       );
       if (!mounted) return;
-      if (result == null || result.files.isEmpty) return;
-      final file = result.files.single;
-      final bytes = file.bytes;
-      if (bytes == null) {
+      if (file == null) return;
+
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
+      if (bytes.isEmpty) {
         showAppSnackBar(
           context,
           AppText.current.couldNotReadSelectedFile,
