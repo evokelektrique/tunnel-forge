@@ -18,6 +18,10 @@ include(FetchContent)
 set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+# mbedTLS 2.28.9 declares cmake_minimum_required < 3.5, which CMake 4.0+ rejects otherwise.
+if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+endif()
 
 set(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR "" CACHE PATH "Use an existing mbedTLS source tree instead of downloading it")
 if(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR)
