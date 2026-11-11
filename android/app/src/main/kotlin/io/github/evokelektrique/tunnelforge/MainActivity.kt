@@ -17,7 +17,10 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.IntentCompat
@@ -25,6 +28,13 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : FlutterActivity() {
 
@@ -32,7 +42,20 @@ class MainActivity : FlutterActivity() {
     private var notificationPermissionResult: MethodChannel.Result? = null
     private var pendingConnectIntent: Intent? = null
     private var profileTransferChannel: MethodChannel? = null
+    private var profileTransferConsumerReady = false
     private val pendingProfileTransfers = mutableListOf<Map<String, String?>>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val profileTransferExecutor =
+        ThreadPoolExecutor(
+            0,
+            PROFILE_IMPORT_MAX_CONCURRENT_READS,
+            30L,
+            TimeUnit.SECONDS,
+            SynchronousQueue(),
+            { runnable ->
+                Thread(runnable, "tf-profile-import").apply { isDaemon = true }
+            },
+        )
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -42,6 +65,7 @@ class MainActivity : FlutterActivity() {
                 flutterEngine.dartExecutor.binaryMessenger,
                 AppInfoContract.METHOD_CHANNEL,
             )
+        profileTransferConsumerReady = false
         profileTransferChannel =
             MethodChannel(
                 flutterEngine.dartExecutor.binaryMessenger,
@@ -50,6 +74,7 @@ class MainActivity : FlutterActivity() {
                 channel.setMethodCallHandler { call, result ->
                     when (call.method) {
                         ProfileTransferContract.CONSUME_PENDING_TRANSFERS -> {
+                            profileTransferConsumerReady = true
                             val pending = ArrayList(pendingProfileTransfers)
                             pendingProfileTransfers.clear()
                             result.success(pending)
@@ -84,7 +109,7 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
-        handleProfileTransferIntent(intent, deliverImmediately = false)
+        handleProfileTransferIntent(intent)
         VpnTunnelEvents.attach(vpnChannel)
         vpnChannel.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -367,7 +392,10 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        profileTransferConsumerReady = false
         profileTransferChannel = null
+        mainHandler.removeCallbacksAndMessages(PROFILE_IMPORT_CALLBACK_TOKEN)
+        profileTransferExecutor.shutdownNow()
         VpnTunnelEvents.detach()
         super.onDestroy()
     }
@@ -375,7 +403,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleProfileTransferIntent(intent, deliverImmediately = true)
+        handleProfileTransferIntent(intent)
     }
 
     @Deprecated("Deprecated in Java")
@@ -743,54 +771,45 @@ class MainActivity : FlutterActivity() {
         return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun handleProfileTransferIntent(intent: Intent?, deliverImmediately: Boolean) {
-        val transfer = parseProfileTransferIntent(intent) ?: return
-        dispatchProfileTransfer(transfer, deliverImmediately)
+    private fun handleProfileTransferIntent(intent: Intent?) {
+        if (intent == null) return
+        when (intent.action) {
+            Intent.ACTION_VIEW -> handleViewTransferIntent(intent)
+            Intent.ACTION_SEND -> handleSendTransferIntent(intent)
+        }
     }
 
-    private fun dispatchProfileTransfer(
-        transfer: Map<String, String?>,
-        deliverImmediately: Boolean,
-    ) {
-        if (!deliverImmediately) {
-            pendingProfileTransfers.add(transfer)
-            return
-        }
+    private fun deliverOrQueueProfileTransfer(transfer: Map<String, String?>) {
+        if (isFinishing || isDestroyed) return
         val channel = profileTransferChannel
-        if (channel == null) {
+        if (!profileTransferConsumerReady || channel == null) {
             pendingProfileTransfers.add(transfer)
             return
         }
         channel.invokeMethod(ProfileTransferContract.ON_INCOMING_TRANSFER, transfer)
     }
 
-    private fun parseProfileTransferIntent(intent: Intent?): Map<String, String?>? {
-        if (intent == null) return null
-        return when (intent.action) {
-            Intent.ACTION_VIEW -> parseViewIntent(intent)
-            Intent.ACTION_SEND -> parseSendIntent(intent)
-            else -> null
-        }
-    }
-
-    private fun parseViewIntent(intent: Intent): Map<String, String?>? {
-        val uri = intent.data ?: return null
+    private fun handleViewTransferIntent(intent: Intent) {
+        val uri = intent.data ?: return
         val scheme = uri.scheme?.lowercase()
         if (scheme == "tf") {
-            return transferPayload(
-                type = ProfileTransferContract.TYPE_TF_URI,
-                data = uri.toString(),
-                source = "link",
+            deliverOrQueueProfileTransfer(
+                transferPayload(
+                    type = ProfileTransferContract.TYPE_TF_URI,
+                    data = uri.toString(),
+                    source = "link",
+                ),
             )
+            return
         }
-        if (!looksLikeProfileFile(intent, uri)) return null
-        return profileFileTransfer(uri)
+        if (!looksLikeProfileFile(intent, uri)) return
+        enqueueProfileFileTransfer(uri)
     }
 
-    private fun parseSendIntent(intent: Intent): Map<String, String?>? {
-        val uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java) ?: return null
-        if (!looksLikeProfileFile(intent, uri)) return null
-        return profileFileTransfer(uri)
+    private fun handleSendTransferIntent(intent: Intent) {
+        val uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java) ?: return
+        if (!looksLikeProfileFile(intent, uri)) return
+        enqueueProfileFileTransfer(uri)
     }
 
     private fun looksLikeProfileFile(intent: Intent, uri: Uri): Boolean {
@@ -802,27 +821,112 @@ class MainActivity : FlutterActivity() {
         return path.endsWith(".tfp")
     }
 
-    private fun profileFileTransfer(uri: Uri): Map<String, String?> {
-        return try {
-            val data = readUtf8Text(uri)
-            transferPayload(
-                type = ProfileTransferContract.TYPE_TFP_JSON,
-                data = data,
-                source = uri.lastPathSegment,
-            )
-        } catch (e: Exception) {
-            AppLog.e(TAG, "profile_transfer read failed uri=$uri", e)
-            transferError("Couldn't read the selected .tfp file", uri.lastPathSegment)
+    private fun enqueueProfileFileTransfer(uri: Uri) {
+        val source = uri.lastPathSegment
+        val validated =
+            try {
+                ProfileImportUriValidator.validate(uri, packageName)
+            } catch (e: Exception) {
+                AppLog.e(TAG, "profile_transfer rejected uri=$uri", e)
+                deliverOrQueueProfileTransfer(
+                    transferError("Couldn't read the selected .tfp file", source),
+                )
+                return
+            }
+
+        val completed = AtomicBoolean(false)
+        val activeStream = AtomicReference<InputStream?>(null)
+        val workerThread = AtomicReference<Thread?>(null)
+        val timeoutRunnable = Runnable {
+            if (completed.compareAndSet(false, true)) {
+                AppLog.e(TAG, "profile_transfer read timed out uri=$uri")
+                workerThread.get()?.interrupt()
+                closeStreamQuietlyAsync(activeStream.getAndSet(null))
+                deliverOrQueueProfileTransfer(
+                    transferError("Timed out reading the selected .tfp file", source),
+                )
+            }
+        }
+        mainHandler.postAtTime(
+            timeoutRunnable,
+            PROFILE_IMPORT_CALLBACK_TOKEN,
+            SystemClock.uptimeMillis() + PROFILE_IMPORT_READ_TIMEOUT_MS,
+        )
+
+        try {
+            profileTransferExecutor.execute {
+                workerThread.set(Thread.currentThread())
+                val transfer =
+                    try {
+                        if (completed.get()) return@execute
+                        val data = readUtf8Text(validated, activeStream, completed)
+                        transferPayload(
+                            type = ProfileTransferContract.TYPE_TFP_JSON,
+                            data = data,
+                            source = source,
+                        )
+                    } catch (e: ProfileImportTooLargeException) {
+                        AppLog.e(TAG, "profile_transfer oversized uri=$uri", e)
+                        transferError("Selected .tfp file is too large", source)
+                    } catch (e: Exception) {
+                        AppLog.e(TAG, "profile_transfer read failed uri=$uri", e)
+                        transferError("Couldn't read the selected .tfp file", source)
+                    } finally {
+                        closeStreamQuietly(activeStream.getAndSet(null))
+                        workerThread.set(null)
+                        Thread.interrupted()
+                    }
+                mainHandler.post {
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    if (completed.compareAndSet(false, true)) {
+                        deliverOrQueueProfileTransfer(transfer)
+                    }
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            mainHandler.removeCallbacks(timeoutRunnable)
+            if (completed.compareAndSet(false, true)) {
+                AppLog.e(TAG, "profile_transfer executor busy uri=$uri", e)
+                deliverOrQueueProfileTransfer(
+                    transferError("Too many profile imports in progress", source),
+                )
+            }
         }
     }
 
-    private fun readUtf8Text(uri: Uri): String {
-        ProfileImportUriValidator.requireSafeProfileImportUri(uri)
+    private fun readUtf8Text(
+        validated: ValidatedProfileImportUri,
+        activeStream: AtomicReference<InputStream?>,
+        completed: AtomicBoolean,
+    ): String {
         val input =
-            contentResolver.openInputStream(uri)
+            contentResolver.openInputStream(validated.uri)
                 ?: throw IllegalStateException("Input stream unavailable")
+        activeStream.set(input)
+        if (completed.get()) {
+            closeStreamQuietly(activeStream.getAndSet(null))
+            throw InterruptedException("Profile import timed out")
+        }
         return input.use { stream ->
-            stream.readBytes().toString(Charsets.UTF_8)
+            ProfileImportStreamReader.readBoundedUtf8Text(
+                stream,
+                maxBytes = MAX_PROFILE_IMPORT_BYTES,
+            )
+        }
+    }
+
+    private fun closeStreamQuietlyAsync(stream: InputStream?) {
+        if (stream == null) return
+        Thread({ closeStreamQuietly(stream) }, "tf-profile-import-close").apply {
+            isDaemon = true
+        }.start()
+    }
+
+    private fun closeStreamQuietly(stream: InputStream?) {
+        if (stream == null) return
+        try {
+            stream.close()
+        } catch (_: Exception) {
         }
     }
 
@@ -851,6 +955,10 @@ class MainActivity : FlutterActivity() {
         private const val REQUEST_VPN_PERMISSION = 0x4E50
         private const val REQUEST_POST_NOTIFICATIONS = 0x4E51
         private const val ProfileTransferMimeType = "application/vnd.tunnelforge.profile+json"
+        private const val MAX_PROFILE_IMPORT_BYTES = ProfileImportStreamReader.DEFAULT_MAX_BYTES
+        private const val PROFILE_IMPORT_READ_TIMEOUT_MS = 5_000L
+        private const val PROFILE_IMPORT_MAX_CONCURRENT_READS = 4
+        private val PROFILE_IMPORT_CALLBACK_TOKEN = Any()
         private const val BATTERY_STATE_UNSUPPORTED = "unsupported"
         private const val BATTERY_STATE_ALLOWED = "allowed"
         private const val BATTERY_STATE_RESTRICTED = "restricted"
