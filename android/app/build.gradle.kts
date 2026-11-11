@@ -2,6 +2,7 @@ import com.android.build.gradle.internal.api.ApkVariantOutputImpl
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Base64
 import java.util.Properties
 
 plugins {
@@ -9,13 +10,58 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val keystorePath = System.getenv("TUNNEL_FORGE_ANDROID_KEYSTORE_PATH")
-val keystorePassword = System.getenv("TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD")
-val releaseKeyAlias = System.getenv("TUNNEL_FORGE_ANDROID_KEY_ALIAS")
-val releaseKeyPassword = System.getenv("TUNNEL_FORGE_ANDROID_KEY_PASSWORD")
+val dotEnvProperties = mutableMapOf<String, String>().apply {
+    val envFile = rootProject.file("../.env")
+    if (envFile.isFile) {
+        envFile.forEachLine { rawLine ->
+            val line = rawLine.trim()
+            if (line.isNotEmpty() && !line.startsWith("#")) {
+                val separatorIndex = line.indexOf('=')
+                if (separatorIndex != -1) {
+                    val key = line.substring(0, separatorIndex).trim()
+                    var value = line.substring(separatorIndex + 1).trim()
+                    if (value.length >= 2 &&
+                        ((value.startsWith("\"") && value.endsWith("\"")) ||
+                            (value.startsWith("'") && value.endsWith("'")))
+                    ) {
+                        value = value.substring(1, value.length - 1)
+                    }
+                    put(key, value)
+                }
+            }
+        }
+    }
+}
+
+fun getEnvOrDotEnv(key: String): String? =
+    System.getenv(key)?.takeIf { it.isNotBlank() } ?: dotEnvProperties[key]?.takeIf { it.isNotBlank() }
+
+val keystorePath = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEYSTORE_PATH")
+val keystoreBase64 = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64")
+val keystorePassword = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEY_PASSWORD")
+
+val resolvedStoreFile: File? = when {
+    !keystorePath.isNullOrBlank() -> {
+        val f = File(keystorePath)
+        if (f.isAbsolute) f
+        else rootProject.file("../$keystorePath").takeIf { it.isFile }
+            ?: rootProject.file(keystorePath)
+    }
+    !keystoreBase64.isNullOrBlank() -> {
+        val decoded = Base64.getDecoder().decode(keystoreBase64.trim())
+        val tempKeystore = layout.buildDirectory.file("keystore-from-base64.jks").get().asFile
+        tempKeystore.parentFile.mkdirs()
+        tempKeystore.writeBytes(decoded)
+        tempKeystore
+    }
+    else -> null
+}
+
 val releaseSigningInputs =
     mapOf(
-        "TUNNEL_FORGE_ANDROID_KEYSTORE_PATH" to keystorePath,
+        "TUNNEL_FORGE_ANDROID_KEYSTORE_PATH" to (keystorePath ?: if (!keystoreBase64.isNullOrBlank()) "base64" else null),
         "TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD" to keystorePassword,
         "TUNNEL_FORGE_ANDROID_KEY_ALIAS" to releaseKeyAlias,
         "TUNNEL_FORGE_ANDROID_KEY_PASSWORD" to releaseKeyPassword,
@@ -27,6 +73,12 @@ if (!hasReleaseSigning && releaseSigningInputs.values.any { !it.isNullOrBlank() 
     throw GradleException(
         "Incomplete Android release signing configuration. Set all of: " +
             releaseSigningInputs.keys.joinToString(", "),
+    )
+}
+
+if (hasReleaseSigning && (resolvedStoreFile == null || !resolvedStoreFile.exists())) {
+    throw GradleException(
+        "Android release keystore file not found at: ${resolvedStoreFile?.absolutePath ?: keystorePath}",
     )
 }
 
@@ -166,7 +218,7 @@ android {
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
-                storeFile = rootProject.file(keystorePath!!)
+                storeFile = resolvedStoreFile
                 storePassword = keystorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
