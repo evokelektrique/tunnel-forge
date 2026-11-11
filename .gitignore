@@ -1,68 +1,160 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-__pycache__/
-*.swp
-.DS_Store
-.atom/
+# -----------------------------------------------------------------------------
+# Build Outputs & Artifacts
+# -----------------------------------------------------------------------------
+# Root & subproject build directories
+build/
+**/build/
 .build/
 .buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+/android/build/
+/android/app/build/
+/android/app/debug/
+/android/app/profile/
+/android/app/release/
 
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
+# Android package & compiled outputs
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-/build/
-/coverage/
-
-# Symbolication related
+# Symbolication & obfuscation maps
 app.*.symbols
-
-# Obfuscation related
 app.*.map.json
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
-/android/build/
+# Native compilation outputs
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
 
-# Root local environment
+# Android Go JNI intermediate build outputs & cache
+androidGoJniLibs/
+go-cache/
+
+# -----------------------------------------------------------------------------
+# Caches & Tool State
+# -----------------------------------------------------------------------------
+# Flutter & Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+pubspec-overrides.yaml
+/coverage/
+**/doc/api/
+
+# Gradle & Kotlin caches
+.gradle/
+**/.gradle/
+.gradle-home/
+.kotlin/
+**/.kotlin/
+
+# Android CMake / NDK cache
+.cxx/
+**/.cxx/
+captures/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# -----------------------------------------------------------------------------
+# Native C / CMake Temporary Files
+# -----------------------------------------------------------------------------
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# -----------------------------------------------------------------------------
+# Go Temporary & Test Files
+# -----------------------------------------------------------------------------
+*.test
+*.test.exe
+
+# -----------------------------------------------------------------------------
+# Logs, Temporary Files & Crash Dumps
+# -----------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*~
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# -----------------------------------------------------------------------------
+# Local Environment & Secrets
+# -----------------------------------------------------------------------------
+# Local configuration files
 .env
 .env.*
 !.env.example
+local.properties
+**/local.properties
+key.properties
+**/key.properties
 
-# Local VPN debug logs
-.vpn-debug/
-.codex
-.cursor
-.gradle-home/
-
-# Android signing keys
+# Android keystores & signing keys
 *.jks
 *.jks.base64
 *.keystore
-android/.kotlin/
-.opencode/
 
-# Local notes and verification reports (existing tracked docs remain tracked)
+# Local VPN debug logs
+.vpn-debug/
+
+# -----------------------------------------------------------------------------
+# IDEs & Code Editors
+# -----------------------------------------------------------------------------
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Visual Studio Code
+.vscode/
+
+# Other editor & AI tool state
+.atom/
+.history/
+.cursor/
+.codex/
+.opencode/
+*.swp
+*.swo
+
+# -----------------------------------------------------------------------------
+# Operating System Metadata
+# -----------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Version control & migration scratch
+.svn/
+migrate_working_dir/
+
+# -----------------------------------------------------------------------------
+# Local Documentation / Notes
+# -----------------------------------------------------------------------------
 /docs/
