@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLUTTER_VERSION: 3.44.2
+  FLUTTER_VERSION: 3.47.9
   JAVA_VERSION: "17"
   ANDROID_PLATFORM: android-31
   ANDROID_ABI: arm64-v8a
@@ -139,6 +139,13 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Prepare Android Go dependencies
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: android/gvisor/go.mod
+          cache: true
+          cache-dependency-path: android/gvisor/go.sum
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c
 
@@ -166,6 +173,10 @@ jobs:
 
       - name: Install Flutter dependencies
         run: flutter pub get
+
+      - name: Download Android Go module dependencies
+        working-directory: android/gvisor
+        run: go mod download
 
       - name: Create Android local.properties
         working-directory: android
