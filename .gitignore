@@ -129,9 +129,11 @@ key.properties
 # Other editor & AI tool state
 .atom/
 .history/
+.agents/
 .cursor/
 .codex/
 .opencode/
+/AGENTS.md
 *.swp
 *.swo
 
