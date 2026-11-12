@@ -142,7 +142,7 @@ jobs:
           cache-dependency-path: android/gvisor/go.sum
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - name: Get dependencies
         run: flutter pub get
@@ -228,7 +228,7 @@ jobs:
           cache-dependency-path: android/gvisor/go.sum
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - name: Get dependencies
         run: flutter pub get
