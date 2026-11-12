@@ -1,6 +1,9 @@
 package io.github.evokelektrique.tunnelforge
 
 import android.util.Log
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 internal data class NativeTunnelOwner(
     val mode: String,
@@ -13,7 +16,8 @@ internal class NativeTunnelSessionCoordinator(
         VpnTunnelEvents.emitEngineLog(level, TAG, message)
     },
 ) {
-    private val lock = Object()
+    private val lock = ReentrantLock()
+    private val stateChanged = lock.newCondition()
     private var owner: NativeTunnelOwner? = null
     // Native stop runs outside the monitor, so this blocks a newer owner from
     // acquiring while a stop for the previously observed owner is still in flight.
@@ -21,7 +25,7 @@ internal class NativeTunnelSessionCoordinator(
 
     fun acquire(nextOwner: NativeTunnelOwner, reason: String, waitTimeoutMs: Long = DEFAULT_WAIT_TIMEOUT_MS): Boolean {
         var ownerToStop: NativeTunnelOwner? = null
-        synchronized(lock) {
+        lock.withLock {
             val current = owner
             if ((current == null && stoppingOwner == null) || current == nextOwner) {
                 owner = nextOwner
@@ -39,47 +43,52 @@ internal class NativeTunnelSessionCoordinator(
         }
         if (ownerToStop != null) {
             var shouldStopPrevious = false
-            synchronized(lock) {
+            lock.withLock {
                 if (owner == ownerToStop && stoppingOwner == ownerToStop) {
                     shouldStopPrevious = true
                 } else if (stoppingOwner == ownerToStop) {
                     stoppingOwner = null
-                    lock.notifyAll()
+                    stateChanged.signalAll()
                 }
             }
             if (shouldStopPrevious) {
                 try {
                     stopNativeTunnel()
                 } finally {
-                    synchronized(lock) {
+                    lock.withLock {
                         if (stoppingOwner == ownerToStop) {
                             stoppingOwner = null
-                            lock.notifyAll()
+                            stateChanged.signalAll()
                         }
                     }
                 }
             }
         }
         val deadline = System.currentTimeMillis() + waitTimeoutMs.coerceAtLeast(1L)
-        synchronized(lock) {
+        lock.withLock {
             while ((owner != null && owner != nextOwner) || stoppingOwner != null) {
                 val remaining = deadline - System.currentTimeMillis()
                 if (remaining <= 0L) {
-                    val current = owner
-                    val stopping = stoppingOwner
-                    logger(
-                        Log.ERROR,
-                        "native owner acquire timed out currentMode=${current?.mode.orEmpty()} currentAttempt=${current?.attemptId.orEmpty()} stoppingMode=${stopping?.mode.orEmpty()} stoppingAttempt=${stopping?.attemptId.orEmpty()} nextMode=${nextOwner.mode} nextAttempt=${nextOwner.attemptId} reason=$reason",
-                    )
-                    return false
+                    break
                 }
                 try {
-                    lock.wait(remaining)
+                    if (!stateChanged.await(remaining, TimeUnit.MILLISECONDS)) {
+                        break
+                    }
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     logger(Log.WARN, "native owner acquire interrupted mode=${nextOwner.mode} attempt=${nextOwner.attemptId}")
                     return false
                 }
+            }
+            if ((owner != null && owner != nextOwner) || stoppingOwner != null) {
+                val current = owner
+                val stopping = stoppingOwner
+                logger(
+                    Log.ERROR,
+                    "native owner acquire timed out currentMode=${current?.mode.orEmpty()} currentAttempt=${current?.attemptId.orEmpty()} stoppingMode=${stopping?.mode.orEmpty()} stoppingAttempt=${stopping?.attemptId.orEmpty()} nextMode=${nextOwner.mode} nextAttempt=${nextOwner.attemptId} reason=$reason",
+                )
+                return false
             }
             owner = nextOwner
             logger(Log.DEBUG, "native owner acquired mode=${nextOwner.mode} attempt=${nextOwner.attemptId} reason=$reason")
@@ -89,7 +98,7 @@ internal class NativeTunnelSessionCoordinator(
 
     fun stopOwner(expectedOwner: NativeTunnelOwner?, reason: String): Boolean {
         val current =
-            synchronized(lock) {
+            lock.withLock {
                 owner
             } ?: return false
         if (expectedOwner != null && current != expectedOwner) {
@@ -105,7 +114,7 @@ internal class NativeTunnelSessionCoordinator(
     }
 
     fun release(expectedOwner: NativeTunnelOwner, reason: String): Boolean {
-        synchronized(lock) {
+        lock.withLock {
             val current = owner
             if (current != expectedOwner) {
                 logger(
@@ -115,14 +124,14 @@ internal class NativeTunnelSessionCoordinator(
                 return false
             }
             owner = null
-            lock.notifyAll()
+            stateChanged.signalAll()
         }
         logger(Log.DEBUG, "native owner released mode=${expectedOwner.mode} attempt=${expectedOwner.attemptId} reason=$reason")
         return true
     }
 
     fun currentOwner(): NativeTunnelOwner? =
-        synchronized(lock) {
+        lock.withLock {
             owner
         }
 

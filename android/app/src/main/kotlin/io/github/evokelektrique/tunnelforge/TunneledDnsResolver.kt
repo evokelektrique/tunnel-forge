@@ -10,7 +10,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLParameters
-import javax.net.ssl.SSLSocket
 
 internal class TunneledDnsResolver(
     private val bridge: ProxyPacketBridge,
@@ -157,10 +156,7 @@ internal class TunneledDnsResolver(
 
     @Throws(IOException::class)
     private fun exchangeTls(payload: ByteArray, dnsServer: ResolvedDnsServerConfig): ByteArray =
-        openTlsSocket(openTunneledSocket(dnsServer), dnsServer).use { socket ->
-            val sslSocket =
-                socket as? SSLSocket
-                    ?: throw IOException("TLS socket is not an SSLSocket for ${dnsServer.host}.")
+        openTlsSocket(openTunneledSocket(dnsServer), dnsServer).use { sslSocket ->
             val sslParameters: SSLParameters = sslSocket.sslParameters
             sslParameters.endpointIdentificationAlgorithm = "HTTPS"
             sslSocket.sslParameters = sslParameters
@@ -169,10 +165,7 @@ internal class TunneledDnsResolver(
 
     @Throws(IOException::class)
     private fun exchangeHttps(payload: ByteArray, dnsServer: ResolvedDnsServerConfig): ByteArray =
-        openTlsSocket(openTunneledSocket(dnsServer), dnsServer).use { socket ->
-            val sslSocket =
-                socket as? SSLSocket
-                    ?: throw IOException("TLS socket is not an SSLSocket for ${dnsServer.host}.")
+        openTlsSocket(openTunneledSocket(dnsServer), dnsServer).use { sslSocket ->
             val sslParameters: SSLParameters = sslSocket.sslParameters
             sslParameters.endpointIdentificationAlgorithm = "HTTPS"
             sslSocket.sslParameters = sslParameters

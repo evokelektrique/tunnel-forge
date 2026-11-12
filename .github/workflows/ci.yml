@@ -66,6 +66,9 @@ jobs:
         run: flutter test --coverage
 
       - name: Upload coverage to Codecov
+        if: env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage/lcov.info
@@ -95,7 +98,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: android/gvisor/go.mod
           cache: true
@@ -132,7 +135,7 @@ jobs:
           cache: true
 
       - name: Prepare Android Go dependencies
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: android/gvisor/go.mod
           cache: true
@@ -169,13 +172,14 @@ jobs:
         run: ./gradlew --no-daemon --console=plain --info --stacktrace -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest
 
       - name: Upload Android test results to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1.2.1
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: android/app/build/test-results/testDebugUnitTest/*.xml
-          report-type: test_results
-          disable-search: true
+          directory: build/app/test-results/testDebugUnitTest
+          report_type: test_results
 
       - name: Upload Android unit test reports
         if: failure()
@@ -183,8 +187,8 @@ jobs:
         with:
           name: android-unit-test-reports
           path: |
-            android/app/build/reports/tests/
-            android/build/reports/
+            build/app/reports/tests/
+            build/reports/
           if-no-files-found: ignore
 
   build-android:
@@ -217,7 +221,7 @@ jobs:
           cache: true
 
       - name: Prepare Android Go dependencies
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: android/gvisor/go.mod
           cache: true
@@ -338,6 +342,5 @@ jobs:
           name: android-build-reports
           path: |
             build/reports/
-            android/app/build/reports/
-            android/build/reports/
+            build/app/reports/
           if-no-files-found: ignore
