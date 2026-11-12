@@ -22,6 +22,9 @@ set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
 if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
   set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
 
 set(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR "" CACHE PATH "Use an existing mbedTLS source tree instead of downloading it")
 if(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR)
@@ -31,7 +34,6 @@ else()
   FetchContent_Declare(
     mbedtls
     URL https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v2.28.9.tar.gz
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   )
   FetchContent_MakeAvailable(mbedtls)
 endif()
