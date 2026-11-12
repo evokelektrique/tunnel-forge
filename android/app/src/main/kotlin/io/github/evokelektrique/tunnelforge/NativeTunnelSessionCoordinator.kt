@@ -69,21 +69,28 @@ internal class NativeTunnelSessionCoordinator(
             while ((owner != null && owner != nextOwner) || stoppingOwner != null) {
                 val remaining = deadline - System.currentTimeMillis()
                 if (remaining <= 0L) {
-                    val current = owner
-                    val stopping = stoppingOwner
-                    logger(
-                        Log.ERROR,
-                        "native owner acquire timed out currentMode=${current?.mode.orEmpty()} currentAttempt=${current?.attemptId.orEmpty()} stoppingMode=${stopping?.mode.orEmpty()} stoppingAttempt=${stopping?.attemptId.orEmpty()} nextMode=${nextOwner.mode} nextAttempt=${nextOwner.attemptId} reason=$reason",
-                    )
-                    return false
+                    break
                 }
-                try {
-                    stateChanged.await(remaining, TimeUnit.MILLISECONDS)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    logger(Log.WARN, "native owner acquire interrupted mode=${nextOwner.mode} attempt=${nextOwner.attemptId}")
-                    return false
+                val signaled =
+                    try {
+                        stateChanged.await(remaining, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        logger(Log.WARN, "native owner acquire interrupted mode=${nextOwner.mode} attempt=${nextOwner.attemptId}")
+                        return false
+                    }
+                if (!signaled) {
+                    break
                 }
+            }
+            if ((owner != null && owner != nextOwner) || stoppingOwner != null) {
+                val current = owner
+                val stopping = stoppingOwner
+                logger(
+                    Log.ERROR,
+                    "native owner acquire timed out currentMode=${current?.mode.orEmpty()} currentAttempt=${current?.attemptId.orEmpty()} stoppingMode=${stopping?.mode.orEmpty()} stoppingAttempt=${stopping?.attemptId.orEmpty()} nextMode=${nextOwner.mode} nextAttempt=${nextOwner.attemptId} reason=$reason",
+                )
+                return false
             }
             owner = nextOwner
             logger(Log.DEBUG, "native owner acquired mode=${nextOwner.mode} attempt=${nextOwner.attemptId} reason=$reason")
