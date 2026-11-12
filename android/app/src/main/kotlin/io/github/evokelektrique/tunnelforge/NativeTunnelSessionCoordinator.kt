@@ -71,16 +71,14 @@ internal class NativeTunnelSessionCoordinator(
                 if (remaining <= 0L) {
                     break
                 }
-                val signaled =
-                    try {
-                        stateChanged.await(remaining, TimeUnit.MILLISECONDS)
-                    } catch (_: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        logger(Log.WARN, "native owner acquire interrupted mode=${nextOwner.mode} attempt=${nextOwner.attemptId}")
-                        return false
+                try {
+                    if (!stateChanged.await(remaining, TimeUnit.MILLISECONDS)) {
+                        break
                     }
-                if (!signaled) {
-                    break
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    logger(Log.WARN, "native owner acquire interrupted mode=${nextOwner.mode} attempt=${nextOwner.attemptId}")
+                    return false
                 }
             }
             if ((owner != null && owner != nextOwner) || stoppingOwner != null) {
