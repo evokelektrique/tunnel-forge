@@ -301,7 +301,7 @@ jobs:
           done < SHA256SUMS
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: tunnel-forge-${{ steps.tag.outputs.tag }}-android-release
           path: |
