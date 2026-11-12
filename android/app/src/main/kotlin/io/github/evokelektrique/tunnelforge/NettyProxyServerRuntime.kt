@@ -10,10 +10,11 @@ import io.netty.channel.ChannelHandlerContext
 import io.netty.channel.ChannelInitializer
 import io.netty.channel.ChannelOption
 import io.netty.channel.EventLoopGroup
+import io.netty.channel.MultiThreadIoEventLoopGroup
 import io.netty.channel.ChannelFactory
 import io.netty.channel.ServerChannel
 import io.netty.channel.SimpleChannelInboundHandler
-import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.nio.NioIoHandler
 import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.NioServerSocketChannel
 import io.netty.handler.codec.ByteToMessageDecoder
@@ -64,9 +65,10 @@ class NettyProxyServerRuntime(
     private val levelLogger: (Int, String) -> Unit = { _, _ -> },
 ) : LocalProxyRuntime {
     private val running = AtomicBoolean(false)
-    private val bossGroup: EventLoopGroup = NioEventLoopGroup(1, daemonThreadFactory("netty-proxy-boss"))
+    private val bossGroup: EventLoopGroup =
+        MultiThreadIoEventLoopGroup(1, daemonThreadFactory("netty-proxy-boss"), NioIoHandler.newFactory())
     private val workerGroup: EventLoopGroup =
-        NioEventLoopGroup(0, daemonThreadFactory("netty-proxy-io"))
+        MultiThreadIoEventLoopGroup(0, daemonThreadFactory("netty-proxy-io"), NioIoHandler.newFactory())
     /** Runs DNS/native open/read loops that can block longer than a Netty event loop should. */
     private val blockingExecutor: ExecutorService =
         Executors.newCachedThreadPool { task -> Thread(task, "netty-proxy-transport").apply { isDaemon = true } }

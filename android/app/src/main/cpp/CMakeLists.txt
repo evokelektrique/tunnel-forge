@@ -31,6 +31,7 @@ else()
   FetchContent_Declare(
     mbedtls
     URL https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v2.28.9.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   )
   FetchContent_MakeAvailable(mbedtls)
 endif()
