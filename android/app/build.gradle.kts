@@ -1,4 +1,4 @@
-import com.android.build.gradle.internal.api.ApkVariantOutputImpl
+import com.android.build.api.variant.FilterConfiguration
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -304,17 +304,19 @@ android {
 
     sourceSets {
         getByName("main") {
-            jniLibs.srcDir(androidGoJniLibsDir.get().asFile)
+            jniLibs.directories.add(androidGoJniLibsDir.get().asFile.absolutePath)
         }
     }
+}
 
+androidComponents {
     val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86_64" to 3)
-    applicationVariants.configureEach {
-        val variant = this
+    onVariants { variant ->
         variant.outputs.forEach { output ->
-            val abiVersionCode = abiCodes[output.filters.find { it.filterType == "ABI" }?.identifier]
+            val abiName = output.filters.find { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
+            val abiVersionCode = abiCodes[abiName]
             if (abiVersionCode != null) {
-                (output as ApkVariantOutputImpl).versionCodeOverride = variant.versionCode * 10 + abiVersionCode
+                output.versionCode.set(flutter.versionCode * 10 + abiVersionCode)
             }
         }
     }
