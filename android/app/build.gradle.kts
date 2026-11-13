@@ -121,6 +121,29 @@ fun findAndroidNdkTool(name: String): File? {
         ?.firstOrNull { it.isFile }
 }
 
+fun findAndroidSdkCmakeTool(name: String): File? {
+    val cmakeRoot = androidSdkPath?.let { file(it).resolve("cmake") } ?: return null
+    val executableName = if (System.getProperty("os.name").lowercase().contains("windows")) "$name.exe" else name
+    return cmakeRoot
+        .listFiles()
+        ?.sortedByDescending { it.name }
+        ?.map { versionDir -> versionDir.resolve("bin/$executableName") }
+        ?.firstOrNull { it.isFile }
+}
+
+fun findWindowsWinLibsTool(name: String): File? {
+    if (!System.getProperty("os.name").lowercase().contains("windows")) return null
+    val localAppData = System.getenv("LOCALAPPDATA")?.let(::File) ?: return null
+    val packageTool =
+        localAppData
+            .resolve("Microsoft/WinGet/Packages")
+            .listFiles { dir -> dir.isDirectory && dir.name.startsWith("BrechtSanders.WinLibs") }
+            ?.sortedByDescending { it.name }
+            ?.map { pkgDir -> pkgDir.resolve("mingw64/bin/$name.exe") }
+            ?.firstOrNull { it.isFile }
+    return packageTool ?: localAppData.resolve("Microsoft/WinGet/Links/$name.exe").takeIf { it.isFile }
+}
+
 fun androidNdkClang(name: String): String =
     findAndroidNdkTool(name)?.absolutePath ?: name
 
@@ -134,6 +157,21 @@ fun findPathTool(name: String): String? {
         ?.firstOrNull { it.isFile && it.canExecute() }
         ?.absolutePath
 }
+
+fun resolveHostTool(envVar: String, name: String, sdkCmakeFallback: Boolean = false): String? =
+    providers.environmentVariable(envVar).orNull
+        ?: findPathTool(name)
+        ?: (if (sdkCmakeFallback) findAndroidSdkCmakeTool(name)?.absolutePath else null)
+        ?: findWindowsWinLibsTool(name)?.absolutePath
+
+val nativeCmakeCommand = resolveHostTool("CMAKE", "cmake", sdkCmakeFallback = true) ?: "cmake"
+val nativeCtestCommand = resolveHostTool("CTEST", "ctest", sdkCmakeFallback = true) ?: "ctest"
+val nativeNinjaCommand = resolveHostTool("NINJA", "ninja", sdkCmakeFallback = true)
+val nativeCCompilerCommand = resolveHostTool("CC", "gcc") ?: resolveHostTool("CC", "clang")
+val nativeHostToolPathDirs =
+    listOfNotNull(nativeCCompilerCommand, nativeNinjaCommand, nativeCmakeCommand, nativeCtestCommand)
+        .mapNotNull { File(it).takeIf(File::isAbsolute)?.parentFile?.absolutePath }
+        .distinct()
 
 // Resolution order:
 // 1. CLANG_FORMAT / CLANG_TIDY for pinned CI or local overrides.
@@ -400,24 +438,45 @@ tasks.register<Exec>("lintAndroidNativeC") {
     commandLine(gradleWrapperCommand, ":app:externalNativeBuildDebug", "-PtunnelForgeClangTidy=ON")
 }
 
+fun Exec.withNativeHostToolPath() {
+    if (nativeHostToolPathDirs.isNotEmpty()) {
+        val currentPath = System.getenv("PATH")
+        val combined = (nativeHostToolPathDirs + listOfNotNull(currentPath)).joinToString(File.pathSeparator)
+        environment("PATH", combined)
+    }
+}
+
 tasks.register<Exec>("configureNativeCTest") {
     group = "verification"
     description = "Configures host-side native C unit tests with CMake."
-    commandLine("cmake", "-S", repoRootDir.resolve("test/native"), "-B", nativeTestBuildDir)
+    withNativeHostToolPath()
+    val configureArgs = mutableListOf(nativeCmakeCommand, "-S", repoRootDir.resolve("test/native").absolutePath, "-B", nativeTestBuildDir.absolutePath)
+    val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+    if (isWindows &&
+        providers.environmentVariable("CMAKE_GENERATOR").orNull == null &&
+        findPathTool("cl") == null &&
+        nativeNinjaCommand != null &&
+        nativeCCompilerCommand != null
+    ) {
+        configureArgs += listOf("-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$nativeNinjaCommand", "-DCMAKE_C_COMPILER=$nativeCCompilerCommand")
+    }
+    commandLine(configureArgs)
 }
 
 tasks.register<Exec>("buildNativeCTest") {
     group = "verification"
     description = "Builds host-side native C unit tests."
     dependsOn("configureNativeCTest")
-    commandLine("cmake", "--build", nativeTestBuildDir)
+    withNativeHostToolPath()
+    commandLine(nativeCmakeCommand, "--build", nativeTestBuildDir)
 }
 
 tasks.register<Exec>("testNativeC") {
     group = "verification"
     description = "Runs host-side native C unit tests."
     dependsOn("buildNativeCTest")
-    commandLine("ctest", "--test-dir", nativeTestBuildDir, "--output-on-failure")
+    withNativeHostToolPath()
+    commandLine(nativeCtestCommand, "--test-dir", nativeTestBuildDir, "--output-on-failure")
 }
 
 tasks.register("checkNativeC") {

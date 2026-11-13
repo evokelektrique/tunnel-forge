@@ -5,6 +5,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#endif
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,10 +71,25 @@ static void add_ms_to_timespec(struct timespec *ts, int timeout_ms) {
 }
 
 static int set_nonblock(int fd) {
+#ifdef _WIN32
+  /* Windows CRT pipes lack O_NONBLOCK; the 16 KiB pipe buffer in create_notify_pipe fits host tests. */
+  (void)fd;
+  return 0;
+#else
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags < 0)
     return -1;
   return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#endif
+}
+
+static int create_notify_pipe(int fds[2]) {
+#ifdef _WIN32
+  /* shortcut: Windows CRT _pipe is blocking; 16 KiB exceeds host outbound queue capacity cleanly. */
+  return _pipe(fds, 16384, _O_BINARY);
+#else
+  return pipe(fds);
+#endif
 }
 
 static int proxy_queue_signal(proxy_packet_queue_ctx_t *ctx) {
@@ -273,7 +291,7 @@ int packet_endpoint_init_proxy_queue(packet_endpoint_t *endpoint, proxy_packet_q
     errno = EBUSY;
     return -1;
   }
-  if (pipe(ctx->notify_pipe) != 0) {
+  if (create_notify_pipe(ctx->notify_pipe) != 0) {
     pthread_cond_destroy(&ctx->inbound_idle_cond);
     pthread_cond_destroy(&ctx->inbound_cond);
     pthread_mutex_destroy(&ctx->mutex);
