@@ -208,10 +208,11 @@ static jint native_gvisor_tcp_open(JNIEnv *env, jclass clazz, jintArray jremote_
   return (jint)gvisor_bridge_tcp_open(remote_ipv4, (uint16_t)port, (int)timeout_ms);
 }
 
-static jint native_gvisor_tcp_open_cancelable(JNIEnv *env, jclass clazz, jint open_id, jintArray jremote_ipv4, jint port,
-                                              jint timeout_ms) {
+static jint native_gvisor_tcp_open_cancelable(JNIEnv *env, jclass clazz, jint open_id, jintArray jremote_ipv4,
+                                              jint port, jint timeout_ms) {
   (void)clazz;
-  if (open_id <= 0 || jremote_ipv4 == NULL || (*env)->GetArrayLength(env, jremote_ipv4) < 4 || port <= 0 || port > 65535)
+  if (open_id <= 0 || jremote_ipv4 == NULL || (*env)->GetArrayLength(env, jremote_ipv4) < 4 || port <= 0 ||
+      port > 65535)
     return -1;
   jint tmp[4];
   (*env)->GetIntArrayRegion(env, jremote_ipv4, 0, 4, tmp);

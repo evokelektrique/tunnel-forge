@@ -462,8 +462,7 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
     mbedtls_cipher_free(&ciph);
     s_esp_drop_stats.cipher_decrypt_failed++;
     esp_fail_capture(ESP_FAIL_CIPHER, in_len, esp_head, 8, 0, 0, 0, 0, 0);
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp decrypt drop: cbc decrypt failed cipher=%u",
-                      (unsigned)k->cipher);
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp decrypt drop: cbc decrypt failed cipher=%u", (unsigned)k->cipher);
     return -1;
   }
   mbedtls_cipher_free(&ciph);
