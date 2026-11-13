@@ -24,6 +24,8 @@ abstract class ProfilesRepository {
   Future<void> deleteProfile(String id);
   Future<void> copyProfileShareLink(String id);
   Future<void> exportProfileFile(String id);
+  Future<void> checkSecureStorageUpgrade();
+  Future<void> resetSecureStorage();
   String newProfileId();
 }
 

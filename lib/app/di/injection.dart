@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:get_it/get_it.dart';
 
+import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_bridge.dart';
@@ -36,7 +37,21 @@ GetIt createAppLocator({
   final locator = GetIt.asNewInstance();
 
   locator.registerLazySingleton<ProfileStore>(
-    () => profileStore ?? ProfileStore(),
+    () =>
+        profileStore ??
+        ProfileStore(
+          onLog: (level, message) {
+            locator<LogsRepository>().append(
+              LogEntry(
+                timestamp: DateTime.now(),
+                level: level,
+                source: LogSource.dart,
+                tag: 'ProfileStore',
+                message: message,
+              ),
+            );
+          },
+        ),
   );
   locator.registerLazySingleton<ConnectivityChecker>(
     () => connectivityChecker ?? HttpConnectivityChecker(),

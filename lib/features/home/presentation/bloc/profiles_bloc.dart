@@ -169,6 +169,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     ProfilesStarted event,
     Emitter<ProfilesState> emit,
   ) async {
+    await _profilesRepository.checkSecureStorageUpgrade();
     await _reloadProfiles(
       emit,
       preferredActiveId: await _profilesRepository.loadLastProfileId(),

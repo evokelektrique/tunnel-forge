@@ -15,6 +15,7 @@ import 'package:tunnel_forge/features/app_selector/presentation/pages/app_select
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
+import 'package:tunnel_forge/features/profiles/presentation/profile_editor_sheet.dart';
 import 'package:tunnel_forge/features/profiles/presentation/profile_picker_sheet.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
@@ -346,6 +347,46 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     );
   }
 
+  Future<void> _handleMissingSecrets(Profile profile) async {
+    _toast(
+      AppText.pick(
+        'Saved password/PSK for "${profile.displayName}" could not be read. Re-enter them.',
+        'گذرواژه یا کلید مشترک ذخیره‌شده برای «${profile.displayName}» خوانده نشد. دوباره وارد کنید.',
+      ),
+      error: true,
+    );
+    widget.locator<LogsRepository>().append(
+      LogEntry(
+        timestamp: DateTime.now(),
+        level: LogLevel.warning,
+        source: LogSource.dart,
+        tag: 'tunnel',
+        message: 'Connect blocked: secrets unreadable profile=${profile.id}',
+      ),
+    );
+    final profilesBloc = context.read<ProfilesBloc>();
+    final saved = await ProfileEditorSheet.show(
+      context,
+      profileId: profile.id,
+      store: widget.locator<ProfileStore>(),
+    );
+    if (!mounted || !saved) return;
+    final refreshResult = profilesBloc.stream
+        .firstWhere((state) {
+          return !state.loading &&
+              state.activeProfileId == profile.id &&
+              state.profiles.any((p) => p.id == profile.id);
+        })
+        .timeout(const Duration(seconds: 5));
+    profilesBloc.add(ProfilesRefreshRequested(preferredActiveId: profile.id));
+    try {
+      await refreshResult;
+    } on TimeoutException {
+      if (!mounted) return;
+      _toast(AppText.current.profileRefreshTimedOut, error: true);
+    }
+  }
+
   void _primaryAction(
     ProfilesState profilesState,
     SettingsState settingsState,
@@ -362,6 +403,10 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     final row = profilesState.activeProfileRow;
     if (row == null || !profilesState.hasActiveProfile) {
       _handleMissingProfileTap(profilesState);
+      return;
+    }
+    if (row.secretsMissing) {
+      unawaited(_handleMissingSecrets(row.profile));
       return;
     }
     final profile = row.profile;

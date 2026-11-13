@@ -15,12 +15,20 @@ abstract class SecretStore {
   Future<String?> read(String key);
   Future<void> write(String key, String value);
   Future<void> delete(String key);
+  Future<void> deleteAll();
+  Future<SecureStorageUpgradeStatus> checkUpgradeStatus() async =>
+      SecureStorageUpgradeStatus.unsupported;
 }
 
 /// Production [SecretStore] backed by [FlutterSecureStorage].
 class FlutterSecureSecretStore implements SecretStore {
   FlutterSecureSecretStore([FlutterSecureStorage? storage])
-    : _storage = storage ?? const FlutterSecureStorage();
+    : _storage =
+          storage ??
+          const FlutterSecureStorage(
+            // Throw instead of silently wiping every secret on a keystore/cipher error.
+            aOptions: AndroidOptions(resetOnError: false),
+          );
 
   final FlutterSecureStorage _storage;
 
@@ -28,34 +36,59 @@ class FlutterSecureSecretStore implements SecretStore {
   Future<void> delete(String key) => _storage.delete(key: key);
 
   @override
+  Future<void> deleteAll() => _storage.deleteAll();
+
+  @override
   Future<String?> read(String key) => _storage.read(key: key);
 
   @override
   Future<void> write(String key, String value) =>
       _storage.write(key: key, value: value);
+
+  @override
+  Future<SecureStorageUpgradeStatus> checkUpgradeStatus() =>
+      _storage.checkUpgradeStatus();
 }
 
 /// In-memory [SecretStore] for tests and widget tests.
 class MemorySecretStore implements SecretStore {
+  MemorySecretStore([Map<String, String>? initial]) {
+    if (initial != null) _data.addAll(initial);
+  }
+
   final Map<String, String> _data = {};
 
   @override
   Future<void> delete(String key) async => _data.remove(key);
 
   @override
+  Future<void> deleteAll() async => _data.clear();
+
+  @override
   Future<String?> read(String key) async => _data[key];
 
   @override
   Future<void> write(String key, String value) async => _data[key] = value;
+
+  @override
+  Future<SecureStorageUpgradeStatus> checkUpgradeStatus() async =>
+      SecureStorageUpgradeStatus.unsupported;
 }
+
+typedef ProfileStoreLog = void Function(LogLevel level, String message);
 
 /// Loads, saves, and deletes [Profile] rows; tests may inject [prefsOverride] / [secretsOverride].
 class ProfileStore {
-  ProfileStore({SharedPreferences? prefsOverride, SecretStore? secretsOverride})
-    : _prefsOverride = prefsOverride,
-      _secrets = secretsOverride ?? FlutterSecureSecretStore();
+  ProfileStore({
+    SharedPreferences? prefsOverride,
+    SecretStore? secretsOverride,
+    ProfileStoreLog? onLog,
+  }) : _prefsOverride = prefsOverride,
+       _secrets = secretsOverride ?? FlutterSecureSecretStore(),
+       _onLog = onLog;
 
   static const prefsKeyProfilesJson = 'vpn_profiles_json_v3';
+  static const prefsKeyProfilesJsonBackup = 'vpn_profiles_json_v3_backup';
   static const prefsKeyLastProfileId = 'vpn_last_profile_id_v1';
   static const prefsKeyConnectionMode = 'connection_mode_v1';
   static const prefsKeyProxyHttpPort = 'proxy_http_port_v1';
@@ -79,10 +112,16 @@ class ProfileStore {
 
   final SharedPreferences? _prefsOverride;
   final SecretStore _secrets;
+  final ProfileStoreLog? _onLog;
+  bool _upgradeChecked = false;
 
-  String _passwordKey(String profileId) =>
+  static String passwordKey(String profileId) =>
       'tunnel_forge/profile/$profileId/password';
-  String _pskKey(String profileId) => 'tunnel_forge/profile/$profileId/psk';
+  static String pskKey(String profileId) =>
+      'tunnel_forge/profile/$profileId/psk';
+
+  String _passwordKey(String profileId) => passwordKey(profileId);
+  String _pskKey(String profileId) => pskKey(profileId);
 
   Future<SharedPreferences> _prefs() async =>
       _prefsOverride ?? SharedPreferences.getInstance();
@@ -94,20 +133,73 @@ class ProfileStore {
     return base64UrlEncode(b).replaceAll('=', '');
   }
 
+  Future<void> checkUpgradeStatusOnce() async {
+    if (_upgradeChecked) return;
+    _upgradeChecked = true;
+    try {
+      final s = await _secrets.checkUpgradeStatus();
+      final level = s.state == SecureStorageUpgradeState.ok
+          ? LogLevel.info
+          : LogLevel.warning;
+      _onLog?.call(
+        level,
+        'secure_storage upgrade state=${s.state.name} reason=${s.reason.name} entries=${s.entryCount} discardNext=${s.willDiscardOnNextAccess}',
+      );
+    } catch (e) {
+      _onLog?.call(
+        LogLevel.warning,
+        'secure_storage upgrade check failed error=${e.runtimeType}',
+      );
+    }
+  }
+
+  Future<void> _backupProfilesJsonIfAbsent(
+    SharedPreferences prefs,
+    String raw,
+  ) async {
+    if (prefs.containsKey(prefsKeyProfilesJsonBackup)) return;
+    await prefs.setString(prefsKeyProfilesJsonBackup, raw);
+  }
+
   Future<List<Profile>> loadProfiles() async {
     final p = await _prefs();
     final raw = p.getString(prefsKeyProfilesJson);
     if (raw == null || raw.isEmpty) return [];
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return [];
+      if (decoded is! List) {
+        await _backupProfilesJsonIfAbsent(p, raw);
+        _onLog?.call(
+          LogLevel.error,
+          'Profile list decode failed (expected List, got ${decoded.runtimeType}); raw backed up (${raw.length} chars)',
+        );
+        return [];
+      }
       final out = <Profile>[];
-      for (final e in decoded) {
-        final row = Profile.tryFromJson(e);
-        if (row != null) out.add(row);
+      var backedUp = false;
+      for (var i = 0; i < decoded.length; i++) {
+        final entry = decoded[i];
+        final row = Profile.tryFromJson(entry);
+        if (row != null) {
+          out.add(row);
+        } else {
+          if (!backedUp) {
+            await _backupProfilesJsonIfAbsent(p, raw);
+            backedUp = true;
+          }
+          final detail = entry is Map
+              ? 'keys=[${(entry.keys.map((k) => k.toString()).toList()..sort()).join(', ')}]'
+              : 'type=${entry.runtimeType}';
+          _onLog?.call(LogLevel.error, 'Dropped profile row index=$i $detail');
+        }
       }
       return out;
-    } catch (_) {
+    } catch (e) {
+      await _backupProfilesJsonIfAbsent(p, raw);
+      _onLog?.call(
+        LogLevel.error,
+        'Profile list decode failed (${e.runtimeType}); raw backed up (${raw.length} chars)',
+      );
       return [];
     }
   }
@@ -280,9 +372,10 @@ class ProfileStore {
     } else {
       list.add(profile);
     }
-    await _saveProfileList(list);
+    // Write secrets before the profile list so a failed secret write never leaves a secretless profile.
     await _secrets.write(_passwordKey(profile.id), password);
     await _secrets.write(_pskKey(profile.id), psk);
+    await _saveProfileList(list);
     await setLastProfileId(profile.id);
   }
 
@@ -293,9 +386,9 @@ class ProfileStore {
     final imported = envelope.toProfile(newProfileId());
     final list = await loadProfiles()
       ..add(imported);
-    await _saveProfileList(list);
     await _secrets.write(_passwordKey(imported.id), envelope.password);
     await _secrets.write(_pskKey(imported.id), envelope.psk);
+    await _saveProfileList(list);
     if (selectAsLastProfile) {
       await setLastProfileId(imported.id);
     }
@@ -313,7 +406,36 @@ class ProfileStore {
     if (last == id) await setLastProfileId(null);
   }
 
-  Future<({Profile profile, String password, String psk})?>
+  Future<void> resetSecureStorage() async {
+    _onLog?.call(
+      LogLevel.warning,
+      'Resetting secure storage (deleting all saved credentials)',
+    );
+    await _secrets.deleteAll();
+  }
+
+  Future<String?> _readSecret(String key, String id, String label) async {
+    try {
+      final v = await _secrets.read(key);
+      if (v == null) {
+        _onLog?.call(
+          LogLevel.warning,
+          'Secret missing profile=$id field=$label',
+        );
+      }
+      return v;
+    } catch (e) {
+      _onLog?.call(
+        LogLevel.error,
+        'Secret read failed profile=$id field=$label error=${e.runtimeType}',
+      );
+      return null;
+    }
+  }
+
+  Future<
+    ({Profile profile, String password, String psk, bool secretsMissing})?
+  >
   loadProfileWithSecrets(String id) async {
     final list = await loadProfiles();
     Profile? profile;
@@ -324,8 +446,13 @@ class ProfileStore {
       }
     }
     if (profile == null) return null;
-    final password = await _secrets.read(_passwordKey(id)) ?? '';
-    final psk = await _secrets.read(_pskKey(id)) ?? '';
-    return (profile: profile, password: password, psk: psk);
+    final passwordRaw = await _readSecret(_passwordKey(id), id, 'password');
+    final pskRaw = await _readSecret(_pskKey(id), id, 'psk');
+    return (
+      profile: profile,
+      password: passwordRaw ?? '',
+      psk: pskRaw ?? '',
+      secretsMissing: passwordRaw == null || pskRaw == null,
+    );
   }
 }

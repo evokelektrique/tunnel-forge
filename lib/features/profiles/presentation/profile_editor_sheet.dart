@@ -296,6 +296,41 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     );
   }
 
+  Future<void> _confirmResetSecureStorage(BuildContext context) async {
+    final bloc = context.read<ProfileFormBloc>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          AppText.pick('Reset secure storage?', 'بازنشانی حافظه امن؟'),
+        ),
+        content: Text(
+          AppText.pick(
+            'Android could not save credentials. Resetting secure storage deletes the saved passwords and PSKs for all profiles. Profiles themselves are kept.',
+            'اندروید نتوانست اطلاعات ورود را ذخیره کند. بازنشانی حافظه امن گذرواژه‌ها و کلیدهای مشترک ذخیره‌شدهٔ همهٔ پروفایل‌ها را پاک می‌کند. خود پروفایل‌ها نگه داشته می‌شوند.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(AppLocalizations.of(ctx).cancel),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Theme.of(ctx).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(AppText.pick('Reset and save', 'بازنشانی و ذخیره')),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) {
+      bloc.add(const ProfileFormSecureStorageResetRequested());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -317,11 +352,15 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     return BlocConsumer<ProfileFormBloc, ProfileFormState>(
       listenWhen: (previous, current) =>
           previous.messageId != current.messageId ||
-          previous.saved != current.saved,
+          previous.saved != current.saved ||
+          previous.secureStorageWriteFailed != current.secureStorageWriteFailed,
       listener: (context, state) {
         if (state.message != null && state.messageId != _lastMessageId) {
           _lastMessageId = state.messageId;
           showAppSnackBar(context, state.message!, error: true);
+        }
+        if (state.secureStorageWriteFailed) {
+          _confirmResetSecureStorage(context);
         }
         if (state.saved) {
           widget.onSaved(state.profileId);

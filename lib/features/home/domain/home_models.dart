@@ -27,14 +27,16 @@ class ProfileSecretRow extends Equatable {
     required this.profile,
     required this.password,
     required this.psk,
+    this.secretsMissing = false,
   });
 
   final Profile profile;
   final String password;
   final String psk;
+  final bool secretsMissing;
 
   @override
-  List<Object?> get props => [profile, password, psk];
+  List<Object?> get props => [profile, password, psk, secretsMissing];
 }
 
 class TunnelHostUpdate extends Equatable {

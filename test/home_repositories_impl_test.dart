@@ -1,8 +1,11 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tunnel_forge/features/home/data/home_repositories_impl.dart';
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
+import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
+import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 
 void main() {
   group('AppVersionRepositoryImpl', () {
@@ -112,6 +115,39 @@ void main() {
             'GitHub Releases returned malformed data.',
           ),
         ),
+      );
+    });
+  });
+
+  group('ProfilesRepositoryImpl', () {
+    test('blocks share link and export when secrets are missing', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      final secrets = MemorySecretStore();
+      final store = ProfileStore(prefsOverride: prefs, secretsOverride: secrets);
+      const profile = Profile(
+        id: 'missing-secret-share',
+        displayName: 'Office',
+        server: 'vpn.example',
+        user: 'alice',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+      );
+      await store.upsertProfile(profile, password: 'pw', psk: 'psk');
+      await secrets.delete(ProfileStore.passwordKey(profile.id));
+
+      final repo = ProfilesRepositoryImpl(store);
+      await expectLater(
+        repo.copyProfileShareLink(profile.id),
+        throwsA(isA<ProfileRepositoryException>()),
+      );
+      await expectLater(
+        repo.exportProfileFile(profile.id),
+        throwsA(isA<ProfileRepositoryException>()),
       );
     });
   });

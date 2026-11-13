@@ -124,6 +124,10 @@ final class ProfileFormSaveRequested extends ProfileFormEvent {
   const ProfileFormSaveRequested();
 }
 
+final class ProfileFormSecureStorageResetRequested extends ProfileFormEvent {
+  const ProfileFormSecureStorageResetRequested();
+}
+
 class ProfileFormState extends Equatable {
   const ProfileFormState({
     this.profileId = '',
@@ -144,6 +148,7 @@ class ProfileFormState extends Equatable {
     this.messageId = 0,
     this.message,
     this.saved = false,
+    this.secureStorageWriteFailed = false,
   });
 
   final String profileId;
@@ -164,6 +169,7 @@ class ProfileFormState extends Equatable {
   final int messageId;
   final String? message;
   final bool saved;
+  final bool secureStorageWriteFailed;
 
   String? get dns1ErrorText =>
       dnsAutomatic ? null : _dnsErrorText('DNS 1', dns1, dns1Protocol);
@@ -192,6 +198,7 @@ class ProfileFormState extends Equatable {
     String? message,
     bool clearMessage = false,
     bool? saved,
+    bool? secureStorageWriteFailed,
   }) {
     return ProfileFormState(
       profileId: profileId ?? this.profileId,
@@ -212,6 +219,8 @@ class ProfileFormState extends Equatable {
       messageId: messageId ?? this.messageId,
       message: clearMessage ? null : (message ?? this.message),
       saved: saved ?? this.saved,
+      secureStorageWriteFailed:
+          secureStorageWriteFailed ?? this.secureStorageWriteFailed,
     );
   }
 
@@ -235,6 +244,7 @@ class ProfileFormState extends Equatable {
     messageId,
     message,
     saved,
+    secureStorageWriteFailed,
   ];
 }
 
@@ -299,6 +309,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           emit(state.copyWith(mtu: event.value.trim(), saved: false)),
     );
     on<ProfileFormSaveRequested>(_onSaveRequested);
+    on<ProfileFormSecureStorageResetRequested>(_onSecureStorageResetRequested);
   }
 
   final ProfilesRepository _profilesRepository;
@@ -365,10 +376,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     );
   }
 
-  Future<void> _onSaveRequested(
-    ProfileFormSaveRequested event,
-    Emitter<ProfileFormState> emit,
-  ) async {
+  Profile? _validateAndBuildProfile(Emitter<ProfileFormState> emit) {
     final serverTrim = state.server.trim();
     if (serverTrim.isEmpty) {
       emit(
@@ -376,12 +384,12 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           AppText.pick('Enter a server address', 'نشانی سرور را وارد کنید'),
         ),
       );
-      return;
+      return null;
     }
     final mtuErrorText = state.mtuErrorText;
     if (mtuErrorText != null) {
       emit(_messageState(mtuErrorText));
-      return;
+      return null;
     }
     final mtuParsed = int.parse(state.mtu.trim());
     if (!state.dnsAutomatic) {
@@ -399,7 +407,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
             ),
           ),
         );
-        return;
+        return null;
       }
       final invalidDns2 = Profile.invalidDnsServer(
         state.dns2,
@@ -415,7 +423,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
             ),
           ),
         );
-        return;
+        return null;
       }
       if (Profile.orderedDnsServers(
         dns1Host: state.dns1,
@@ -431,32 +439,48 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
             ),
           ),
         );
-        return;
+        return null;
       }
     }
 
-    emit(state.copyWith(saving: true, clearMessage: true, saved: false));
+    return Profile(
+      id: state.profileId,
+      displayName: state.displayName.trim().isEmpty
+          ? serverTrim
+          : state.displayName.trim(),
+      server: serverTrim,
+      user: state.user,
+      dnsAutomatic: state.dnsAutomatic,
+      dns1Host: Profile.normalizeDnsServerForProtocol(
+        state.dns1,
+        state.dns1Protocol,
+      ),
+      dns1Protocol: state.dns1Protocol,
+      dns2Host: Profile.normalizeDnsServerForProtocol(
+        state.dns2,
+        state.dns2Protocol,
+      ),
+      dns2Protocol: state.dns2Protocol,
+      mtu: Profile.normalizeMtu(mtuParsed),
+    );
+  }
+
+  Future<void> _onSaveRequested(
+    ProfileFormSaveRequested event,
+    Emitter<ProfileFormState> emit,
+  ) async {
+    final profile = _validateAndBuildProfile(emit);
+    if (profile == null) return;
+
+    emit(
+      state.copyWith(
+        saving: true,
+        clearMessage: true,
+        saved: false,
+        secureStorageWriteFailed: false,
+      ),
+    );
     try {
-      final profile = Profile(
-        id: state.profileId,
-        displayName: state.displayName.trim().isEmpty
-            ? serverTrim
-            : state.displayName.trim(),
-        server: serverTrim,
-        user: state.user,
-        dnsAutomatic: state.dnsAutomatic,
-        dns1Host: Profile.normalizeDnsServerForProtocol(
-          state.dns1,
-          state.dns1Protocol,
-        ),
-        dns1Protocol: state.dns1Protocol,
-        dns2Host: Profile.normalizeDnsServerForProtocol(
-          state.dns2,
-          state.dns2Protocol,
-        ),
-        dns2Protocol: state.dns2Protocol,
-        mtu: Profile.normalizeMtu(mtuParsed),
-      );
       await _profilesRepository.upsertProfile(
         profile,
         password: state.password,
@@ -468,17 +492,57 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         _messageState(
           AppText.pick('Could not save changes', 'تغییرات ذخیره نشد'),
           saving: false,
+          secureStorageWriteFailed: true,
         ),
       );
     }
   }
 
-  ProfileFormState _messageState(String message, {bool? saving}) {
+  Future<void> _onSecureStorageResetRequested(
+    ProfileFormSecureStorageResetRequested event,
+    Emitter<ProfileFormState> emit,
+  ) async {
+    final profile = _validateAndBuildProfile(emit);
+    if (profile == null) return;
+
+    emit(
+      state.copyWith(
+        saving: true,
+        clearMessage: true,
+        saved: false,
+        secureStorageWriteFailed: false,
+      ),
+    );
+    try {
+      await _profilesRepository.resetSecureStorage();
+      await _profilesRepository.upsertProfile(
+        profile,
+        password: state.password,
+        psk: state.psk,
+      );
+      emit(state.copyWith(saving: false, saved: true));
+    } catch (_) {
+      emit(
+        _messageState(
+          AppText.pick('Could not save changes', 'تغییرات ذخیره نشد'),
+          saving: false,
+          secureStorageWriteFailed: false,
+        ),
+      );
+    }
+  }
+
+  ProfileFormState _messageState(
+    String message, {
+    bool? saving,
+    bool? secureStorageWriteFailed,
+  }) {
     return state.copyWith(
       saving: saving ?? false,
       messageId: state.messageId + 1,
       message: message,
       saved: false,
+      secureStorageWriteFailed: secureStorageWriteFailed,
     );
   }
 }

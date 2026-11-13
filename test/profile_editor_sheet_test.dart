@@ -1,9 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tunnel_forge/features/profiles/presentation/profile_editor_sheet.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
+
+class _FailOnceWriteSecretStore extends MemorySecretStore {
+  bool failWrite = true;
+  bool deleteAllCalled = false;
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (failWrite) {
+      throw PlatformException(code: 'keystore_error', message: 'write failed');
+    }
+    await super.write(key, value);
+  }
+
+  @override
+  Future<void> deleteAll() async {
+    deleteAllCalled = true;
+    failWrite = false;
+    await super.deleteAll();
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -353,5 +374,47 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('dns_servers_section')), findsOneWidget);
+  });
+
+  testWidgets('secret write failure prompts reset and retries save on confirm', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    final secrets = _FailOnceWriteSecretStore()
+      ..failWrite = false;
+    final store = ProfileStore(prefsOverride: prefs, secretsOverride: secrets);
+    const profile = Profile(
+      id: 'profile-reset-test',
+      displayName: 'Office',
+      server: 'vpn.example.com',
+      user: 'alice',
+      dnsAutomatic: true,
+      dns1Host: '',
+      dns1Protocol: DnsProtocol.dnsOverUdp,
+      dns2Host: '',
+      dns2Protocol: DnsProtocol.dnsOverUdp,
+    );
+    await store.upsertProfile(profile, password: 'pw', psk: 'psk');
+    secrets.failWrite = true;
+
+    await pumpHost(tester, store: store, profileId: profile.id);
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reset secure storage?'), findsOneWidget);
+    expect(
+      find.textContaining('deletes the saved passwords and PSKs for all profiles'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Reset and save'));
+    await tester.pumpAndSettle();
+
+    expect(secrets.deleteAllCalled, isTrue);
+    expect(find.text('Reset secure storage?'), findsNothing);
+    expect(find.text('Open'), findsOneWidget);
   });
 }

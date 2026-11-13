@@ -95,6 +95,13 @@ Future<void> _openProfileActions(
   await tester.pumpAndSettle();
 }
 
+MemorySecretStore _seededSecrets(String profileId) {
+  return MemorySecretStore({
+    ProfileStore.passwordKey(profileId): '',
+    ProfileStore.pskKey(profileId): '',
+  });
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -418,7 +425,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_p1'),
+        ),
       ),
     );
 
@@ -478,7 +487,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_cancel_connect'),
+        ),
       ),
     );
 
@@ -606,7 +617,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_connecting_only'),
+        ),
         connectivityChecker: checker,
       ),
     );
@@ -656,7 +669,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_connecting_only'),
+        ),
         connectivityChecker: checker,
       ),
     );
@@ -708,7 +723,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_connecting_only'),
+        ),
         connectivityChecker: checker,
       ),
     );
@@ -760,7 +777,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_connecting_only'),
+        ),
         connectivityChecker: checker,
       ),
     );
@@ -809,7 +828,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_connecting_only'),
+        ),
         connectivityChecker: checker,
       ),
     );
@@ -1489,7 +1510,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_proxy'),
+        ),
       ),
     );
 
@@ -1546,7 +1569,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_auto_dns'),
+        ),
       ),
     );
 
@@ -1609,7 +1634,9 @@ void main() {
     await tester.pumpWidget(
       TunnelForgeApp(
         onboardingRepository: const _AcceptedOnboardingRepository(),
-        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+        profileStore: ProfileStore(
+          secretsOverride: _seededSecrets('widget_test_doh_path'),
+        ),
       ),
     );
 
@@ -1637,5 +1664,58 @@ void main() {
     ]);
     expect(find.textContaining('must be'), findsNothing);
     expect(statusText(tester), contains('Connecting'));
+  });
+
+  testWidgets('missing secrets block connect and open profile editor', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      ProfileStore.prefsKeyProfilesJson: jsonEncode([
+        {
+          'id': 'widget_test_missing_secrets',
+          'displayName': 'Office Missing',
+          'server': 'vpn.test.example',
+          'user': 'alice',
+          'dnsAutomatic': true,
+          'dns1Host': '',
+          'dns1Protocol': 'dnsOverUdp',
+          'dns2Host': '',
+          'dns2Protocol': 'dnsOverUdp',
+        },
+      ]),
+      ProfileStore.prefsKeyLastProfileId: 'widget_test_missing_secrets',
+    });
+    final methods = <String>[];
+    installVpnChannelMock(methods);
+    addTearDown(uninstallVpnChannelMock);
+    addTearDown(() async {
+      await tester.binding.setSurfaceSize(null);
+    });
+    await tester.binding.setSurfaceSize(const Size(480, 1200));
+
+    await tester.pumpWidget(
+      TunnelForgeApp(
+        onboardingRepository: const _AcceptedOnboardingRepository(),
+        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+      ),
+    );
+
+    await tester.pump();
+    for (var i = 0; i < 50; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    await tester.tap(find.byKey(const Key('vpn_connect')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(userInitiatedVpnMethods(methods), [VpnContract.setLogLevel]);
+    expect(
+      find.text(
+        'Saved password/PSK for "Office Missing" could not be read. Re-enter them.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Profile details'), findsOneWidget);
   });
 }

@@ -30,6 +30,11 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
     if (row == null) {
       throw const ProfileRepositoryException('This profile no longer exists.');
     }
+    if (row.secretsMissing) {
+      throw const ProfileRepositoryException(
+        'Saved password/PSK could not be read. Re-enter them before sharing.',
+      );
+    }
     final envelope = ProfileTransferEnvelope.fromProfile(
       profile: row.profile,
       password: row.password,
@@ -46,6 +51,11 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
     final row = await _profileStore.loadProfileWithSecrets(id);
     if (row == null) {
       throw const ProfileRepositoryException('This profile no longer exists.');
+    }
+    if (row.secretsMissing) {
+      throw const ProfileRepositoryException(
+        'Saved password/PSK could not be read. Re-enter them before sharing.',
+      );
     }
     final envelope = ProfileTransferEnvelope.fromProfile(
       profile: row.profile,
@@ -66,6 +76,13 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
   }
 
   @override
+  Future<void> checkSecureStorageUpgrade() =>
+      _profileStore.checkUpgradeStatusOnce();
+
+  @override
+  Future<void> resetSecureStorage() => _profileStore.resetSecureStorage();
+
+  @override
   Future<String?> loadLastProfileId() => _profileStore.loadLastProfileId();
 
   @override
@@ -79,6 +96,7 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
       profile: row.profile,
       password: row.password,
       psk: row.psk,
+      secretsMissing: row.secretsMissing,
     );
   }
 
