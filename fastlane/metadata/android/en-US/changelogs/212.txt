@@ -1,0 +1,3 @@
+- Hardened profile storage so unreadable keys no longer silently wipe saved profiles and secrets. Missing secrets prompt re-entry and export errors offer a reset option.
+- Added rotating file-backed crash and exit diagnostics so unhandled crashes, native exits, and ANRs are captured in exported debug logs.
+- Batched engine logs and preserved background disconnect or failure notices until the UI reconnects.
