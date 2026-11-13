@@ -79,7 +79,10 @@ abstract class TunnelRepository {
 }
 
 abstract class ConnectivityRepository {
-  Future<ConnectivityPingResult> ping(ConnectivityPingRequest request);
+  Future<ConnectivityPingResult> ping(
+    ConnectivityPingRequest request, {
+    Future<void>? cancelSignal,
+  });
 }
 
 abstract class ProfileTransferRepository {

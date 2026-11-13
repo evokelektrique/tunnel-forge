@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
@@ -31,10 +33,12 @@ class ConnectivityState extends Equatable {
   const ConnectivityState({
     this.badgeState = ConnectivityBadgeState.idle,
     this.latencyMs,
+    this.runId = 0,
   });
 
   final ConnectivityBadgeState badgeState;
   final int? latencyMs;
+  final int runId;
 
   String get badgeLabel {
     return switch (badgeState) {
@@ -48,16 +52,18 @@ class ConnectivityState extends Equatable {
   ConnectivityState copyWith({
     ConnectivityBadgeState? badgeState,
     int? latencyMs,
+    int? runId,
     bool clearLatency = false,
   }) {
     return ConnectivityState(
       badgeState: badgeState ?? this.badgeState,
       latencyMs: clearLatency ? null : (latencyMs ?? this.latencyMs),
+      runId: runId ?? this.runId,
     );
   }
 
   @override
-  List<Object?> get props => [badgeState, latencyMs];
+  List<Object?> get props => [badgeState, latencyMs, runId];
 }
 
 class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
@@ -69,11 +75,30 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
 
   final ConnectivityRepository _connectivityRepository;
   final LogsRepository _logsRepository;
+  Completer<void>? _activeCancel;
+  int _runId = 0;
+
+  void _cancelActiveRun({bool logCancellation = false}) {
+    final activeCancel = _activeCancel;
+    _activeCancel = null;
+    if (activeCancel != null && !activeCancel.isCompleted) {
+      activeCancel.complete();
+      if (logCancellation) {
+        _log(
+          LogLevel.debug,
+          'Connectivity check cancelled',
+          tag: 'connectivity',
+        );
+      }
+    }
+  }
 
   void _onResetRequested(
     ConnectivityResetRequested event,
     Emitter<ConnectivityState> emit,
   ) {
+    _runId++;
+    _cancelActiveRun();
     emit(const ConnectivityState());
   }
 
@@ -81,8 +106,18 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
     ConnectivityRunRequested event,
     Emitter<ConnectivityState> emit,
   ) async {
-    if (state.badgeState == ConnectivityBadgeState.checking) return;
-    emit(state.copyWith(badgeState: ConnectivityBadgeState.checking));
+    final runId = ++_runId;
+    _cancelActiveRun(logCancellation: true);
+    final cancel = Completer<void>();
+    _activeCancel = cancel;
+
+    emit(
+      state.copyWith(
+        badgeState: ConnectivityBadgeState.checking,
+        clearLatency: true,
+        runId: runId,
+      ),
+    );
     _log(
       LogLevel.debug,
       'Connectivity check: ${event.request.url}'
@@ -90,7 +125,24 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
       tag: 'connectivity',
     );
 
-    final result = await _connectivityRepository.ping(event.request);
+    final ConnectivityPingResult? result;
+    try {
+      result = await Future.any<ConnectivityPingResult?>([
+        _connectivityRepository.ping(
+          event.request,
+          cancelSignal: cancel.future,
+        ),
+        cancel.future.then<ConnectivityPingResult?>((_) => null),
+      ]);
+    } finally {
+      if (identical(_activeCancel, cancel)) {
+        _activeCancel = null;
+      }
+    }
+    if (cancel.isCompleted || runId != _runId || emit.isDone || result == null) {
+      return;
+    }
+
     if (result.reachable && result.latencyMs != null) {
       emit(
         state.copyWith(
@@ -122,6 +174,13 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
       '${result.error == null || result.error!.isEmpty ? '' : ': ${redactLogMessage(result.error!)}'}',
       tag: 'connectivity',
     );
+  }
+
+  @override
+  Future<void> close() {
+    _runId++;
+    _cancelActiveRun();
+    return super.close();
   }
 
   void _log(LogLevel level, String message, {required String tag}) {

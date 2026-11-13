@@ -559,8 +559,10 @@ class ConnectivityRepositoryImpl implements ConnectivityRepository {
   final ConnectivityChecker _checker;
 
   @override
-  Future<ConnectivityPingResult> ping(ConnectivityPingRequest request) =>
-      _checker.ping(request);
+  Future<ConnectivityPingResult> ping(
+    ConnectivityPingRequest request, {
+    Future<void>? cancelSignal,
+  }) => _checker.ping(request, cancelSignal: cancelSignal);
 }
 
 class ProfileTransferRepositoryImpl implements ProfileTransferRepository {

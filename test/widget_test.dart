@@ -24,6 +24,8 @@ import 'support/vpn_channel_mock.dart';
 
 class FakeConnectivityChecker implements ConnectivityChecker {
   final List<ConnectivityPingRequest> requests = <ConnectivityPingRequest>[];
+  final List<Future<void>?> cancelSignals = <Future<void>?>[];
+  int cancelledCount = 0;
   ConnectivityPingResult nextResult = ConnectivityPingResult.success(
     latencyMs: 84,
     statusCode: 204,
@@ -33,8 +35,15 @@ class FakeConnectivityChecker implements ConnectivityChecker {
   List<String> get urls => requests.map((request) => request.url).toList();
 
   @override
-  Future<ConnectivityPingResult> ping(ConnectivityPingRequest request) {
+  Future<ConnectivityPingResult> ping(
+    ConnectivityPingRequest request, {
+    Future<void>? cancelSignal,
+  }) {
     requests.add(request);
+    cancelSignals.add(cancelSignal);
+    if (cancelSignal != null) {
+      unawaited(cancelSignal.then((_) => cancelledCount++));
+    }
     final pending = completer;
     if (pending != null) return pending.future;
     return Future<ConnectivityPingResult>.value(nextResult);
@@ -595,6 +604,84 @@ void main() {
 
     expect(connectivityStatusText(tester), '91 ms');
   });
+
+  testWidgets(
+    'tapping status badge while checking cancels running check and re-runs',
+    (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final methods = <String>[];
+      final firstCompleter = Completer<ConnectivityPingResult>();
+      final secondCompleter = Completer<ConnectivityPingResult>();
+      final checker = FakeConnectivityChecker()..completer = firstCompleter;
+      installVpnChannelMock(methods);
+      addTearDown(uninstallVpnChannelMock);
+      addTearDown(() async {
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.binding.setSurfaceSize(const Size(480, 1200));
+
+      await tester.pumpWidget(
+        TunnelForgeApp(
+          onboardingRepository: const _AcceptedOnboardingRepository(),
+          profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+          connectivityChecker: checker,
+          appVersionRepository: const _FakeAppVersionRepository(),
+          appUpdateRepository: const _FakeAppUpdateRepository(),
+        ),
+      );
+
+      await tester.pump();
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      await simulateHostTunnelState(tester, VpnTunnelState.connected, 'tun0');
+      await tester.pump();
+
+      expect(connectivityStatusText(tester), 'Checking...');
+      expect(checker.requests.length, 1);
+      expect(checker.cancelledCount, 0);
+      final spinnerFinder = find.descendant(
+        of: find.byKey(const Key('connectivity_status_spinner')),
+        matching: find.byType(CircularProgressIndicator),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      final firstSpinnerState = tester.state(spinnerFinder);
+      final firstSpinnerWidget = tester.widget<CircularProgressIndicator>(
+        spinnerFinder,
+      );
+
+      checker.completer = secondCompleter;
+      await tester.tap(find.byKey(const Key('vpn_status_badge')));
+      await tester.pump();
+
+      expect(checker.requests.length, 2);
+      expect(checker.cancelledCount, 1);
+      expect(connectivityStatusText(tester), 'Checking...');
+      final secondSpinnerState = tester.state(spinnerFinder);
+      final secondSpinnerWidget = tester.widget<CircularProgressIndicator>(
+        spinnerFinder,
+      );
+      expect(firstSpinnerState.mounted, isFalse);
+      expect(secondSpinnerState.mounted, isTrue);
+      expect(identical(firstSpinnerState, secondSpinnerState), isFalse);
+      expect(secondSpinnerWidget.key, isNot(equals(firstSpinnerWidget.key)));
+
+      firstCompleter.complete(
+        ConnectivityPingResult.failure(error: 'stale failure'),
+      );
+      await tester.pump();
+      expect(connectivityStatusText(tester), 'Checking...');
+
+      secondCompleter.complete(
+        ConnectivityPingResult.success(latencyMs: 42, statusCode: 204),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(connectivityStatusText(tester), '42 ms');
+    },
+  );
 
   testWidgets('connect does not auto-run connectivity check before connected', (
     WidgetTester tester,

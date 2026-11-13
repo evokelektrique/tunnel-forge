@@ -101,7 +101,10 @@ class ConnectivityPingRequest extends Equatable {
 }
 
 abstract class ConnectivityChecker {
-  Future<ConnectivityPingResult> ping(ConnectivityPingRequest request);
+  Future<ConnectivityPingResult> ping(
+    ConnectivityPingRequest request, {
+    Future<void>? cancelSignal,
+  });
 }
 
 class HttpConnectivityChecker implements ConnectivityChecker {
@@ -114,7 +117,10 @@ class HttpConnectivityChecker implements ConnectivityChecker {
   final HttpClient Function() _clientFactory;
 
   @override
-  Future<ConnectivityPingResult> ping(ConnectivityPingRequest request) async {
+  Future<ConnectivityPingResult> ping(
+    ConnectivityPingRequest request, {
+    Future<void>? cancelSignal,
+  }) async {
     final normalizedUrl = ConnectivityCheckSettings.normalizeUrl(request.url);
     final validationError = ConnectivityCheckSettings.validateUrl(
       normalizedUrl,
@@ -135,41 +141,75 @@ class HttpConnectivityChecker implements ConnectivityChecker {
     client.connectionTimeout = effectiveTimeout;
     client.findProxy = (_) => _proxyDirectiveFor(request);
 
-    final watch = Stopwatch()..start();
-
-    try {
-      final httpRequest = await client.getUrl(uri).timeout(effectiveTimeout);
-      final setupMs = watch.elapsedMilliseconds;
-      httpRequest.followRedirects = true;
-      final response = await httpRequest.close().timeout(effectiveTimeout);
-      final responseMs = watch.elapsedMilliseconds - setupMs;
-      await response.drain<void>().timeout(effectiveTimeout);
-      watch.stop();
-
-      final code = response.statusCode;
-      if (code >= 200 && code < 400) {
-        return ConnectivityPingResult.success(
-          latencyMs: responseMs,
-          statusCode: code,
-          setupMs: setupMs,
-          totalMs: watch.elapsedMilliseconds,
-        );
-      }
-      return ConnectivityPingResult.failure(
-        statusCode: code,
-        error: 'HTTP $code',
-      );
-    } on TimeoutException {
-      return ConnectivityPingResult.failure(error: 'Timed out');
-    } on SocketException catch (e) {
-      return ConnectivityPingResult.failure(error: e.message);
-    } on HttpException catch (e) {
-      return ConnectivityPingResult.failure(error: e.message);
-    } catch (e) {
-      return ConnectivityPingResult.failure(error: '$e');
-    } finally {
+    var clientClosed = false;
+    void closeClient() {
+      if (clientClosed) return;
+      clientClosed = true;
       client.close(force: true);
     }
+
+    Future<ConnectivityPingResult> runPing() async {
+      final watch = Stopwatch()..start();
+
+      try {
+        final httpRequest = await client.getUrl(uri).timeout(effectiveTimeout);
+        final setupMs = watch.elapsedMilliseconds;
+        httpRequest.followRedirects = true;
+        final response = await httpRequest.close().timeout(effectiveTimeout);
+        final responseMs = watch.elapsedMilliseconds - setupMs;
+        await response.drain<void>().timeout(effectiveTimeout);
+        watch.stop();
+
+        final code = response.statusCode;
+        if (code >= 200 && code < 400) {
+          return ConnectivityPingResult.success(
+            latencyMs: responseMs,
+            statusCode: code,
+            setupMs: setupMs,
+            totalMs: watch.elapsedMilliseconds,
+          );
+        }
+        return ConnectivityPingResult.failure(
+          statusCode: code,
+          error: 'HTTP $code',
+        );
+      } on TimeoutException {
+        return ConnectivityPingResult.failure(error: 'Timed out');
+      } on SocketException catch (e) {
+        return ConnectivityPingResult.failure(error: e.message);
+      } on HttpException catch (e) {
+        return ConnectivityPingResult.failure(error: e.message);
+      } catch (e) {
+        return ConnectivityPingResult.failure(error: '$e');
+      } finally {
+        closeClient();
+      }
+    }
+
+    if (cancelSignal == null) {
+      return runPing();
+    }
+
+    final cancelCompleter = Completer<ConnectivityPingResult>();
+    void onCancel() {
+      closeClient();
+      if (!cancelCompleter.isCompleted) {
+        cancelCompleter.complete(
+          ConnectivityPingResult.failure(error: 'Cancelled'),
+        );
+      }
+    }
+
+    unawaited(
+      cancelSignal.then<void>(
+        (_) => onCancel(),
+        onError: (_) => onCancel(),
+      ),
+    );
+    return Future.any<ConnectivityPingResult>([
+      runPing(),
+      cancelCompleter.future,
+    ]);
   }
 
   String _proxyDirectiveFor(ConnectivityPingRequest request) {

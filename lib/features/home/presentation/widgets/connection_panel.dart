@@ -144,6 +144,7 @@ class ConnectionPanel extends StatelessWidget {
     required this.onUnavailablePrimaryTap,
     required this.connectivityBadgeState,
     required this.connectivityBadgeLabel,
+    this.connectivityCheckRunId = 0,
     required this.onConnectivityTap,
     required this.colorScheme,
     required this.textTheme,
@@ -163,6 +164,7 @@ class ConnectionPanel extends StatelessWidget {
   final VoidCallback onUnavailablePrimaryTap;
   final ConnectivityBadgeState connectivityBadgeState;
   final String connectivityBadgeLabel;
+  final int connectivityCheckRunId;
   final VoidCallback onConnectivityTap;
   final ColorScheme colorScheme;
   final TextTheme textTheme;
@@ -537,6 +539,9 @@ class ConnectionPanel extends StatelessWidget {
                                                 height: 12,
                                                 child:
                                                     CircularProgressIndicator(
+                                                      key: ValueKey<int>(
+                                                        connectivityCheckRunId,
+                                                      ),
                                                       strokeWidth: 2,
                                                       color: connectivityColor,
                                                     ),

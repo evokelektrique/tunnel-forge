@@ -830,6 +830,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                       connectivityBadgeLabel: _connectivityBadgeLabel(
                         connectivityState,
                       ),
+                      connectivityCheckRunId: connectivityState.runId,
                       onConnectivityTap: () =>
                           context.read<ConnectivityBloc>().add(
                             ConnectivityRunRequested(
