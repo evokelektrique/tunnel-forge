@@ -346,47 +346,50 @@ void main() {
       expect(p.mtu, 1380);
     });
 
-    test('null secret sets secretsMissing and logs warning without value', () async {
-      final logs = <(LogLevel, String)>[];
-      final loggedStore = ProfileStore(
-        prefsOverride: prefs,
-        secretsOverride: secrets,
-        onLog: (level, message) => logs.add((level, message)),
-      );
-      const profile = Profile(
-        id: 'id-missing',
-        displayName: 'Missing',
-        server: 's.example',
-        user: 'alice',
-        dnsAutomatic: true,
-        dns1Host: '',
-        dns1Protocol: DnsProtocol.dnsOverUdp,
-        dns2Host: '',
-        dns2Protocol: DnsProtocol.dnsOverUdp,
-      );
-      await loggedStore.upsertProfile(
-        profile,
-        password: 'super-secret-password',
-        psk: 'psk1',
-      );
-      await secrets.delete(ProfileStore.passwordKey('id-missing'));
+    test(
+      'null secret sets secretsMissing and logs warning without value',
+      () async {
+        final logs = <(LogLevel, String)>[];
+        final loggedStore = ProfileStore(
+          prefsOverride: prefs,
+          secretsOverride: secrets,
+          onLog: (level, message) => logs.add((level, message)),
+        );
+        const profile = Profile(
+          id: 'id-missing',
+          displayName: 'Missing',
+          server: 's.example',
+          user: 'alice',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+        );
+        await loggedStore.upsertProfile(
+          profile,
+          password: 'super-secret-password',
+          psk: 'psk1',
+        );
+        await secrets.delete(ProfileStore.passwordKey('id-missing'));
 
-      final row = await loggedStore.loadProfileWithSecrets('id-missing');
-      expect(row, isNotNull);
-      expect(row!.secretsMissing, isTrue);
-      expect(row.password, '');
-      expect(row.psk, 'psk1');
-      expect(
-        logs.any(
-          (l) =>
-              l.$1 == LogLevel.warning &&
-              l.$2.contains('id-missing') &&
-              l.$2.contains('password') &&
-              !l.$2.contains('super-secret-password'),
-        ),
-        isTrue,
-      );
-    });
+        final row = await loggedStore.loadProfileWithSecrets('id-missing');
+        expect(row, isNotNull);
+        expect(row!.secretsMissing, isTrue);
+        expect(row.password, '');
+        expect(row.psk, 'psk1');
+        expect(
+          logs.any(
+            (l) =>
+                l.$1 == LogLevel.warning &&
+                l.$2.contains('id-missing') &&
+                l.$2.contains('password') &&
+                !l.$2.contains('super-secret-password'),
+          ),
+          isTrue,
+        );
+      },
+    );
 
     test('throwing SecretStore sets secretsMissing without throwing', () async {
       final logs = <(LogLevel, String)>[];
@@ -417,7 +420,9 @@ void main() {
       expect(row, isNotNull);
       expect(row!.secretsMissing, isTrue);
       expect(
-        logs.where((l) => l.$1 == LogLevel.error && l.$2.contains('PlatformException')),
+        logs.where(
+          (l) => l.$1 == LogLevel.error && l.$2.contains('PlatformException'),
+        ),
         hasLength(2),
       );
     });
@@ -458,7 +463,9 @@ void main() {
         '{not-json',
       );
       expect(
-        logs.any((l) => l.$1 == LogLevel.error && l.$2.contains('FormatException')),
+        logs.any(
+          (l) => l.$1 == LogLevel.error && l.$2.contains('FormatException'),
+        ),
         isTrue,
       );
 
@@ -489,11 +496,7 @@ void main() {
           dns2Host: '',
           dns2Protocol: DnsProtocol.dnsOverUdp,
         ).toJson(),
-        {
-          'id': '',
-          'server': 'secret-host.internal',
-          'user': 'secret-user',
-        },
+        {'id': '', 'server': 'secret-host.internal', 'user': 'secret-user'},
       ]);
       await prefs.setString(ProfileStore.prefsKeyProfilesJson, raw);
 
@@ -508,57 +511,63 @@ void main() {
       expect(errLog, isNot(contains('secret-user')));
     });
 
-    test('upsertProfile leaves profile list unchanged when secret write throws', () async {
-      final throwingWriteStore = _ThrowingWriteSecretStore();
-      final guardedStore = ProfileStore(
-        prefsOverride: prefs,
-        secretsOverride: throwingWriteStore,
-      );
-      const profile = Profile(
-        id: 'id-fail-write',
-        displayName: 'FailWrite',
-        server: 's.example',
-        user: 'alice',
-        dnsAutomatic: true,
-        dns1Host: '',
-        dns1Protocol: DnsProtocol.dnsOverUdp,
-        dns2Host: '',
-        dns2Protocol: DnsProtocol.dnsOverUdp,
-      );
+    test(
+      'upsertProfile leaves profile list unchanged when secret write throws',
+      () async {
+        final throwingWriteStore = _ThrowingWriteSecretStore();
+        final guardedStore = ProfileStore(
+          prefsOverride: prefs,
+          secretsOverride: throwingWriteStore,
+        );
+        const profile = Profile(
+          id: 'id-fail-write',
+          displayName: 'FailWrite',
+          server: 's.example',
+          user: 'alice',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+        );
 
-      await expectLater(
-        guardedStore.upsertProfile(profile, password: 'pw', psk: 'psk'),
-        throwsA(isA<PlatformException>()),
-      );
-      expect(await guardedStore.loadProfiles(), isEmpty);
-    });
+        await expectLater(
+          guardedStore.upsertProfile(profile, password: 'pw', psk: 'psk'),
+          throwsA(isA<PlatformException>()),
+        );
+        expect(await guardedStore.loadProfiles(), isEmpty);
+      },
+    );
 
-    test('checkUpgradeStatusOnce logs once and warns when state is not ok', () async {
-      final logs = <(LogLevel, String)>[];
-      final fakeSecrets = _FakeUpgradeSecretStore(
-        const SecureStorageUpgradeStatus(
-          state: SecureStorageUpgradeState.legacyDataUnreadable,
-          reason: SecureStorageUpgradeReason.decryptFailed,
-          entryCount: 2,
-          willDiscardOnNextAccess: false,
-        ),
-      );
-      final upgradeStore = ProfileStore(
-        prefsOverride: prefs,
-        secretsOverride: fakeSecrets,
-        onLog: (level, message) => logs.add((level, message)),
-      );
+    test(
+      'checkUpgradeStatusOnce logs once and warns when state is not ok',
+      () async {
+        final logs = <(LogLevel, String)>[];
+        final fakeSecrets = _FakeUpgradeSecretStore(
+          const SecureStorageUpgradeStatus(
+            state: SecureStorageUpgradeState.legacyDataUnreadable,
+            reason: SecureStorageUpgradeReason.decryptFailed,
+            entryCount: 2,
+            willDiscardOnNextAccess: false,
+          ),
+        );
+        final upgradeStore = ProfileStore(
+          prefsOverride: prefs,
+          secretsOverride: fakeSecrets,
+          onLog: (level, message) => logs.add((level, message)),
+        );
 
-      await upgradeStore.checkUpgradeStatusOnce();
-      await upgradeStore.checkUpgradeStatusOnce();
+        await upgradeStore.checkUpgradeStatusOnce();
+        await upgradeStore.checkUpgradeStatusOnce();
 
-      expect(fakeSecrets.calls, 1);
-      expect(logs, hasLength(1));
-      expect(logs.single.$1, LogLevel.warning);
-      expect(
-        logs.single.$2,
-        'secure_storage upgrade state=legacyDataUnreadable reason=decryptFailed entries=2 discardNext=false',
-      );
-    });
+        expect(fakeSecrets.calls, 1);
+        expect(logs, hasLength(1));
+        expect(logs.single.$1, LogLevel.warning);
+        expect(
+          logs.single.$2,
+          'secure_storage upgrade state=legacyDataUnreadable reason=decryptFailed entries=2 discardNext=false',
+        );
+      },
+    );
   });
 }

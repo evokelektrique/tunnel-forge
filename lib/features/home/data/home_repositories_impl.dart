@@ -606,7 +606,8 @@ class LogsRepositoryImpl implements LogsRepository {
   bool _hasPendingEmit = false;
   bool _loaded = false;
 
-  DiagnosticsBridge get _bridge => _bridgeOverride ?? DiagnosticsBridge.instance;
+  DiagnosticsBridge get _bridge =>
+      _bridgeOverride ?? DiagnosticsBridge.instance;
 
   @override
   List<LogEntry> get entries =>
@@ -761,7 +762,10 @@ class LogsRepositoryImpl implements LogsRepository {
   String _capUtf8Bytes(String text) {
     final bytes = utf8.encode(text);
     if (bytes.length <= _maxLegacyBlobBytes) return text;
-    return utf8.decode(bytes.sublist(0, _maxLegacyBlobBytes), allowMalformed: true);
+    return utf8.decode(
+      bytes.sublist(0, _maxLegacyBlobBytes),
+      allowMalformed: true,
+    );
   }
 
   List<LogEntry> _parseTail(String tail) {
@@ -784,7 +788,9 @@ class LogsRepositoryImpl implements LogsRepository {
         continue;
       }
       final match = _lineHeaderPattern.firstMatch(line);
-      final parsedTs = match == null ? null : DateTime.tryParse(match.group(1)!);
+      final parsedTs = match == null
+          ? null
+          : DateTime.tryParse(match.group(1)!);
       if (match != null && parsedTs != null) {
         entries.add(
           LogEntry(

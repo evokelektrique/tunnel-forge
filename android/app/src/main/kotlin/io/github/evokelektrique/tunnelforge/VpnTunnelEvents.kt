@@ -3,7 +3,9 @@ package io.github.evokelektrique.tunnelforge
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.annotation.AnyThread
 import androidx.annotation.Keep
+import androidx.annotation.MainThread
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,40 +45,50 @@ object VpnTunnelEvents {
 
     fun consumePendingTerminal(): Map<String, Any?>? = pendingTerminal.consume()
 
-    private fun invokeOnMain(method: String, payload: Map<String, Any?>) {
-        val ch =
-            channel
-                ?: run {
-                    if (method == VpnContract.ON_TUNNEL_STATE) {
-                        pendingTerminal.recordIfTerminal(
-                            payload[VpnContract.ARG_TUNNEL_STATE] as? String,
-                            payload,
-                            System.currentTimeMillis(),
-                        )
-                    }
-                    Log.w(TAG, sanitizeLogMessage("event_drop reason=no_channel method=$method"))
-                    return
-                }
-        val job =
-            Runnable {
-                try {
-                    ch.invokeMethod(method, payload, noopResult)
-                } catch (e: Exception) {
-                    Log.w(
-                        TAG,
-                        sanitizeLogMessage(
-                            "event_drop reason=invoke_exception method=$method err=${e.javaClass.simpleName}:${e.message}",
-                        ),
-                    )
-                }
+    @AnyThread
+    private fun invokeOnMain(
+        method: String,
+        payload: Map<String, Any?>,
+        flushPendingLogsFirst: Boolean = false,
+    ) {
+        val ch = recordDropIfDetached(method, payload) ?: return
+        mainHandler.post {
+            if (flushPendingLogsFirst && !pendingLogEntries.isEmpty()) {
+                flushEngineLogsOnMain(drainAll = true)
             }
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            job.run()
-        } else {
-            mainHandler.post(job)
+            deliverOnMain(ch, method, payload)
         }
     }
 
+    private fun recordDropIfDetached(method: String, payload: Map<String, Any?>): MethodChannel? {
+        val ch = channel
+        if (ch != null) return ch
+        if (method == VpnContract.ON_TUNNEL_STATE) {
+            pendingTerminal.recordIfTerminal(
+                payload[VpnContract.ARG_TUNNEL_STATE] as? String,
+                payload,
+                System.currentTimeMillis(),
+            )
+        }
+        Log.w(TAG, sanitizeLogMessage("event_drop reason=no_channel method=$method"))
+        return null
+    }
+
+    @MainThread
+    private fun deliverOnMain(ch: MethodChannel, method: String, payload: Map<String, Any?>) {
+        try {
+            ch.invokeMethod(method, payload, noopResult)
+        } catch (e: Exception) {
+            Log.w(
+                TAG,
+                sanitizeLogMessage(
+                    "event_drop reason=invoke_exception method=$method err=${e.javaClass.simpleName}:${e.message}",
+                ),
+            )
+        }
+    }
+
+    @AnyThread
     fun emit(state: String, detail: String?, attemptId: String? = null, failure: Map<String, Any>? = null) {
         DiagnosticLog.write(
             Log.INFO,
@@ -84,7 +96,6 @@ object VpnTunnelEvents {
             TAG,
             "tunnel_state state=$state attempt=${attemptId ?: ""} detail=${detail ?: ""}",
         )
-        flushEngineLogsBeforeState()
         invokeOnMain(
             VpnContract.ON_TUNNEL_STATE,
             mapOf(
@@ -93,9 +104,11 @@ object VpnTunnelEvents {
                 VpnContract.ARG_TUNNEL_DETAIL to (detail ?: ""),
                 VpnContract.ARG_TUNNEL_FAILURE to failure,
             ),
+            flushPendingLogsFirst = true,
         )
     }
 
+    @AnyThread
     fun emitProxyExposureChanged(exposure: ProxyExposureInfo) {
         invokeOnMain(
             VpnContract.ON_PROXY_EXPOSURE_CHANGED,
@@ -135,15 +148,7 @@ object VpnTunnelEvents {
         }
     }
 
-    private fun flushEngineLogsBeforeState() {
-        if (pendingLogEntries.isEmpty()) return
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            flushEngineLogsOnMain(drainAll = true)
-        } else {
-            mainHandler.post { flushEngineLogsOnMain(drainAll = true) }
-        }
-    }
-
+    @MainThread
     private fun flushEngineLogsOnMain(drainAll: Boolean) {
         flushScheduled.set(false)
         do {
@@ -153,10 +158,11 @@ object VpnTunnelEvents {
                 batch.add(entry)
             }
             if (batch.isNotEmpty()) {
-                invokeOnMain(
-                    VpnContract.ON_ENGINE_LOG_BATCH,
-                    mapOf(VpnContract.ARG_ENGINE_LOG_ENTRIES to batch),
-                )
+                val payload = mapOf(VpnContract.ARG_ENGINE_LOG_ENTRIES to batch)
+                val ch = recordDropIfDetached(VpnContract.ON_ENGINE_LOG_BATCH, payload)
+                if (ch != null) {
+                    deliverOnMain(ch, VpnContract.ON_ENGINE_LOG_BATCH, payload)
+                }
             }
         } while (drainAll && !pendingLogEntries.isEmpty())
         if (!pendingLogEntries.isEmpty() && flushScheduled.compareAndSet(false, true)) {

@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_localizations/flutter_localizations.dart'
+    show GlobalWidgetsLocalizations;
 import 'package:get_it/get_it.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';

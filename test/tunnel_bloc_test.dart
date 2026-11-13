@@ -428,7 +428,7 @@ void main() {
         connectionMode: ConnectionMode.vpnTunnel,
         activeAttemptId: 'attempt-current',
       ),
-        TunnelState(
+      TunnelState(
         tunnelUp: true,
         connectionMode: ConnectionMode.vpnTunnel,
         activeAttemptId: 'attempt-current',

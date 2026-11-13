@@ -175,11 +175,14 @@ class MainActivity : FlutterActivity() {
         vpnChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 VpnContract.LIST_VPN_CANDIDATE_APPS -> {
-                    try {
-                        result.success(installedAppsForVpnPicker())
-                    } catch (e: Exception) {
-                        AppLog.e(TAG, "listVpnCandidateApps failed", e)
-                        result.error("list_apps_failed", e.message, null)
+                    diagnosticsExecutor.execute {
+                        try {
+                            val apps = installedAppsForVpnPicker()
+                            mainHandler.post { result.success(apps) }
+                        } catch (e: Exception) {
+                            AppLog.e(TAG, "listVpnCandidateApps failed", e)
+                            mainHandler.post { result.error("list_apps_failed", e.message, null) }
+                        }
                     }
                 }
                 VpnContract.GET_APP_ICON -> {
@@ -188,14 +191,17 @@ class MainActivity : FlutterActivity() {
                         result.error("bad_args", "package name required", null)
                         return@setMethodCallHandler
                     }
-                    try {
-                        val drawable = packageManager.getApplicationIcon(pkg)
-                        val sizePx = (40 * resources.displayMetrics.density).toInt().coerceIn(32, 128)
-                        val png = drawableToPngBytes(drawable, sizePx)
-                        result.success(png)
-                    } catch (e: Exception) {
-                        AppLog.w(TAG, "getAppIcon failed for $pkg: ${e.message}")
-                        result.success(null)
+                    val sizePx = (40 * resources.displayMetrics.density).toInt().coerceIn(32, 128)
+                    diagnosticsExecutor.execute {
+                        val png =
+                            try {
+                                val drawable = packageManager.getApplicationIcon(pkg)
+                                drawableToPngBytes(drawable, sizePx)
+                            } catch (e: Exception) {
+                                AppLog.w(TAG, "getAppIcon failed for $pkg: ${e.message}")
+                                null
+                            }
+                        mainHandler.post { result.success(png) }
                     }
                 }
                 VpnContract.PREPARE_VPN -> {

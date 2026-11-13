@@ -115,8 +115,7 @@ class VpnClient {
     final source = LogSource.parse(
       raw[VpnContract.argEngineLogSource]?.toString(),
     );
-    final tag =
-        raw[VpnContract.argEngineLogTag]?.toString() ?? 'tunnel_engine';
+    final tag = raw[VpnContract.argEngineLogTag]?.toString() ?? 'tunnel_engine';
     final message = raw[VpnContract.argEngineLogMessage]?.toString() ?? '';
     _onEngineLog?.call(
       LogLevel.fromAndroidPriority(level),

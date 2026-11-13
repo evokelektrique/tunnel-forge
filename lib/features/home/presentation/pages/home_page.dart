@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:get_it/get_it.dart';
@@ -476,7 +476,10 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(
-          AppText.pick('Include native crash dump?', 'ضمیمه‌کردن دامپ کرش بومی؟'),
+          AppText.pick(
+            'Include native crash dump?',
+            'ضمیمه‌کردن دامپ کرش بومی؟',
+          ),
         ),
         content: Text(
           AppText.pick(

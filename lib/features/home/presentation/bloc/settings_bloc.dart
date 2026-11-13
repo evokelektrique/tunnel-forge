@@ -403,11 +403,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     if (result.outcome == BatteryOptimizationRequestOutcome.settingsOpened) {
       _pendingExternalBatterySettingsLog = true;
     }
-    _logBatteryOptimization(
-      action: logAction,
-      status: status,
-      result: result,
-    );
+    _logBatteryOptimization(action: logAction, status: status, result: result);
     emit(
       state.copyWith(
         batteryOptimizationBusy: false,
@@ -425,7 +421,8 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     required BatteryOptimizationStatus status,
     BatteryOptimizationRequestResult? result,
   }) {
-    final isFailure = result?.outcome == BatteryOptimizationRequestOutcome.failed;
+    final isFailure =
+        result?.outcome == BatteryOptimizationRequestOutcome.failed;
     if (!isFailure && status.state == BatteryOptimizationState.allowed) {
       if (_batteryUnrestrictedLoggedThisSession) return;
       _batteryUnrestrictedLoggedThisSession = true;

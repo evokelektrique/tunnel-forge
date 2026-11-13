@@ -125,7 +125,10 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
       final secrets = MemorySecretStore();
-      final store = ProfileStore(prefsOverride: prefs, secretsOverride: secrets);
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: secrets,
+      );
       const profile = Profile(
         id: 'missing-secret-share',
         displayName: 'Office',

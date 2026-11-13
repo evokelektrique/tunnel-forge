@@ -8,6 +8,10 @@
 }
 
 # Netty probes optional JVM/server integrations that are not present on Android.
+-dontwarn java.lang.Module
+-dontwarn java.lang.ProcessHandle
+-dontwarn java.lang.foreign.**
+-dontwarn java.lang.management.**
 -dontwarn jdk.jfr.**
 -dontwarn org.apache.log4j.**
 -dontwarn org.apache.logging.log4j.**

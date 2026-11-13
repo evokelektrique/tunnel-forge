@@ -433,9 +433,7 @@ class ProfileStore {
     }
   }
 
-  Future<
-    ({Profile profile, String password, String psk, bool secretsMissing})?
-  >
+  Future<({Profile profile, String password, String psk, bool secretsMissing})?>
   loadProfileWithSecrets(String id) async {
     final list = await loadProfiles();
     Profile? profile;

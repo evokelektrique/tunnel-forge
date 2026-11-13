@@ -12,20 +12,21 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-  archive: ^4.6.0
+  archive: ^4.7.1
   bloc: ^9.2.1
   cross_file: ^0.3.5+5
   cupertino_icons: ^2.0.0
-  file_picker: ^13.3.2
+  cupertino_ui: ^1.1.6
+  file_picker: ^13.3.3
   equatable: ^3.0.0
   flutter_bloc: ^9.1.1
   flutter_secure_storage: ^11.2.0
   get_it: ^9.3.0
+  material_ui: ^1.11.0
   package_info_plus: ^10.2.2
   share_plus: ^13.3.1
   shared_preferences: ^2.5.6
   url_launcher: ^6.3.3
-
 dev_dependencies:
   bloc_test: ^10.0.0
   flutter_test:
