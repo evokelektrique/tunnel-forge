@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
 import 'package:flutter/material.dart';
@@ -18,6 +17,7 @@ import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/presentation/profile_editor_sheet.dart';
 import 'package:tunnel_forge/features/profiles/presentation/profile_picker_sheet.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
+import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/home/presentation/widgets/connection_panel.dart';
 import 'package:tunnel_forge/features/home/presentation/widgets/logs_panel.dart';
@@ -471,43 +471,64 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     );
   }
 
-  Future<void> _shareDebugLogs(LogsState logsState) async {
-    // Debug display level includes all severities, so export all buffered logs.
-    final debugLevelLogs = logsState.entries;
-    if (debugLevelLogs.isEmpty) {
-      _toast(
-        AppText.pick(
-          'No debug logs to share',
-          'گزارش دیباگی برای اشتراک‌گذاری نیست',
+  Future<bool> _promptIncludeTombstone() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          AppText.pick('Include native crash dump?', 'ضمیمه‌کردن دامپ کرش بومی؟'),
         ),
-      );
-      return;
-    }
-    final content = debugLevelLogs
-        .map((entry) => entry.toPlainText())
-        .join('\n');
-    final bytes = Uint8List.fromList(utf8.encode(content));
-    final now = DateTime.now();
-    final month = now.month.toString().padLeft(2, '0');
-    final day = now.day.toString().padLeft(2, '0');
-    final hour = now.hour.toString().padLeft(2, '0');
-    final minute = now.minute.toString().padLeft(2, '0');
-    final second = now.second.toString().padLeft(2, '0');
-    final fileName =
-        'tunnel_forge_debug_logs_${now.year}$month${day}_$hour$minute$second.txt';
+        content: Text(
+          AppText.pick(
+            'Include native crash dump? It may contain memory contents from the crashed process.',
+            'آیا دامپ کرش بومی ضمیمه شود؟ ممکن است شامل محتوای حافظهٔ فرایند کرش‌شده باشد.',
+          ),
+        ),
+        actions: [
+          FilledButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(AppText.pick('No', 'خیر')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(AppText.pick('Yes', 'بله')),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _shareDebugLogs(LogsState logsState) async {
     try {
+      final bridge = DiagnosticsBridge.instance;
+      var includeTombstone = false;
+      if (await bridge.hasTombstone()) {
+        if (!mounted) return;
+        includeTombstone = await _promptIncludeTombstone();
+        if (!mounted) return;
+      }
+      final paths = await bridge.exportLogs(includeTombstone: includeTombstone);
+      if (paths.isEmpty) {
+        _toast(
+          AppText.pick(
+            'No debug logs to share',
+            'گزارش دیباگی برای اشتراک‌گذاری نیست',
+          ),
+        );
+        return;
+      }
       await SharePlus.instance.share(
         ShareParams(
-          files: [XFile.fromData(bytes, mimeType: 'text/plain')],
-          fileNameOverrides: [fileName],
+          files: paths.map((path) => XFile(path)).toList(growable: false),
           title: 'Share TunnelForge debug logs',
         ),
       );
-      final count = debugLevelLogs.length;
       _toast(
         AppText.pick(
-          'Prepared $count ${count == 1 ? 'debug line' : 'debug lines'} for sharing',
-          '$count خط دیباگ برای اشتراک‌گذاری آماده شد',
+          'Prepared debug log archive for sharing',
+          'فایل گزارش دیباگ برای اشتراک‌گذاری آماده شد',
         ),
       );
     } catch (_) {

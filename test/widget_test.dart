@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
 import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
@@ -17,6 +18,7 @@ import 'package:tunnel_forge/app/theme/app_theme.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_contract.dart';
 import 'package:tunnel_forge/features/home/presentation/widgets/connection_panel.dart';
 
+import 'support/fake_diagnostics_bridge.dart';
 import 'support/host_to_dart_channel.dart';
 import 'support/vpn_channel_mock.dart';
 
@@ -1717,5 +1719,76 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Profile details'), findsOneWidget);
+  });
+
+  testWidgets('share debug logs uses DiagnosticsBridge and prompts on tombstone', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final previousBridge = DiagnosticsBridge.instance;
+    final fakeBridge = FakeDiagnosticsBridge()
+      ..tombstoneAvailable = true
+      ..exportPaths = <String>['/tmp/tunnel_forge_logs_1.txt'];
+    DiagnosticsBridge.instance = fakeBridge;
+    addTearDown(() => DiagnosticsBridge.instance = previousBridge);
+
+    final shareCalls = <MethodCall>[];
+    const shareChannel = MethodChannel('dev.fluttercommunity.plus/share');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(shareChannel, (call) async {
+          shareCalls.add(call);
+          return 'dev.fluttercommunity.plus/share/success';
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(shareChannel, null);
+    });
+
+    installVpnChannelMock(<String>[]);
+    addTearDown(uninstallVpnChannelMock);
+    addTearDown(() async {
+      await tester.binding.setSurfaceSize(null);
+    });
+    await tester.binding.setSurfaceSize(const Size(480, 1200));
+
+    await tester.pumpWidget(
+      TunnelForgeApp(
+        onboardingRepository: const _AcceptedOnboardingRepository(),
+        profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
+      ),
+    );
+
+    await tester.pump();
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    await simulateHostEngineLog(
+      tester,
+      priority: 4,
+      source: 'kotlin',
+      tag: 'MainActivity',
+      message: 'ready',
+    );
+
+    await tester.tap(find.text('Logs'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.tap(find.byTooltip('Share debug logs'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'Include native crash dump? It may contain memory contents from the crashed process.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('No'));
+    await tester.pumpAndSettle();
+
+    expect(fakeBridge.lastExportIncludeTombstone, isFalse);
+    expect(shareCalls, hasLength(1));
   });
 }

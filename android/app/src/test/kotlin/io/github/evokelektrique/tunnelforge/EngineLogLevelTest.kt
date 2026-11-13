@@ -12,6 +12,9 @@ class EngineLogLevelTest {
         assertEquals(EngineLogLevel.DEBUG, EngineLogLevel.fromWireValue(null))
         assertEquals(EngineLogLevel.DEBUG, EngineLogLevel.fromWireValue("unknown"))
         assertEquals(EngineLogLevel.DEBUG, EngineLogLevel.fromWireValue("debug"))
+        assertEquals(EngineLogLevel.ERROR, EngineLogLevel.fromWireValue("error"))
+        assertEquals(EngineLogLevel.WARNING, EngineLogLevel.fromWireValue("warning"))
+        assertEquals(EngineLogLevel.INFO, EngineLogLevel.fromWireValue("info"))
     }
 
     @Test

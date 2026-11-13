@@ -14,7 +14,7 @@
 
     <application
         android:label="@string/app_name"
-        android:name="${applicationName}"
+        android:name=".TunnelForgeApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher">
         <activity

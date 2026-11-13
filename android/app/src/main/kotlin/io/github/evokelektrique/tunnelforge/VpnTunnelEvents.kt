@@ -56,6 +56,12 @@ object VpnTunnelEvents {
     }
 
     fun emit(state: String, detail: String?, attemptId: String? = null, failure: Map<String, Any>? = null) {
+        DiagnosticLog.write(
+            Log.INFO,
+            VpnContract.LOG_SOURCE_KOTLIN,
+            TAG,
+            "tunnel_state state=$state attempt=${attemptId ?: ""} detail=${detail ?: ""}",
+        )
         invokeOnMain(
             VpnContract.ON_TUNNEL_STATE,
             mapOf(
@@ -91,6 +97,7 @@ object VpnTunnelEvents {
         source: String = VpnContract.LOG_SOURCE_KOTLIN,
     ) {
         val sanitizedMessage = sanitizeLogMessage(message)
+        DiagnosticLog.write(priority, source, tag, sanitizedMessage)
         if (!shouldForwardEngineLog(priority)) return
         invokeOnMain(
             VpnContract.ON_ENGINE_LOG,

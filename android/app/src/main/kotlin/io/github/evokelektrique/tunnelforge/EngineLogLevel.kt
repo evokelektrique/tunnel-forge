@@ -24,6 +24,7 @@ enum class EngineLogLevel(val wireValue: String) {
             when (raw?.trim()?.lowercase()) {
                 "info" -> INFO
                 "warning" -> WARNING
+                "error" -> ERROR
                 "debug" -> DEBUG
                 else -> DEBUG
             }

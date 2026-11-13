@@ -710,7 +710,7 @@ class TunnelVpnService : VpnService() {
             }
             nativeLoopStarted = true
             loopThread.start()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (shouldHandleAttempt(attemptId, "startTunnel-exception")) {
                 AppLog.e(TAG, "${prefixAttempt(attemptId)}startTunnel", e)
                 VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}startTunnel exception=${e.javaClass.simpleName}:${e.message}")

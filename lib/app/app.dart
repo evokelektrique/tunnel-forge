@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get_it/get_it.dart';
 
+import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
@@ -169,6 +172,23 @@ class _AppLoadingView extends StatelessWidget {
   }
 }
 
+void _appendGlobalError(String tag, Object error, StackTrace? stack) {
+  final message = stack == null ? '$error' : '$error\n$stack';
+  unawaited(
+    DiagnosticsBridge.instance
+        .appendLogs(<Map<String, Object?>>[
+          <String, Object?>{
+            DiagnosticsContract.argTs: DateTime.now().millisecondsSinceEpoch,
+            DiagnosticsContract.argLevel: 'error',
+            DiagnosticsContract.argSource: 'dart',
+            DiagnosticsContract.argTag: tag,
+            DiagnosticsContract.argMessage: message,
+          },
+        ])
+        .catchError((_) {}),
+  );
+}
+
 void installGlobalErrorHooks() {
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
@@ -176,11 +196,17 @@ void installGlobalErrorHooks() {
     if (details.stack != null) {
       debugPrintStack(stackTrace: details.stack);
     }
+    _appendGlobalError(
+      'FlutterError',
+      details.exceptionAsString(),
+      details.stack,
+    );
   };
 
   PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
     debugPrint('PlatformDispatcher.onError: $error');
     debugPrintStack(stackTrace: stack);
+    _appendGlobalError('PlatformDispatcher', error, stack);
     return true;
   };
 }

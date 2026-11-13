@@ -174,7 +174,6 @@ static mbedtls_ctr_drbg_context s_esp_drbg;
 static int s_esp_drbg_inited;
 static int s_esp_logged_inner_ports;
 static unsigned s_esp_send_profile_logs;
-static unsigned s_esp_keymap_profile_once;
 
 typedef struct {
   uint64_t spi_mismatch;
@@ -690,16 +689,6 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
   memcpy(buf + off, mac, 12);
   off += 12;
   ssize_t sent = sendto(fd, buf, off, 0, peer, peer_len);
-  if (s_esp_keymap_profile_once == 0) {
-    s_esp_keymap_profile_once = 1;
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                      "esp key profile one-shot: out_spi=%08x in_spi=%08x out_enc=%02x%02x%02x%02x "
-                      "out_auth=%02x%02x%02x%02x in_enc=%02x%02x%02x%02x in_auth=%02x%02x%02x%02x",
-                      (unsigned)k->spi_i, (unsigned)k->spi_r, k->enc_key[0], k->enc_key[1], k->enc_key[2],
-                      k->enc_key[3], k->auth_key[0], k->auth_key[1], k->auth_key[2], k->auth_key[3], k->enc_key[16],
-                      k->enc_key[17], k->enc_key[18], k->enc_key[19], k->auth_key[20], k->auth_key[21], k->auth_key[22],
-                      k->auth_key[23]);
-  }
   if (s_esp_send_profile_logs < 8) {
     s_esp_send_profile_logs++;
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,

@@ -28,6 +28,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -45,6 +46,10 @@ class MainActivity : FlutterActivity() {
     private var profileTransferConsumerReady = false
     private val pendingProfileTransfers = mutableListOf<Map<String, String?>>()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val diagnosticsExecutor =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "tf-diagnostics").apply { isDaemon = true }
+        }
     private val profileTransferExecutor =
         ThreadPoolExecutor(
             0,
@@ -105,6 +110,59 @@ class MainActivity : FlutterActivity() {
                     } catch (e: Exception) {
                         AppLog.e(TAG, "getInstalledVersion failed", e)
                         result.error("app_info_failed", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        val diagnosticsChannel =
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                DiagnosticsContract.METHOD_CHANNEL,
+            )
+        diagnosticsChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                DiagnosticsContract.APPEND_LOGS -> {
+                    val entries = call.arguments as? List<*>
+                    if (entries != null) {
+                        for (raw in entries) {
+                            val item = raw as? Map<*, *> ?: continue
+                            val ts = (item[DiagnosticsContract.ARG_TS] as? Number)?.toLong() ?: System.currentTimeMillis()
+                            val priority = priorityFromDartLevel(item[DiagnosticsContract.ARG_LEVEL]?.toString())
+                            val source =
+                                item[DiagnosticsContract.ARG_SOURCE]?.toString()?.takeIf { it.isNotBlank() }
+                                    ?: VpnContract.LOG_SOURCE_DART
+                            val tag = item[DiagnosticsContract.ARG_TAG]?.toString() ?: ""
+                            val message = item[DiagnosticsContract.ARG_MESSAGE]?.toString() ?: ""
+                            DiagnosticLog.write(priority, source, tag, message, ts)
+                        }
+                    }
+                    result.success(null)
+                }
+                DiagnosticsContract.READ_LOG_TAIL -> {
+                    val args = call.arguments as? Map<*, *>
+                    val maxLines = (args?.get(DiagnosticsContract.ARG_MAX_LINES) as? Number)?.toInt() ?: 5000
+                    diagnosticsExecutor.execute {
+                        val tail = DiagnosticLog.readTail(maxLines)
+                        mainHandler.post { result.success(tail) }
+                    }
+                }
+                DiagnosticsContract.EXPORT_LOGS -> {
+                    val args = call.arguments as? Map<*, *>
+                    val includeTombstone = args?.get(DiagnosticsContract.ARG_INCLUDE_TOMBSTONE) == true
+                    val targetCacheDir = cacheDir
+                    diagnosticsExecutor.execute {
+                        val paths = DiagnosticLog.exportPaths(targetCacheDir, includeTombstone)
+                        mainHandler.post { result.success(paths) }
+                    }
+                }
+                DiagnosticsContract.HAS_TOMBSTONE -> {
+                    result.success(DiagnosticLog.hasTombstone())
+                }
+                DiagnosticsContract.CLEAR_LOGS -> {
+                    diagnosticsExecutor.execute {
+                        DiagnosticLog.clear()
+                        mainHandler.post { result.success(null) }
                     }
                 }
                 else -> result.notImplemented()
@@ -401,6 +459,7 @@ class MainActivity : FlutterActivity() {
         profileTransferChannel = null
         mainHandler.removeCallbacksAndMessages(PROFILE_IMPORT_CALLBACK_TOKEN)
         profileTransferExecutor.shutdownNow()
+        diagnosticsExecutor.shutdownNow()
         VpnTunnelEvents.detach()
         super.onDestroy()
     }
@@ -940,6 +999,14 @@ class MainActivity : FlutterActivity() {
             isDaemon = true
         }.start()
     }
+
+    private fun priorityFromDartLevel(level: String?): Int =
+        when (level?.trim()?.lowercase()) {
+            "debug" -> Log.DEBUG
+            "warning", "warn" -> Log.WARN
+            "error" -> Log.ERROR
+            else -> Log.INFO
+        }
 
     private fun closeStreamQuietly(stream: InputStream?) {
         if (stream == null) return
