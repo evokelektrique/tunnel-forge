@@ -47,4 +47,31 @@ class PendingTerminalHolderTest {
         assertEquals(400L, consumed?.get(PendingTerminalHolder.ARG_TIMESTAMP_MS))
         assertNull(holder.consume())
     }
+
+    @Test
+    fun stoppedForSameAttemptDoesNotOverwritePendingFailed() {
+        val holder = PendingTerminalHolder()
+        holder.recordIfTerminal(
+            VpnContract.TUNNEL_FAILED,
+            mapOf(
+                VpnContract.ARG_ATTEMPT_ID to "attempt-1",
+                VpnContract.ARG_TUNNEL_STATE to VpnContract.TUNNEL_FAILED,
+                VpnContract.ARG_TUNNEL_DETAIL to "L2TP handshake failed",
+            ),
+            100L,
+        )
+        holder.recordIfTerminal(
+            VpnContract.TUNNEL_STOPPED,
+            mapOf(
+                VpnContract.ARG_ATTEMPT_ID to "attempt-1",
+                VpnContract.ARG_TUNNEL_STATE to VpnContract.TUNNEL_STOPPED,
+                VpnContract.ARG_TUNNEL_DETAIL to "Stopped",
+            ),
+            120L,
+        )
+
+        val consumed = holder.consume()
+        assertEquals(VpnContract.TUNNEL_FAILED, consumed?.get(VpnContract.ARG_TUNNEL_STATE))
+        assertEquals("L2TP handshake failed", consumed?.get(VpnContract.ARG_TUNNEL_DETAIL))
+    }
 }

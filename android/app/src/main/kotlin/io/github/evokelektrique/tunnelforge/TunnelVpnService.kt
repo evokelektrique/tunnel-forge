@@ -361,6 +361,19 @@ class TunnelVpnService : VpnService() {
 
     private fun stopServiceForAttempt(attemptId: String) {
         if (!shouldHandleAttempt(attemptId, "stop-service")) return
+        synchronized(sessionLock) {
+            if (setupThread === Thread.currentThread()) {
+                setupThread = null
+            }
+            if (activeAttemptId == attemptId) {
+                activeAttemptId = ""
+            }
+        }
+        running.set(false)
+        activeProxyConfig = null
+        activeServer = ""
+        activeProfileName = null
+        connectedEmitted.set(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
