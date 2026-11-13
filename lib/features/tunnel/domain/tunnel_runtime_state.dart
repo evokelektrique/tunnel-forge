@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'package:tunnel_forge/features/home/domain/home_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_contract.dart';
 
@@ -10,6 +11,7 @@ class TunnelRuntimeState extends Equatable {
     required this.connectionMode,
     this.attemptId = '',
     this.proxyExposure,
+    this.lastTerminal,
   });
 
   const TunnelRuntimeState.idle()
@@ -24,6 +26,7 @@ class TunnelRuntimeState extends Equatable {
   final ConnectionMode connectionMode;
   final String attemptId;
   final ProxyExposure? proxyExposure;
+  final TunnelHostUpdate? lastTerminal;
 
   @override
   List<Object?> get props => [
@@ -32,5 +35,6 @@ class TunnelRuntimeState extends Equatable {
     connectionMode,
     attemptId,
     proxyExposure,
+    lastTerminal,
   ];
 }

@@ -55,7 +55,7 @@ void main() {
               case VpnContract.setLogLevel:
               case VpnContract.connect:
               case VpnContract.disconnect:
-              case VpnContract.onEngineLog:
+              case VpnContract.onEngineLogBatch:
                 return null;
               case VpnContract.listVpnCandidateApps:
                 return <Map<String, String>>[];
@@ -308,6 +308,36 @@ void main() {
       );
     });
 
+    test('getRuntimeState parses pending lastTerminal payload when stopped', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (
+            call,
+          ) async {
+            expect(call.method, VpnContract.getRuntimeState);
+            return <String, Object?>{
+              VpnContract.argTunnelState: VpnTunnelState.stopped,
+              VpnContract.argTunnelDetail: 'Idle',
+              VpnContract.argAttemptId: '',
+              VpnContract.argConnectionMode: ConnectionMode.vpnTunnel.jsonValue,
+              VpnContract.argLastTerminal: <String, Object?>{
+                VpnContract.argTunnelState: VpnTunnelState.failed,
+                VpnContract.argTunnelDetail: 'PPP negotiation failed.',
+                VpnContract.argAttemptId: 'attempt-7',
+                VpnContract.argTunnelFailure: <String, Object?>{
+                  'namespace': 'mschap',
+                  'code': 691,
+                },
+              },
+            };
+          });
+      final state = await VpnClient().getRuntimeState();
+      expect(state.state, VpnTunnelState.stopped);
+      expect(state.lastTerminal?.state, VpnTunnelState.failed);
+      expect(state.lastTerminal?.detail, 'PPP negotiation failed.');
+      expect(state.lastTerminal?.attemptId, 'attempt-7');
+      expect(state.lastTerminal?.failure?.code, '691');
+    });
+
     test('getRuntimeState returns idle on platform error', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (
@@ -367,26 +397,29 @@ void main() {
       });
     });
 
-    test('engine log callback parses source when present', () async {
-      LogLevel? seenLevel;
-      LogSource? seenSource;
-      String? seenTag;
-      String? seenMessage;
+    test('engine log batch callback parses source and preserves entry order', () async {
+      final seen = <(LogLevel, LogSource, String, String)>[];
       final client = VpnClient(
         onEngineLog: (level, source, tag, message) {
-          seenLevel = level;
-          seenSource = source;
-          seenTag = tag;
-          seenMessage = message;
+          seen.add((level, source, tag, message));
         },
       );
       const codec = StandardMethodCodec();
       final data = codec.encodeMethodCall(
-        const MethodCall(VpnContract.onEngineLog, <String, Object?>{
-          VpnContract.argEngineLogLevel: 5,
-          VpnContract.argEngineLogSource: 'native',
-          VpnContract.argEngineLogTag: 'tunnel_engine',
-          VpnContract.argEngineLogMessage: 'hello',
+        const MethodCall(VpnContract.onEngineLogBatch, <String, Object?>{
+          VpnContract.argEngineLogEntries: <Map<String, Object?>>[
+            <String, Object?>{
+              VpnContract.argEngineLogLevel: 5,
+              VpnContract.argEngineLogSource: 'native',
+              VpnContract.argEngineLogTag: 'tunnel_engine',
+              VpnContract.argEngineLogMessage: 'hello',
+            },
+            <String, Object?>{
+              VpnContract.argEngineLogLevel: 4,
+              VpnContract.argEngineLogTag: 'MainActivity',
+              VpnContract.argEngineLogMessage: 'world',
+            },
+          ],
         }),
       );
       await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -394,35 +427,10 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       client.dispose();
 
-      expect(seenLevel, LogLevel.warning);
-      expect(seenSource, LogSource.native);
-      expect(seenTag, 'tunnel_engine');
-      expect(seenMessage, 'hello');
-    });
-
-    test('engine log callback defaults source to kotlin when absent', () async {
-      LogSource? seenSource;
-      final client = VpnClient(
-        onEngineLog: (_, source, tag, message) {
-          expect(tag, 'MainActivity');
-          expect(message, 'hello');
-          seenSource = source;
-        },
-      );
-      const codec = StandardMethodCodec();
-      final data = codec.encodeMethodCall(
-        const MethodCall(VpnContract.onEngineLog, <String, Object?>{
-          VpnContract.argEngineLogLevel: 4,
-          VpnContract.argEngineLogTag: 'MainActivity',
-          VpnContract.argEngineLogMessage: 'hello',
-        }),
-      );
-      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .handlePlatformMessage(VpnContract.channel, data, (ByteData? _) {});
-      await Future<void>.delayed(Duration.zero);
-      client.dispose();
-
-      expect(seenSource, LogSource.kotlin);
+      expect(seen, [
+        (LogLevel.warning, LogSource.native, 'tunnel_engine', 'hello'),
+        (LogLevel.info, LogSource.kotlin, 'MainActivity', 'world'),
+      ]);
     });
 
     test('proxy exposure callback parses runtime address', () async {

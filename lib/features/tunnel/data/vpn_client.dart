@@ -45,41 +45,26 @@ class VpnClient {
 
   Future<dynamic> _handleHostCall(MethodCall call) async {
     if (call.method == VpnContract.onTunnelState) {
-      final raw = call.arguments;
-      if (raw is Map) {
-        final state = raw[VpnContract.argTunnelState]?.toString() ?? '';
-        final detail = raw[VpnContract.argTunnelDetail]?.toString() ?? '';
-        final attemptId = raw[VpnContract.argAttemptId]?.toString() ?? '';
-        final failure = raw[VpnContract.argTunnelFailure] == null
-            ? null
-            : TunnelFailure.fromMap(
-                raw[VpnContract.argTunnelFailure],
-                detail: redactLogMessage(detail),
-              );
-        _onTunnelState?.call(state, detail, attemptId, failure);
+      final update = _parseTunnelHostUpdate(call.arguments);
+      if (update != null) {
+        _onTunnelState?.call(
+          update.state,
+          update.detail,
+          update.attemptId,
+          update.failure,
+        );
       }
       return;
     }
-    if (call.method == VpnContract.onEngineLog) {
+    if (call.method == VpnContract.onEngineLogBatch) {
       final raw = call.arguments;
       if (raw is Map) {
-        final levelRaw = raw[VpnContract.argEngineLogLevel];
-        final level = switch (levelRaw) {
-          int v => v,
-          _ => int.tryParse(levelRaw?.toString() ?? '') ?? 4,
-        };
-        final source = LogSource.parse(
-          raw[VpnContract.argEngineLogSource]?.toString(),
-        );
-        final tag =
-            raw[VpnContract.argEngineLogTag]?.toString() ?? 'tunnel_engine';
-        final message = raw[VpnContract.argEngineLogMessage]?.toString() ?? '';
-        _onEngineLog?.call(
-          LogLevel.fromAndroidPriority(level),
-          source,
-          tag,
-          message,
-        );
+        final entries = raw[VpnContract.argEngineLogEntries];
+        if (entries is List) {
+          for (final entry in entries) {
+            _dispatchEngineLog(entry);
+          }
+        }
       }
       return;
     }
@@ -99,6 +84,46 @@ class VpnClient {
         _onProxyExposureChanged?.call(exposure);
       }
     }
+  }
+
+  TunnelHostUpdate? _parseTunnelHostUpdate(Object? raw) {
+    if (raw is! Map) return null;
+    final state = raw[VpnContract.argTunnelState]?.toString() ?? '';
+    final detail = raw[VpnContract.argTunnelDetail]?.toString() ?? '';
+    final attemptId = raw[VpnContract.argAttemptId]?.toString() ?? '';
+    final failure = raw[VpnContract.argTunnelFailure] == null
+        ? null
+        : TunnelFailure.fromMap(
+            raw[VpnContract.argTunnelFailure],
+            detail: redactLogMessage(detail),
+          );
+    return TunnelHostUpdate(
+      state: state,
+      detail: detail,
+      attemptId: attemptId,
+      failure: failure,
+    );
+  }
+
+  void _dispatchEngineLog(Object? raw) {
+    if (raw is! Map) return;
+    final levelRaw = raw[VpnContract.argEngineLogLevel];
+    final level = switch (levelRaw) {
+      int v => v,
+      _ => int.tryParse(levelRaw?.toString() ?? '') ?? 4,
+    };
+    final source = LogSource.parse(
+      raw[VpnContract.argEngineLogSource]?.toString(),
+    );
+    final tag =
+        raw[VpnContract.argEngineLogTag]?.toString() ?? 'tunnel_engine';
+    final message = raw[VpnContract.argEngineLogMessage]?.toString() ?? '';
+    _onEngineLog?.call(
+      LogLevel.fromAndroidPriority(level),
+      source,
+      tag,
+      message,
+    );
   }
 
   /// Clears the inbound method handler; call when the owning widget is disposed.
@@ -140,6 +165,7 @@ class VpnClient {
         connectionMode: mode,
         attemptId: attemptId,
         proxyExposure: exposure,
+        lastTerminal: _parseTunnelHostUpdate(raw[VpnContract.argLastTerminal]),
       );
     } on PlatformException {
       return const TunnelRuntimeState.idle();

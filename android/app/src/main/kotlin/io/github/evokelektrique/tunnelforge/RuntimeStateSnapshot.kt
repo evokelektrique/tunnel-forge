@@ -7,6 +7,7 @@ internal object RuntimeStateSnapshot {
         attemptId: String,
         connectionMode: String,
         proxyExposure: ProxyExposureInfo? = null,
+        lastTerminal: Map<String, Any?>? = null,
     ): Map<String, Any?> =
         buildMap {
             put(VpnContract.ARG_TUNNEL_STATE, state)
@@ -14,6 +15,7 @@ internal object RuntimeStateSnapshot {
             put(VpnContract.ARG_ATTEMPT_ID, attemptId)
             put(VpnContract.ARG_CONNECTION_MODE, connectionMode)
             proxyExposure?.let { putProxyExposure(it) }
+            lastTerminal?.let { put(VpnContract.ARG_LAST_TERMINAL, it) }
         }
 
     private fun MutableMap<String, Any?>.putProxyExposure(exposure: ProxyExposureInfo) {

@@ -428,13 +428,72 @@ void main() {
         connectionMode: ConnectionMode.vpnTunnel,
         activeAttemptId: 'attempt-current',
       ),
-      TunnelState(
+        TunnelState(
         tunnelUp: true,
         connectionMode: ConnectionMode.vpnTunnel,
         activeAttemptId: 'attempt-current',
         message: HomeMessage(id: 1, text: 'VPN connected'),
       ),
     ],
+  );
+
+  blocTest<TunnelBloc, TunnelState>(
+    'reports failed lastTerminal from idle getRuntimeState on startup',
+    build: () {
+      const failure = TunnelFailure(namespace: 'mschap', code: '691');
+      final logs = _FakeLogsRepository();
+      return TunnelBloc(
+        _FakeTunnelRepository(
+          runtimeState: const TunnelRuntimeState(
+            state: VpnTunnelState.stopped,
+            detail: 'Idle',
+            connectionMode: ConnectionMode.vpnTunnel,
+            lastTerminal: TunnelHostUpdate(
+              state: VpnTunnelState.failed,
+              detail: 'PPP negotiation failed.',
+              attemptId: 'attempt-bg',
+              failure: failure,
+            ),
+          ),
+        ),
+        logs,
+      );
+    },
+    act: (bloc) => bloc.add(const TunnelStarted()),
+    expect: () => const [
+      TunnelState(
+        message: HomeMessage(
+          id: 1,
+          text: 'PPP negotiation failed.',
+          error: true,
+          failure: TunnelFailure(namespace: 'mschap', code: '691'),
+        ),
+      ),
+    ],
+  );
+
+  blocTest<TunnelBloc, TunnelState>(
+    'logs stopped lastTerminal without error toast on startup',
+    build: () {
+      final logs = _FakeLogsRepository();
+      return TunnelBloc(
+        _FakeTunnelRepository(
+          runtimeState: const TunnelRuntimeState(
+            state: VpnTunnelState.stopped,
+            detail: 'Idle',
+            connectionMode: ConnectionMode.vpnTunnel,
+            lastTerminal: TunnelHostUpdate(
+              state: VpnTunnelState.stopped,
+              detail: 'Disconnected cleanly.',
+              attemptId: 'attempt-bg-stop',
+            ),
+          ),
+        ),
+        logs,
+      );
+    },
+    act: (bloc) => bloc.add(const TunnelStarted()),
+    expect: () => const <TunnelState>[],
   );
 }
 

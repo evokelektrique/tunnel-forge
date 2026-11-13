@@ -757,6 +757,36 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
   Future<void> _bootstrapRuntimeState(Emitter<TunnelState> emit) async {
     final runtimeState = await _tunnelRepository.getRuntimeState();
     if (runtimeState.state == VpnTunnelState.stopped) {
+      final lastTerminal = runtimeState.lastTerminal;
+      if (lastTerminal != null) {
+        final attemptSuffix = lastTerminal.attemptId.isEmpty
+            ? ''
+            : ' attempt=${lastTerminal.attemptId}';
+        if (lastTerminal.state == VpnTunnelState.failed) {
+          _logError(
+            'Android$attemptSuffix: tunnel failed: ${lastTerminal.detail}',
+            source: LogSource.kotlin,
+            tag: 'TunnelState',
+          );
+          _toast(
+            emit,
+            lastTerminal.detail.isEmpty
+                ? AppText.pick(
+                    'Couldn\'t establish the tunnel',
+                    'تونل برقرار نشد',
+                  )
+                : lastTerminal.detail,
+            error: true,
+            failure: lastTerminal.failure,
+          );
+        } else if (lastTerminal.state == VpnTunnelState.stopped) {
+          _logInfo(
+            'Android$attemptSuffix: tunnel stopped: ${lastTerminal.detail}',
+            source: LogSource.kotlin,
+            tag: 'TunnelState',
+          );
+        }
+      }
       return;
     }
     final connected = runtimeState.state == VpnTunnelState.connected;

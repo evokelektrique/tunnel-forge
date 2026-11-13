@@ -24,7 +24,7 @@ Future<void> simulateHostTunnelState(
   await tester.pump();
 }
 
-/// Simulates the Android host invoking [VpnContract.onEngineLog] on the app channel.
+/// Simulates the Android host invoking [VpnContract.onEngineLogBatch] on the app channel.
 Future<void> simulateHostEngineLog(
   WidgetTester tester, {
   required int priority,
@@ -34,11 +34,15 @@ Future<void> simulateHostEngineLog(
 }) async {
   const codec = StandardMethodCodec();
   final data = codec.encodeMethodCall(
-    MethodCall(VpnContract.onEngineLog, <String, Object?>{
-      VpnContract.argEngineLogLevel: priority,
-      VpnContract.argEngineLogSource: source,
-      VpnContract.argEngineLogTag: tag,
-      VpnContract.argEngineLogMessage: message,
+    MethodCall(VpnContract.onEngineLogBatch, <String, Object?>{
+      VpnContract.argEngineLogEntries: <Map<String, Object?>>[
+        <String, Object?>{
+          VpnContract.argEngineLogLevel: priority,
+          VpnContract.argEngineLogSource: source,
+          VpnContract.argEngineLogTag: tag,
+          VpnContract.argEngineLogMessage: message,
+        },
+      ],
     }),
   );
   await tester.binding.defaultBinaryMessenger.handlePlatformMessage(

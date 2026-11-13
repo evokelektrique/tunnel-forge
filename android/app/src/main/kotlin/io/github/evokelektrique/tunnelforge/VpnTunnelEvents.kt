@@ -5,11 +5,22 @@ import android.os.Looper
 import android.util.Log
 import androidx.annotation.Keep
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Pushes tunnel lifecycle updates to Flutter on the main thread (same [MethodChannel] as [MainActivity]). */
 object VpnTunnelEvents {
+    private const val LOG_BATCH_INTERVAL_MS = 200L
+    private const val MAX_BATCH_ENTRIES = 500
+
     @Volatile
     private var channel: MethodChannel? = null
+
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val pendingTerminal = PendingTerminalHolder()
+    private val pendingLogEntries = ConcurrentLinkedQueue<Map<String, Any?>>()
+    private val flushScheduled = AtomicBoolean(false)
+    private val flushRunnable = Runnable { flushEngineLogsOnMain(drainAll = false) }
 
     private val noopResult =
         object : MethodChannel.Result {
@@ -24,14 +35,25 @@ object VpnTunnelEvents {
         channel = c
     }
 
-    fun detach() {
-        channel = null
+    fun detach(c: MethodChannel) {
+        if (channel === c) {
+            channel = null
+        }
     }
+
+    fun consumePendingTerminal(): Map<String, Any?>? = pendingTerminal.consume()
 
     private fun invokeOnMain(method: String, payload: Map<String, Any?>) {
         val ch =
             channel
                 ?: run {
+                    if (method == VpnContract.ON_TUNNEL_STATE) {
+                        pendingTerminal.recordIfTerminal(
+                            payload[VpnContract.ARG_TUNNEL_STATE] as? String,
+                            payload,
+                            System.currentTimeMillis(),
+                        )
+                    }
                     Log.w(TAG, sanitizeLogMessage("event_drop reason=no_channel method=$method"))
                     return
                 }
@@ -51,7 +73,7 @@ object VpnTunnelEvents {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             job.run()
         } else {
-            Handler(Looper.getMainLooper()).post(job)
+            mainHandler.post(job)
         }
     }
 
@@ -62,6 +84,7 @@ object VpnTunnelEvents {
             TAG,
             "tunnel_state state=$state attempt=${attemptId ?: ""} detail=${detail ?: ""}",
         )
+        flushEngineLogsBeforeState()
         invokeOnMain(
             VpnContract.ON_TUNNEL_STATE,
             mapOf(
@@ -99,8 +122,7 @@ object VpnTunnelEvents {
         val sanitizedMessage = sanitizeLogMessage(message)
         DiagnosticLog.write(priority, source, tag, sanitizedMessage)
         if (!shouldForwardEngineLog(priority)) return
-        invokeOnMain(
-            VpnContract.ON_ENGINE_LOG,
+        pendingLogEntries.add(
             mapOf(
                 VpnContract.ARG_ENGINE_LOG_LEVEL to priority,
                 VpnContract.ARG_ENGINE_LOG_SOURCE to source,
@@ -108,6 +130,38 @@ object VpnTunnelEvents {
                 VpnContract.ARG_ENGINE_LOG_MESSAGE to sanitizedMessage,
             ),
         )
+        if (flushScheduled.compareAndSet(false, true)) {
+            mainHandler.postDelayed(flushRunnable, LOG_BATCH_INTERVAL_MS)
+        }
+    }
+
+    private fun flushEngineLogsBeforeState() {
+        if (pendingLogEntries.isEmpty()) return
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            flushEngineLogsOnMain(drainAll = true)
+        } else {
+            mainHandler.post { flushEngineLogsOnMain(drainAll = true) }
+        }
+    }
+
+    private fun flushEngineLogsOnMain(drainAll: Boolean) {
+        flushScheduled.set(false)
+        do {
+            val batch = ArrayList<Map<String, Any?>>(MAX_BATCH_ENTRIES)
+            while (batch.size < MAX_BATCH_ENTRIES) {
+                val entry = pendingLogEntries.poll() ?: break
+                batch.add(entry)
+            }
+            if (batch.isNotEmpty()) {
+                invokeOnMain(
+                    VpnContract.ON_ENGINE_LOG_BATCH,
+                    mapOf(VpnContract.ARG_ENGINE_LOG_ENTRIES to batch),
+                )
+            }
+        } while (drainAll && !pendingLogEntries.isEmpty())
+        if (!pendingLogEntries.isEmpty() && flushScheduled.compareAndSet(false, true)) {
+            mainHandler.postDelayed(flushRunnable, LOG_BATCH_INTERVAL_MS)
+        }
     }
 
     @Keep

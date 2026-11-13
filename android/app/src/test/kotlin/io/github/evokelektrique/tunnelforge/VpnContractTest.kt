@@ -57,7 +57,9 @@ class VpnContractTest {
 
     @Test
     fun engineLogChannel() {
-        assertEquals("onEngineLog", VpnContract.ON_ENGINE_LOG)
+        assertEquals("lastTerminal", VpnContract.ARG_LAST_TERMINAL)
+        assertEquals("onEngineLogBatch", VpnContract.ON_ENGINE_LOG_BATCH)
+        assertEquals("entries", VpnContract.ARG_ENGINE_LOG_ENTRIES)
         assertEquals("engineLogLevel", VpnContract.ARG_ENGINE_LOG_LEVEL)
         assertEquals("engineLogSource", VpnContract.ARG_ENGINE_LOG_SOURCE)
         assertEquals("engineLogTag", VpnContract.ARG_ENGINE_LOG_TAG)

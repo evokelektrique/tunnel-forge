@@ -42,6 +42,7 @@ class MainActivity : FlutterActivity() {
     private var notificationPermissionResult: MethodChannel.Result? = null
     private var batteryOptimizationPermissionResult: MethodChannel.Result? = null
     private var pendingConnectIntent: Intent? = null
+    private var vpnChannel: MethodChannel? = null
     private var profileTransferChannel: MethodChannel? = null
     private var profileTransferConsumerReady = false
     private val pendingProfileTransfers = mutableListOf<Map<String, String?>>()
@@ -66,6 +67,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         BatteryOptimizationLogPolicy.shared.resetSession()
         val vpnChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VpnContract.METHOD_CHANNEL)
+        this.vpnChannel = vpnChannel
         val appInfoChannel =
             MethodChannel(
                 flutterEngine.dartExecutor.binaryMessenger,
@@ -460,7 +462,8 @@ class MainActivity : FlutterActivity() {
         mainHandler.removeCallbacksAndMessages(PROFILE_IMPORT_CALLBACK_TOKEN)
         profileTransferExecutor.shutdownNow()
         diagnosticsExecutor.shutdownNow()
-        VpnTunnelEvents.detach()
+        vpnChannel?.let { VpnTunnelEvents.detach(it) }
+        vpnChannel = null
         super.onDestroy()
     }
 
@@ -633,6 +636,7 @@ class MainActivity : FlutterActivity() {
             detail = "Idle",
             attemptId = "",
             connectionMode = VpnContract.MODE_VPN_TUNNEL,
+            lastTerminal = VpnTunnelEvents.consumePendingTerminal(),
         )
     }
 

@@ -1,7 +1,7 @@
 /// Method-channel API contract: names and argument keys for the Android VPN bridge.
 ///
 /// Dart calls [prepareVpn], [connect], and [disconnect]. The service may invoke
-/// [onTunnelState] and [onEngineLog] on the same channel. Native code must use these exact strings.
+/// [onTunnelState] and [onEngineLogBatch] on the same channel. Native code must use these exact strings.
 abstract final class VpnContract {
   static const String channel = 'io.github.evokelektrique.tunnelforge/vpn';
 
@@ -66,10 +66,12 @@ abstract final class VpnContract {
   static const String argTunnelState = 'tunnelState';
   static const String argTunnelDetail = 'tunnelDetail';
   static const String argTunnelFailure = 'failure';
+  static const String argLastTerminal = 'lastTerminal';
 
-  /// Android -> Dart: engine log lines; [argEngineLogLevel] uses `android.util.Log` priorities.
-  static const String onEngineLog = 'onEngineLog';
+  /// Android -> Dart: batched engine log lines; each entry uses [argEngineLogLevel] (`android.util.Log` priority).
+  static const String onEngineLogBatch = 'onEngineLogBatch';
 
+  static const String argEngineLogEntries = 'entries';
   static const String argEngineLogLevel = 'engineLogLevel';
   static const String argEngineLogSource = 'engineLogSource';
   static const String argEngineLogTag = 'engineLogTag';

@@ -107,6 +107,14 @@ MemorySecretStore _seededSecrets(String profileId) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  setUp(() {
+    DiagnosticsBridge.instance = FakeDiagnosticsBridge();
+  });
+
+  tearDown(() {
+    DiagnosticsBridge.instance = MethodChannelDiagnosticsBridge();
+  });
+
   String statusText(WidgetTester tester) {
     return tester.widget<Text>(find.byKey(const Key('vpn_status'))).data ?? '';
   }

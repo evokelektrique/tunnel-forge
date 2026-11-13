@@ -59,9 +59,11 @@ object VpnContract {
     const val ARG_TUNNEL_STATE = "tunnelState"
     const val ARG_TUNNEL_DETAIL = "tunnelDetail"
     const val ARG_TUNNEL_FAILURE = "failure"
+    const val ARG_LAST_TERMINAL = "lastTerminal"
 
-    const val ON_ENGINE_LOG = "onEngineLog"
+    const val ON_ENGINE_LOG_BATCH = "onEngineLogBatch"
 
+    const val ARG_ENGINE_LOG_ENTRIES = "entries"
     const val ARG_ENGINE_LOG_LEVEL = "engineLogLevel"
     const val ARG_ENGINE_LOG_SOURCE = "engineLogSource"
     const val ARG_ENGINE_LOG_TAG = "engineLogTag"

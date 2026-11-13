@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,6 +8,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/core/platform/app_info_bridge.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
@@ -579,21 +581,36 @@ class ProfileTransferRepositoryImpl implements ProfileTransferRepository {
 }
 
 class LogsRepositoryImpl implements LogsRepository {
-  LogsRepositoryImpl({SharedPreferences? prefsOverride})
-    : _prefsOverride = prefsOverride;
+  LogsRepositoryImpl({
+    SharedPreferences? prefsOverride,
+    DiagnosticsBridge? bridgeOverride,
+  }) : _prefsOverride = prefsOverride,
+       _bridgeOverride = bridgeOverride;
 
   static const String prefsKeyLogsJson = 'logs_entries_json_v1';
-  static const int _maxLines = 10000;
-  static const int _maxPersistedLines = 2000;
+  static const int _maxLines = 5000;
+  static const int _maxLegacyBlobBytes = 256 * 1024;
+  static const Duration _flushInterval = Duration(milliseconds: 200);
+  static final RegExp _lineHeaderPattern = RegExp(
+    r'^(\S+) (DEBUG|INFO|WARNING|ERROR) (dart|kotlin|native)/(\S*) (.*)$',
+  );
 
   final SharedPreferences? _prefsOverride;
-  final List<LogEntry> _entries = <LogEntry>[];
+  final DiagnosticsBridge? _bridgeOverride;
+  final ListQueue<LogEntry> _entries = ListQueue<LogEntry>();
+  final List<LogEntry> _pendingBridgeWrites = <LogEntry>[];
   final StreamController<List<LogEntry>> _controller =
       StreamController<List<LogEntry>>.broadcast();
+  List<LogEntry>? _entriesCache;
+  Timer? _flushTimer;
+  bool _hasPendingEmit = false;
   bool _loaded = false;
 
+  DiagnosticsBridge get _bridge => _bridgeOverride ?? DiagnosticsBridge.instance;
+
   @override
-  List<LogEntry> get entries => List<LogEntry>.unmodifiable(_entries);
+  List<LogEntry> get entries =>
+      _entriesCache ??= List<LogEntry>.unmodifiable(_entries);
 
   @override
   Stream<List<LogEntry>> get entriesStream => _controller.stream;
@@ -603,75 +620,209 @@ class LogsRepositoryImpl implements LogsRepository {
     if (_loaded) return;
     _loaded = true;
     final prefs = await _prefs();
-    final raw = prefs.getString(prefsKeyLogsJson);
-    if (raw == null || raw.trim().isEmpty) return;
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! List) return;
-      final loaded = decoded
-          .map(_entryFromJson)
-          .whereType<LogEntry>()
-          .toList(growable: false);
-      if (loaded.isEmpty && _entries.isEmpty) return;
-      final currentSessionEntries = List<LogEntry>.from(_entries);
-      _entries
-        ..clear()
-        ..addAll((loaded + currentSessionEntries).takeLast(_maxLines));
+    final legacyRaw = prefs.getString(prefsKeyLogsJson);
+    if (legacyRaw != null) {
+      await _migrateLegacyLogs(prefs, legacyRaw);
+    }
+
+    final tail = await _bridge.readLogTail(maxLines: _maxLines);
+    final loaded = _parseTail(tail);
+    if (loaded.isEmpty && _entries.isEmpty) return;
+
+    final currentSessionEntries = List<LogEntry>.from(_entries);
+    _entries.clear();
+    final merged = <LogEntry>[...loaded, ...currentSessionEntries];
+    final start = merged.length > _maxLines ? merged.length - _maxLines : 0;
+    for (var i = start; i < merged.length; i++) {
+      _entries.addLast(merged[i]);
+    }
+    _entriesCache = null;
+    if (!_controller.isClosed) {
       _controller.add(entries);
-    } catch (_) {
-      await prefs.remove(prefsKeyLogsJson);
     }
   }
 
   @override
   void append(LogEntry entry) {
-    _entries.add(entry);
-    if (_entries.length > _maxLines) {
-      _entries.removeRange(0, _entries.length - _maxLines);
+    _entries.addLast(entry);
+    while (_entries.length > _maxLines) {
+      _entries.removeFirst();
     }
-    _controller.add(entries);
-    unawaited(_persist());
+    _entriesCache = null;
+    _hasPendingEmit = true;
+    if (entry.source == LogSource.dart) {
+      _pendingBridgeWrites.add(entry);
+    }
+    _flushTimer ??= Timer(_flushInterval, _flush);
   }
 
   @override
   void clear() {
-    if (_entries.isEmpty) {
-      unawaited(_clearPersisted());
-      return;
-    }
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _pendingBridgeWrites.clear();
+    _hasPendingEmit = false;
     _entries.clear();
-    _controller.add(entries);
-    unawaited(_clearPersisted());
+    _entriesCache = const <LogEntry>[];
+    if (!_controller.isClosed) {
+      _controller.add(entries);
+    }
+    unawaited(_clearBackingStores());
   }
 
   Future<void> dispose() async {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _pendingBridgeWrites.clear();
+    _hasPendingEmit = false;
     await _controller.close();
+  }
+
+  void _flush() {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    if (_hasPendingEmit) {
+      _hasPendingEmit = false;
+      if (!_controller.isClosed) {
+        _controller.add(entries);
+      }
+    }
+    if (_pendingBridgeWrites.isNotEmpty) {
+      final batch = List<LogEntry>.from(_pendingBridgeWrites);
+      _pendingBridgeWrites.clear();
+      unawaited(_sendBridgeBatchSafely(batch));
+    }
+  }
+
+  Future<void> _sendBridgeBatchSafely(List<LogEntry> batch) async {
+    try {
+      await _bridge.appendLogs(_serializeBridgeBatch(batch));
+    } catch (_) {
+      // File logging stays best-effort so UI and app startup never fail on diagnostics I/O.
+    }
+  }
+
+  List<Map<String, Object?>> _serializeBridgeBatch(List<LogEntry> batch) =>
+      batch
+          .map(
+            (entry) => <String, Object?>{
+              DiagnosticsContract.argTs: entry.timestamp.millisecondsSinceEpoch,
+              DiagnosticsContract.argLevel: entry.level.name,
+              DiagnosticsContract.argSource: entry.source.label,
+              DiagnosticsContract.argTag: entry.tag,
+              DiagnosticsContract.argMessage: entry.message,
+            },
+          )
+          .toList(growable: false);
+
+  Future<void> _migrateLegacyLogs(
+    SharedPreferences prefs,
+    String legacyRaw,
+  ) async {
+    if (legacyRaw.trim().isEmpty) {
+      await prefs.remove(prefsKeyLogsJson);
+      return;
+    }
+    final migrated = _parseLegacyMigrationEntries(legacyRaw);
+    try {
+      await _bridge.appendLogs(_serializeBridgeBatch(migrated));
+      await prefs.remove(prefsKeyLogsJson);
+    } catch (_) {
+      // Keep the legacy blob intact when migration to the log file fails.
+    }
+  }
+
+  List<LogEntry> _parseLegacyMigrationEntries(String legacyRaw) {
+    try {
+      final decoded = jsonDecode(legacyRaw);
+      if (decoded is List) {
+        final entries = decoded
+            .map(_entryFromJson)
+            .whereType<LogEntry>()
+            .toList(growable: false);
+        if (entries.isNotEmpty || decoded.isEmpty) {
+          return entries;
+        }
+      }
+    } catch (_) {
+      // Preserve corrupt legacy blobs verbatim in a capped entry instead of dropping them.
+    }
+    return <LogEntry>[
+      LogEntry(
+        timestamp: DateTime.now(),
+        level: LogLevel.warning,
+        source: LogSource.dart,
+        tag: 'LogsMigration',
+        message: 'legacy log blob (unparsed): ${_capUtf8Bytes(legacyRaw)}',
+      ),
+    ];
+  }
+
+  String _capUtf8Bytes(String text) {
+    final bytes = utf8.encode(text);
+    if (bytes.length <= _maxLegacyBlobBytes) return text;
+    return utf8.decode(bytes.sublist(0, _maxLegacyBlobBytes), allowMalformed: true);
+  }
+
+  List<LogEntry> _parseTail(String tail) {
+    if (tail.isEmpty) return const <LogEntry>[];
+    final entries = <LogEntry>[];
+    final lines = const LineSplitter().convert(tail);
+    for (final line in lines) {
+      if (line.isEmpty) continue;
+      if (line.startsWith('\t') && entries.isNotEmpty) {
+        final prev = entries.removeLast();
+        entries.add(
+          LogEntry(
+            timestamp: prev.timestamp,
+            level: prev.level,
+            source: prev.source,
+            tag: prev.tag,
+            message: '${prev.message}\n${line.substring(1)}',
+          ),
+        );
+        continue;
+      }
+      final match = _lineHeaderPattern.firstMatch(line);
+      final parsedTs = match == null ? null : DateTime.tryParse(match.group(1)!);
+      if (match != null && parsedTs != null) {
+        entries.add(
+          LogEntry(
+            timestamp: parsedTs.toLocal(),
+            level: _logLevelFromStorage(match.group(2)),
+            source: LogSource.parse(match.group(3)),
+            tag: match.group(4) ?? '',
+            message: match.group(5) ?? '',
+          ),
+        );
+      } else {
+        entries.add(
+          LogEntry(
+            timestamp: DateTime.now(),
+            level: LogLevel.info,
+            source: LogSource.kotlin,
+            tag: 'DiagnosticLog',
+            message: line,
+          ),
+        );
+      }
+    }
+    if (entries.length <= _maxLines) return entries;
+    return entries.sublist(entries.length - _maxLines);
+  }
+
+  Future<void> _clearBackingStores() async {
+    try {
+      await _bridge.clearLogs();
+    } catch (_) {}
+    try {
+      final prefs = await _prefs();
+      await prefs.remove(prefsKeyLogsJson);
+    } catch (_) {}
   }
 
   Future<SharedPreferences> _prefs() async =>
       _prefsOverride ?? await SharedPreferences.getInstance();
-
-  Future<void> _persist() async {
-    final prefs = await _prefs();
-    final persisted = _entries
-        .takeLast(_maxPersistedLines)
-        .map(_entryToJson)
-        .toList(growable: false);
-    await prefs.setString(prefsKeyLogsJson, jsonEncode(persisted));
-  }
-
-  Future<void> _clearPersisted() async {
-    final prefs = await _prefs();
-    await prefs.remove(prefsKeyLogsJson);
-  }
-
-  Map<String, Object?> _entryToJson(LogEntry entry) => <String, Object?>{
-    'timestamp': entry.timestamp.toIso8601String(),
-    'level': entry.level.name,
-    'source': entry.source.label,
-    'tag': entry.tag,
-    'message': entry.message,
-  };
 
   LogEntry? _entryFromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -694,14 +845,6 @@ class LogsRepositoryImpl implements LogsRepository {
       'error' => LogLevel.error,
       _ => LogLevel.info,
     };
-  }
-}
-
-extension _TakeLastExtension<T> on Iterable<T> {
-  Iterable<T> takeLast(int count) {
-    final list = toList(growable: false);
-    if (list.length <= count) return list;
-    return list.skip(list.length - count);
   }
 }
 

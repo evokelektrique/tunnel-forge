@@ -37,4 +37,20 @@ class RuntimeStateSnapshotTest {
         assertEquals(true, snapshot[VpnContract.ARG_PROXY_EXPOSURE_LAN_REQUESTED])
         assertEquals(true, snapshot[VpnContract.ARG_PROXY_EXPOSURE_LAN_ACTIVE])
     }
+
+    @Test
+    fun tunnelSnapshotIncludesOptionalLastTerminal() {
+        val lastTerminal = mapOf(VpnContract.ARG_TUNNEL_STATE to VpnContract.TUNNEL_FAILED)
+        val snapshot =
+            RuntimeStateSnapshot.tunnel(
+                state = VpnContract.TUNNEL_STOPPED,
+                detail = "Idle",
+                attemptId = "",
+                connectionMode = VpnContract.MODE_VPN_TUNNEL,
+                lastTerminal = lastTerminal,
+            )
+
+        assertEquals(VpnContract.TUNNEL_STOPPED, snapshot[VpnContract.ARG_TUNNEL_STATE])
+        assertEquals(lastTerminal, snapshot[VpnContract.ARG_LAST_TERMINAL])
+    }
 }

@@ -88,7 +88,10 @@ GetIt createAppLocator({
     () => ProfileTransferRepositoryImpl(bridge: profileTransferBridge),
     dispose: (repo) => repo.dispose(),
   );
-  locator.registerLazySingleton<LogsRepository>(LogsRepositoryImpl.new);
+  locator.registerLazySingleton<LogsRepository>(
+    LogsRepositoryImpl.new,
+    dispose: (repo) => repo is LogsRepositoryImpl ? repo.dispose() : null,
+  );
 
   locator.registerFactory<AppThemeBloc>(
     () => AppThemeBloc(locator<ThemeRepository>()),
