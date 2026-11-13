@@ -1385,6 +1385,7 @@ class ProxyServerRuntimeTest {
     @Test
     fun httpConnectSuppressesClientAbortWhenErrorResponseCannotBeWritten() {
         val logs = CopyOnWriteArrayList<String>()
+        val awaitStartedLatch = CountDownLatch(1)
         val closeLatch = CountDownLatch(1)
         val transport =
             object : ProxyTransport {
@@ -1393,6 +1394,7 @@ class ProxyServerRuntimeTest {
                         override val descriptor = ProxySessionDescriptor(7, request, 0)
 
                         override fun awaitConnected(timeoutMs: Long) {
+                            awaitStartedLatch.countDown()
                             Thread.sleep(150)
                             throw ProxyTransportException(ProxyTransportFailureReason.upstreamTimeout, "TCP connect timed out.")
                         }
@@ -1422,6 +1424,7 @@ class ProxyServerRuntimeTest {
                 val output = BufferedOutputStream(socket.getOutputStream())
                 output.write("CONNECT 93.184.216.34:443 HTTP/1.1\r\nHost: 93.184.216.34:443\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
                 output.flush()
+                assertTrue(awaitStartedLatch.await(1, TimeUnit.SECONDS))
             }
             assertTrue(closeLatch.await(1, TimeUnit.SECONDS))
             Thread.sleep(100)

@@ -867,7 +867,7 @@ class UserspaceTunnelStackTest {
                 bridge = ProxyPacketBridge(backend = backend),
                 clientIpv4 = "10.0.0.2",
                 logger = { _, _ -> },
-                tcpPersistProbeDelaysMs = listOf(20L),
+                tcpPersistProbeDelaysMs = listOf(20L, 2000L),
                 tcpFinDrainTimeoutMs = 50,
             )
         assertTrue(stack.waitUntilReady(timeoutMs = 50, pollIntervalMs = 5))
