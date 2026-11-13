@@ -19,7 +19,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -40,6 +39,7 @@ class MainActivity : FlutterActivity() {
 
     private var vpnPermissionResult: MethodChannel.Result? = null
     private var notificationPermissionResult: MethodChannel.Result? = null
+    private var batteryOptimizationPermissionResult: MethodChannel.Result? = null
     private var pendingConnectIntent: Intent? = null
     private var profileTransferChannel: MethodChannel? = null
     private var profileTransferConsumerReady = false
@@ -59,6 +59,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        BatteryOptimizationLogPolicy.shared.resetSession()
         val vpnChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VpnContract.METHOD_CHANNEL)
         val appInfoChannel =
             MethodChannel(
@@ -322,7 +323,7 @@ class MainActivity : FlutterActivity() {
                     result.success(batteryOptimizationStatus())
                 }
                 VpnContract.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS -> {
-                    result.success(requestIgnoreBatteryOptimizations())
+                    requestIgnoreBatteryOptimizations(result)
                 }
                 VpnContract.OPEN_BATTERY_OPTIMIZATION_SETTINGS -> {
                     result.success(openBatteryOptimizationSettings())
@@ -392,6 +393,10 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        vpnPermissionResult = null
+        notificationPermissionResult = null
+        batteryOptimizationPermissionResult = null
+        pendingConnectIntent = null
         profileTransferConsumerReady = false
         profileTransferChannel = null
         mainHandler.removeCallbacksAndMessages(PROFILE_IMPORT_CALLBACK_TOKEN)
@@ -409,6 +414,15 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_BATTERY_OPTIMIZATION) {
+            val pending = batteryOptimizationPermissionResult ?: return
+            batteryOptimizationPermissionResult = null
+            if (isIgnoringBatteryOptimizations()) {
+                BatteryOptimizationLogPolicy.shared.markUnrestrictedLogged()
+            }
+            pending.success(batteryOptimizationResult(BATTERY_OUTCOME_REQUESTED))
+            return
+        }
         if (requestCode != REQUEST_VPN_PERMISSION) return
         val pending = vpnPermissionResult ?: return
         vpnPermissionResult = null
@@ -564,41 +578,47 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun batteryOptimizationStatus(): Map<String, Any?> {
-        val status =
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-                BATTERY_STATE_UNSUPPORTED
-            } else if (isIgnoringBatteryOptimizations()) {
-                BATTERY_STATE_ALLOWED
-            } else {
-                BATTERY_STATE_RESTRICTED
-            }
         return mapOf(
-            VpnContract.ARG_BATTERY_OPTIMIZATION_STATE to status,
+            VpnContract.ARG_BATTERY_OPTIMIZATION_STATE to BatteryOptimizationDiagnostics.stateName(this),
             VpnContract.ARG_BATTERY_OPTIMIZATION_POWER_SAVE_MODE to isPowerSaveMode(),
             VpnContract.ARG_BATTERY_OPTIMIZATION_MANUFACTURER to Build.MANUFACTURER.orEmpty(),
             VpnContract.ARG_BATTERY_OPTIMIZATION_ANDROID_SDK_INT to Build.VERSION.SDK_INT,
         )
     }
 
-    private fun requestIgnoreBatteryOptimizations(): Map<String, Any?> {
+    private fun requestIgnoreBatteryOptimizations(result: MethodChannel.Result) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return batteryOptimizationResult(BATTERY_OUTCOME_UNSUPPORTED)
+            result.success(batteryOptimizationResult(BATTERY_OUTCOME_UNSUPPORTED))
+            return
         }
         if (isIgnoringBatteryOptimizations()) {
-            return batteryOptimizationResult(BATTERY_OUTCOME_ALREADY_ALLOWED)
+            BatteryOptimizationLogPolicy.shared.markUnrestrictedLogged()
+            result.success(batteryOptimizationResult(BATTERY_OUTCOME_ALREADY_ALLOWED))
+            return
+        }
+        if (batteryOptimizationPermissionResult != null) {
+            result.success(
+                batteryOptimizationResult(
+                    BATTERY_OUTCOME_FAILED,
+                    "Battery optimization request already in progress.",
+                ),
+            )
+            return
         }
         val requestIntent =
             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                 data = Uri.parse("package:$packageName")
             }
-        return if (launchSafely(requestIntent)) {
+        if (launchSafely(requestIntent, REQUEST_BATTERY_OPTIMIZATION)) {
+            batteryOptimizationPermissionResult = result
             AppLog.d(TAG, "battery_optimization request dialog opened")
-            batteryOptimizationResult(BATTERY_OUTCOME_REQUESTED)
         } else {
             AppLog.w(TAG, "battery_optimization request unavailable; opening app settings fallback")
-            openAppDetailsSettings(
-                fallbackOutcome = BATTERY_OUTCOME_SETTINGS_OPENED,
-                failureMessage = "Could not open battery optimization request or app settings.",
+            result.success(
+                openAppDetailsSettings(
+                    fallbackOutcome = BATTERY_OUTCOME_SETTINGS_OPENED,
+                    failureMessage = "Could not open battery optimization request or app settings.",
+                ),
             )
         }
     }
@@ -687,23 +707,22 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun isIgnoringBatteryOptimizations(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
-        return powerManager.isIgnoringBatteryOptimizations(packageName)
-    }
+    private fun isIgnoringBatteryOptimizations(): Boolean =
+        BatteryOptimizationDiagnostics.isIgnoringBatteryOptimizations(this)
 
-    private fun isPowerSaveMode(): Boolean {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
-        return powerManager.isPowerSaveMode
-    }
+    private fun isPowerSaveMode(): Boolean =
+        BatteryOptimizationDiagnostics.isPowerSaveMode(this)
 
-    private fun launchSafely(intent: Intent): Boolean {
+    private fun launchSafely(intent: Intent, requestCode: Int? = null): Boolean {
         return try {
             if (intent.resolveActivity(packageManager) == null) {
                 false
             } else {
-                startActivity(intent)
+                if (requestCode != null) {
+                    startActivityForResult(intent, requestCode)
+                } else {
+                    startActivity(intent)
+                }
                 true
             }
         } catch (e: ActivityNotFoundException) {
@@ -954,14 +973,12 @@ class MainActivity : FlutterActivity() {
         private const val TAG = "MainActivity"
         private const val REQUEST_VPN_PERMISSION = 0x4E50
         private const val REQUEST_POST_NOTIFICATIONS = 0x4E51
+        private const val REQUEST_BATTERY_OPTIMIZATION = 0x4E52
         private const val ProfileTransferMimeType = "application/vnd.tunnelforge.profile+json"
         private const val MAX_PROFILE_IMPORT_BYTES = ProfileImportStreamReader.DEFAULT_MAX_BYTES
         private const val PROFILE_IMPORT_READ_TIMEOUT_MS = 5_000L
         private const val PROFILE_IMPORT_MAX_CONCURRENT_READS = 4
         private val PROFILE_IMPORT_CALLBACK_TOKEN = Any()
-        private const val BATTERY_STATE_UNSUPPORTED = "unsupported"
-        private const val BATTERY_STATE_ALLOWED = "allowed"
-        private const val BATTERY_STATE_RESTRICTED = "restricted"
         private const val BATTERY_OUTCOME_UNSUPPORTED = "unsupported"
         private const val BATTERY_OUTCOME_ALREADY_ALLOWED = "alreadyAllowed"
         private const val BATTERY_OUTCOME_REQUESTED = "requested"

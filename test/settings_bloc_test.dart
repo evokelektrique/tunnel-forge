@@ -216,6 +216,7 @@ void main() {
   group('SettingsBloc', () {
     late _FakeSettingsRepository settingsRepository;
     late _FakeTunnelRepository tunnelRepository;
+    late _FakeLogsRepository logsRepository;
 
     blocTest<SettingsBloc, SettingsState>(
       'loads persisted settings and installed version on start',
@@ -750,6 +751,111 @@ void main() {
         );
         expect(tunnelRepository.batteryOptimizationRequestCount, 1);
       },
+    );
+
+    blocTest<SettingsBloc, SettingsState>(
+      'logs unrestricted battery optimization once per session until reset or regression',
+      build: () {
+        logsRepository = _FakeLogsRepository();
+        tunnelRepository = _FakeTunnelRepository()
+          ..batteryOptimizationStatus = const BatteryOptimizationStatus(
+            state: BatteryOptimizationState.restricted,
+          );
+        return SettingsBloc(
+          _FakeSettingsRepository(),
+          _FakeAppVersionRepository(
+            const AppVersionInfo(
+              displayVersion: '0.3.0+11',
+              semanticVersion: SemanticVersion(major: 0, minor: 3, patch: 0),
+            ),
+          ),
+          _FakeAppUpdateRepository(
+            release: AppReleaseInfo(
+              version: const SemanticVersion(major: 0, minor: 3, patch: 0),
+              htmlUrl:
+                  'https://github.com/evokelektrique/tunnel-forge/releases',
+              publishedAt: DateTime.utc(2026, 4, 19),
+              prerelease: true,
+            ),
+          ),
+          logsRepository,
+          tunnelRepository,
+        );
+      },
+      seed: () => const SettingsState(
+        batteryOptimizationStatus: BatteryOptimizationStatus(
+          state: BatteryOptimizationState.restricted,
+        ),
+      ),
+      act: (bloc) async {
+        tunnelRepository.batteryOptimizationStatus =
+            const BatteryOptimizationStatus(
+              state: BatteryOptimizationState.allowed,
+            );
+        bloc.add(const SettingsBatteryOptimizationRequestPressed());
+        await Future<void>.delayed(Duration.zero);
+
+        // Secondary unrestricted events in same session should not emit extra allowed logs.
+        bloc.add(const SettingsBatteryOptimizationRefreshRequested());
+        await Future<void>.delayed(Duration.zero);
+        bloc.add(const SettingsBatteryOptimizationRequestPressed());
+        await Future<void>.delayed(Duration.zero);
+      },
+      verify: (_) {
+        final batteryLogs = logsRepository.appended
+            .where((entry) => entry.message.startsWith('battery_optimization:'))
+            .map((entry) => entry.message)
+            .toList();
+        expect(batteryLogs, hasLength(1));
+        expect(batteryLogs.single, contains('state=allowed'));
+      },
+    );
+
+    blocTest<SettingsBloc, SettingsState>(
+      'logs post-dialog disabled message when request resolves as allowed',
+      build: () {
+        tunnelRepository = _FakeTunnelRepository()
+          ..batteryOptimizationStatus = const BatteryOptimizationStatus(
+            state: BatteryOptimizationState.allowed,
+          );
+        return SettingsBloc(
+          _FakeSettingsRepository(),
+          _FakeAppVersionRepository(
+            const AppVersionInfo(
+              displayVersion: '0.3.0+11',
+              semanticVersion: SemanticVersion(major: 0, minor: 3, patch: 0),
+            ),
+          ),
+          _FakeAppUpdateRepository(
+            release: AppReleaseInfo(
+              version: const SemanticVersion(major: 0, minor: 3, patch: 0),
+              htmlUrl:
+                  'https://github.com/evokelektrique/tunnel-forge/releases',
+              publishedAt: DateTime.utc(2026, 4, 19),
+              prerelease: true,
+            ),
+          ),
+          _FakeLogsRepository(),
+          tunnelRepository,
+        );
+      },
+      act: (bloc) =>
+          bloc.add(const SettingsBatteryOptimizationRequestPressed()),
+      expect: () => [
+        const SettingsState(batteryOptimizationBusy: true),
+        isA<SettingsState>()
+            .having((s) => s.batteryOptimizationBusy, 'busy', isFalse)
+            .having(
+              (s) => s.batteryOptimizationStatus.state,
+              'battery state',
+              BatteryOptimizationState.allowed,
+            )
+            .having(
+              (s) => s.message?.text,
+              'message text',
+              'Battery optimization disabled for TunnelForge.',
+            ),
+      ],
     );
   });
 }

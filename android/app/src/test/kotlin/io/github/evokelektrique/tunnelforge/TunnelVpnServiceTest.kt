@@ -209,4 +209,28 @@ class TunnelVpnServiceTest {
             ),
         )
     }
+
+    @Test
+    fun batteryOptimizationLogPolicySuppressesRepeatedUnrestrictedUntilReset() {
+        val policy = BatteryOptimizationLogPolicy()
+
+        assertTrue(policy.shouldLog(BatteryOptimizationDiagnostics.STATE_RESTRICTED))
+        assertTrue(policy.shouldLog(BatteryOptimizationDiagnostics.STATE_ALLOWED))
+        assertFalse(policy.shouldLog(BatteryOptimizationDiagnostics.STATE_ALLOWED))
+
+        policy.resetSession()
+        assertTrue(policy.shouldLog(BatteryOptimizationDiagnostics.STATE_ALLOWED))
+    }
+
+    @Test
+    fun vpnDisconnectReasonPolicyDistinguishesTaskRemovalSystemDestroy() {
+        assertEquals(
+            "destroyed_by_android_system" to "Disconnected: stopped by Android system",
+            VpnDisconnectReasonPolicy.systemDestroyReason(taskRemoved = false),
+        )
+        assertEquals(
+            "destroyed_by_system_after_task_removed" to "Disconnected: service stopped after app removed from recents",
+            VpnDisconnectReasonPolicy.systemDestroyReason(taskRemoved = true),
+        )
+    }
 }

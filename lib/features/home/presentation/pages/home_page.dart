@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -106,6 +107,14 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed || !mounted) return;
+    context.read<SettingsBloc>().add(
+      const SettingsBatteryOptimizationRefreshRequested(),
+    );
+  }
+
+  @override
+  void didChangeViewFocus(ViewFocusEvent event) {
+    if (event.state != ViewFocusState.focused || !mounted) return;
     context.read<SettingsBloc>().add(
       const SettingsBatteryOptimizationRefreshRequested(),
     );
@@ -804,10 +813,6 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                         settingsState.batteryOptimizationStatus,
                     batteryOptimizationBusy:
                         settingsState.batteryOptimizationBusy,
-                    onRefreshBatteryOptimization: () =>
-                        context.read<SettingsBloc>().add(
-                          const SettingsBatteryOptimizationRefreshRequested(),
-                        ),
                     onRequestBatteryOptimization: () => context
                         .read<SettingsBloc>()
                         .add(const SettingsBatteryOptimizationRequestPressed()),

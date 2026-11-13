@@ -620,7 +620,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           ),
         );
         _logInfo(
-          'Android${state.activeAttemptId == null ? '' : ' attempt=${state.activeAttemptId!}'}: tunnel stopped: ${update.detail}',
+          'Android${currentAttemptId == null ? '' : ' attempt=$currentAttemptId'}: tunnel stopped: ${update.detail}',
           source: LogSource.kotlin,
           tag: 'TunnelState',
         );

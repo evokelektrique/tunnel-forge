@@ -47,6 +47,9 @@ class TunnelVpnService : VpnService() {
     private var vpnDnsPacketBridge: VpnDnsPacketBridge? = null
     private var localProxyRuntime: ProxyServerRuntime? = null
     private var activeAttemptId: String = ""
+    private var lastSessionAttemptId: String = ""
+    private var recordedDisconnectReason: String? = null
+    private var taskRemovedDuringSession: Boolean = false
     private var activeProxyConfig: ProxyRuntimeConfig? = null
     private var activeServer: String = ""
     private var activeProfileName: String? = null
@@ -91,11 +94,78 @@ class TunnelVpnService : VpnService() {
 
     override fun onDestroy() {
         cancelPendingStopSelf()
+        val attemptId = currentAttemptId()
+        val batteryAttemptId = attemptId.ifEmpty { lastSessionAttemptId }
         if (hasActiveSession()) {
-            stopTunnelInternal()
+            val (reason, uiDetail) = VpnDisconnectReasonPolicy.systemDestroyReason(taskRemovedDuringSession)
+            recordDisconnectReason(
+                attemptId = attemptId,
+                reason = reason,
+                level = Log.WARN,
+                detail = "service destroyed without app stop request",
+            )
+            BatteryOptimizationDiagnostics.emitForVpnEvent(
+                context = this,
+                tag = TAG,
+                attemptPrefix = prefixAttempt(batteryAttemptId),
+                stage = "vpn_destroy",
+            )
+            stopTunnelInternal(stopReason = reason)
+            VpnTunnelEvents.emit(VpnContract.TUNNEL_STOPPED, uiDetail, attemptId)
+        } else if (batteryAttemptId.isNotEmpty()) {
+            BatteryOptimizationDiagnostics.emitForVpnEvent(
+                context = this,
+                tag = TAG,
+                attemptPrefix = prefixAttempt(batteryAttemptId),
+                stage = "vpn_destroy",
+            )
+        }
+        synchronized(sessionLock) {
+            lastSessionAttemptId = ""
         }
         instance = null
         super.onDestroy()
+    }
+
+    override fun onRevoke() {
+        cancelPendingStopSelf()
+        val attemptId = currentAttemptId()
+        if (hasActiveSession()) {
+            recordDisconnectReason(
+                attemptId = attemptId,
+                reason = "revoked_by_android",
+                level = Log.WARN,
+                detail = "another VPN started, system VPN turned off, or Always-on VPN revoked",
+            )
+            stopTunnelInternal(stopReason = "revoked by Android")
+            VpnTunnelEvents.emit(
+                VpnContract.TUNNEL_STOPPED,
+                "Disconnected: VPN revoked by Android",
+                attemptId,
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            VpnTunnelEvents.emitEngineLog(
+                Log.WARN,
+                TAG,
+                "${prefixAttempt(attemptId)}VPN disconnect reason=revoked_by_android (no active session)",
+            )
+        }
+        super.onRevoke()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (hasActiveSession()) {
+            synchronized(sessionLock) {
+                taskRemovedDuringSession = true
+            }
+            VpnTunnelEvents.emitEngineLog(
+                Log.INFO,
+                TAG,
+                "${prefixAttempt(currentAttemptId())}App task removed from recents while VPN active",
+            )
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -115,7 +185,8 @@ class TunnelVpnService : VpnService() {
                     return START_NOT_STICKY
                 }
                 if (hadActiveSession) {
-                    stopTunnelInternal()
+                    recordDisconnectReason(stoppedAttemptId, "stopped_by_app", Log.INFO)
+                    stopTunnelInternal(stopReason = "stopped by app")
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_STOPPED, "Stopped by app", stoppedAttemptId)
                 }
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -186,18 +257,31 @@ class TunnelVpnService : VpnService() {
                         hasLocalProxyRuntime = localProxyRuntime != null,
                     )
                 ) {
+                    val previousAttemptId = currentAttemptId()
                     VpnTunnelEvents.emitEngineLog(
                         Log.DEBUG,
                         TAG,
-                        "${prefixAttempt(activeAttemptId)}Stopping previous tunnel session reason=restart",
+                        "${prefixAttempt(previousAttemptId)}Stopping previous tunnel session reason=restart",
                     )
-                    stopTunnelInternal()
+                    recordDisconnectReason(previousAttemptId, "restarted_by_app", Log.INFO)
+                    stopTunnelInternal(stopReason = "restarted by app")
                 }
-                activeAttemptId = attemptId
+                synchronized(sessionLock) {
+                    activeAttemptId = attemptId
+                    lastSessionAttemptId = attemptId
+                    recordedDisconnectReason = null
+                    taskRemovedDuringSession = false
+                }
                 activeProxyConfig = proxyConfig
                 activeServer = server
                 activeProfileName = profileName.ifEmpty { null }
                 RuntimeEnvironmentInfo.emit(this, TAG, prefixAttempt(attemptId), mode = VpnContract.MODE_VPN_TUNNEL)
+                BatteryOptimizationDiagnostics.emitForVpnEvent(
+                    context = this,
+                    tag = TAG,
+                    attemptPrefix = prefixAttempt(attemptId),
+                    stage = "vpn_start",
+                )
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
@@ -580,9 +664,19 @@ class TunnelVpnService : VpnService() {
                             val code = VpnBridge.nativeStartLoop(tunFd)
                             VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeStartLoop exited with code=$code")
                             if (code != 0) {
-                                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(code), VpnBridge.failure(code))
+                                val detail = tunnelExitDetail(code)
+                                recordDisconnectReason(attemptId, "native_exit_error", Log.ERROR, "code=$code $detail")
+                                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, detail, VpnBridge.failure(code))
+                            } else if (hasRecordedDisconnectReason()) {
+                                // Teardown reason and TUNNEL_STOPPED state were already emitted by the caller.
                             } else {
-                                emitAttemptState(attemptId, VpnContract.TUNNEL_STOPPED, "Tunnel closed normally")
+                                recordDisconnectReason(
+                                    attemptId = attemptId,
+                                    reason = "peer_or_native_closed",
+                                    level = Log.WARN,
+                                    detail = "native loop exited with code=0 without app stop",
+                                )
+                                emitAttemptState(attemptId, VpnContract.TUNNEL_STOPPED, "Disconnected by peer or tunnel closed")
                             }
                         } catch (t: Throwable) {
                             if (shouldHandleAttempt(attemptId, "native-loop-crash")) {
@@ -650,15 +744,43 @@ class TunnelVpnService : VpnService() {
         }
     }
 
+    private fun hasRecordedDisconnectReason(): Boolean =
+        synchronized(sessionLock) { recordedDisconnectReason != null }
+
+    private fun recordDisconnectReason(
+        attemptId: String,
+        reason: String,
+        level: Int = Log.INFO,
+        detail: String? = null,
+    ) {
+        val shouldLog =
+            synchronized(sessionLock) {
+                if (recordedDisconnectReason != null) {
+                    false
+                } else {
+                    recordedDisconnectReason = reason
+                    true
+                }
+            }
+        if (!shouldLog) return
+        val suffix = if (detail.isNullOrBlank()) "" else " ($detail)"
+        val message = "${prefixAttempt(attemptId)}VPN disconnect reason=$reason$suffix"
+        if (level >= Log.WARN) {
+            AppLog.w(TAG, message)
+        } else {
+            AppLog.i(TAG, message)
+        }
+    }
+
     /**
      * Always release TUN + worker state. Safe when the engine thread already cleared [running]
      * (otherwise [onDestroy] would return early and leak the VPN fd).
      */
-    private fun stopTunnelInternal() {
+    private fun stopTunnelInternal(stopReason: String = "vpn service stop") {
         val capturedSetupThread = setupThread
         val capturedAttemptId = synchronized(sessionLock) { activeAttemptId }
         val owner = capturedAttemptId.takeIf { it.isNotEmpty() }?.let(::nativeOwner)
-        NativeTunnelSessions.shared.stopOwner(owner, reason = "vpn service stop")
+        NativeTunnelSessions.shared.stopOwner(owner, reason = stopReason)
         try {
             if (capturedSetupThread != null && capturedSetupThread !== Thread.currentThread()) {
                 capturedSetupThread.join(8_000)
@@ -764,8 +886,9 @@ class TunnelVpnService : VpnService() {
                 TAG,
                 "${prefixAttempt(attemptId)}Local proxy startup failed error=${e.message ?: e.javaClass.simpleName}",
             )
+            recordDisconnectReason(attemptId, "local_proxy_startup_failed", Log.ERROR, e.message ?: e.javaClass.simpleName)
             emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, e.message ?: "Local proxy startup failed")
-            stopTunnelInternal()
+            stopTunnelInternal(stopReason = "local proxy startup failed")
             stopServiceForAttempt(attemptId)
             return
         }
@@ -1114,13 +1237,15 @@ class TunnelVpnService : VpnService() {
         fun stopActiveSessionForModeSwitch(reason: String): Boolean {
             val svc = instance ?: return false
             if (!svc.hasActiveSession()) return false
+            val attemptId = svc.currentAttemptId()
             VpnTunnelEvents.emitEngineLog(
                 Log.DEBUG,
                 TAG,
-                "${svc.prefixAttempt(svc.currentAttemptId())}Stopping VPN tunnel before mode switch reason=$reason",
+                "${svc.prefixAttempt(attemptId)}Stopping VPN tunnel before mode switch reason=$reason",
             )
+            svc.recordDisconnectReason(attemptId, "mode_switch", Log.INFO, reason)
             svc.cancelPendingStopSelf()
-            svc.stopTunnelInternal()
+            svc.stopTunnelInternal(stopReason = "mode switch: $reason")
             try {
                 svc.stopForeground(STOP_FOREGROUND_REMOVE)
                 svc.stopSelf()
@@ -1203,4 +1328,13 @@ internal object TunnelVpnServiceStopPolicy {
 internal object VpnStopAttemptPolicy {
     fun shouldIgnoreStopRequest(requestedAttemptId: String, activeAttemptId: String): Boolean =
         requestedAttemptId.isNotEmpty() && activeAttemptId.isNotEmpty() && requestedAttemptId != activeAttemptId
+}
+
+internal object VpnDisconnectReasonPolicy {
+    fun systemDestroyReason(taskRemoved: Boolean): Pair<String, String> =
+        if (taskRemoved) {
+            "destroyed_by_system_after_task_removed" to "Disconnected: service stopped after app removed from recents"
+        } else {
+            "destroyed_by_android_system" to "Disconnected: stopped by Android system"
+        }
 }

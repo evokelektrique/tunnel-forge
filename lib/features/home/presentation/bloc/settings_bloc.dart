@@ -249,6 +249,9 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
   final TunnelRepository _tunnelRepository;
   int _messageId = 0;
   bool _batteryOptimizationConnectPromptInFlight = false;
+  bool _batteryRefreshInFlight = false;
+  bool _batteryUnrestrictedLoggedThisSession = false;
+  bool _pendingExternalBatterySettingsLog = false;
 
   Future<void> _onStarted(
     SettingsStarted event,
@@ -307,8 +310,22 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     SettingsBatteryOptimizationRefreshRequested event,
     Emitter<SettingsState> emit,
   ) async {
-    final status = await _tunnelRepository.getBatteryOptimizationStatus();
-    emit(state.copyWith(batteryOptimizationStatus: status, clearMessage: true));
+    if (_batteryRefreshInFlight || state.batteryOptimizationBusy) return;
+    _batteryRefreshInFlight = true;
+    try {
+      final status = await _tunnelRepository.getBatteryOptimizationStatus();
+      final changed = status != state.batteryOptimizationStatus;
+      final shouldLog = changed || _pendingExternalBatterySettingsLog;
+      _pendingExternalBatterySettingsLog = false;
+      if (shouldLog && status.state != BatteryOptimizationState.unknown) {
+        _logBatteryOptimization(action: 'refresh', status: status);
+      }
+      if (changed) {
+        emit(state.copyWith(batteryOptimizationStatus: status));
+      }
+    } finally {
+      _batteryRefreshInFlight = false;
+    }
   }
 
   Future<void> _onBatteryOptimizationRequestPressed(
@@ -382,12 +399,14 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     emit(state.copyWith(batteryOptimizationBusy: true, clearMessage: true));
     final result = await action();
     final status = await _tunnelRepository.getBatteryOptimizationStatus();
-    final message = _batteryOptimizationMessage(result);
-    _appendLog(
-      result.outcome == BatteryOptimizationRequestOutcome.failed
-          ? LogLevel.warning
-          : LogLevel.info,
-      'battery_optimization: action=$logAction outcome=${result.outcome.name} state=${status.state.name}${result.message == null ? '' : ' message=${result.message}'}',
+    final message = _batteryOptimizationMessage(result, status);
+    if (result.outcome == BatteryOptimizationRequestOutcome.settingsOpened) {
+      _pendingExternalBatterySettingsLog = true;
+    }
+    _logBatteryOptimization(
+      action: logAction,
+      status: status,
+      result: result,
     );
     emit(
       state.copyWith(
@@ -401,12 +420,47 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     );
   }
 
+  void _logBatteryOptimization({
+    required String action,
+    required BatteryOptimizationStatus status,
+    BatteryOptimizationRequestResult? result,
+  }) {
+    final isFailure = result?.outcome == BatteryOptimizationRequestOutcome.failed;
+    if (!isFailure && status.state == BatteryOptimizationState.allowed) {
+      if (_batteryUnrestrictedLoggedThisSession) return;
+      _batteryUnrestrictedLoggedThisSession = true;
+    } else if (!isFailure) {
+      _batteryUnrestrictedLoggedThisSession = false;
+    }
+    final parts = <String>[
+      'action=$action',
+      if (result != null) 'outcome=${result.outcome.name}',
+      'state=${status.state.name}',
+      'powerSaveMode=${status.powerSaveMode}',
+      if (result?.message != null) 'message=${result!.message}',
+    ];
+    _appendLog(
+      isFailure ? LogLevel.warning : LogLevel.info,
+      'battery_optimization: ${parts.join(' ')}',
+    );
+  }
+
   HomeMessage _nextMessage(String text, {bool error = false}) {
     _messageId += 1;
     return HomeMessage(id: _messageId, text: text, error: error);
   }
 
-  String _batteryOptimizationMessage(BatteryOptimizationRequestResult result) {
+  String _batteryOptimizationMessage(
+    BatteryOptimizationRequestResult result,
+    BatteryOptimizationStatus status,
+  ) {
+    if (result.outcome == BatteryOptimizationRequestOutcome.requested &&
+        status.state == BatteryOptimizationState.allowed) {
+      return AppText.pick(
+        'Battery optimization disabled for TunnelForge.',
+        'بهینه‌سازی باتری برای TunnelForge غیرفعال شد.',
+      );
+    }
     return switch (result.outcome) {
       BatteryOptimizationRequestOutcome.unsupported => AppText.pick(
         'Battery optimization settings are not available on this device.',

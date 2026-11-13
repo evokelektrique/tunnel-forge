@@ -24,7 +24,6 @@ class SettingsPanel extends StatefulWidget {
     required this.onSplitTunnelSettingsChanged,
     required this.onProxySettingsChanged,
     required this.onConnectivityCheckSettingsChanged,
-    required this.onRefreshBatteryOptimization,
     required this.onRequestBatteryOptimization,
     required this.onChooseApps,
     this.onOpenL2tpSecurityNotice,
@@ -59,7 +58,6 @@ class SettingsPanel extends StatefulWidget {
   final ValueChanged<ProxySettings> onProxySettingsChanged;
   final ValueChanged<ConnectivityCheckSettings>
   onConnectivityCheckSettingsChanged;
-  final VoidCallback onRefreshBatteryOptimization;
   final VoidCallback onRequestBatteryOptimization;
   final VoidCallback onChooseApps;
   final VoidCallback? onOpenL2tpSecurityNotice;
@@ -493,8 +491,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
                 if (widget.batteryOptimizationStatus.canRequestExemption) ...[
+                  const SizedBox(width: 12),
                   FilledButton.tonalIcon(
                     key: const Key('battery_optimization_request_button'),
                     onPressed: widget.batteryOptimizationBusy
@@ -503,16 +501,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     icon: const Icon(Icons.shield_outlined),
                     label: Text(t.allowBackgroundVpn),
                   ),
-                  const SizedBox(width: 8),
                 ],
-                IconButton.outlined(
-                  key: const Key('battery_optimization_refresh_button'),
-                  onPressed: widget.batteryOptimizationBusy
-                      ? null
-                      : widget.onRefreshBatteryOptimization,
-                  icon: const Icon(Icons.refresh),
-                  tooltip: t.refresh,
-                ),
               ],
             ),
           ),

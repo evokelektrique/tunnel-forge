@@ -29,7 +29,6 @@ void main() {
     ValueChanged<SplitTunnelSettings>? onSplitTunnelSettingsChanged,
     ValueChanged<ProxySettings>? onProxySettingsChanged,
     ValueChanged<ConnectivityCheckSettings>? onConnectivityCheckSettingsChanged,
-    VoidCallback? onRefreshBatteryOptimization,
     VoidCallback? onRequestBatteryOptimization,
     VoidCallback? onRefreshVersionCheck,
     VoidCallback? onOpenL2tpSecurityNotice,
@@ -54,7 +53,6 @@ void main() {
           onProxySettingsChanged: onProxySettingsChanged ?? (_) {},
           onConnectivityCheckSettingsChanged:
               onConnectivityCheckSettingsChanged ?? (_) {},
-          onRefreshBatteryOptimization: onRefreshBatteryOptimization ?? () {},
           onRequestBatteryOptimization: onRequestBatteryOptimization ?? () {},
           onChooseApps: () {},
           onOpenL2tpSecurityNotice: onOpenL2tpSecurityNotice,
@@ -355,6 +353,10 @@ void main() {
     );
 
     expect(find.byKey(const Key('battery_optimization_card')), findsOneWidget);
+    expect(
+      find.byKey(const Key('battery_optimization_refresh_button')),
+      findsNothing,
+    );
     expect(find.text('Battery optimization'), findsOneWidget);
     expect(find.text('Allow'), findsOneWidget);
 
