@@ -6,22 +6,30 @@ import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 
 import 'support/fake_diagnostics_bridge.dart';
 
+FakeDiagnosticsBridge _installFakeErrorHooks({Object? appendError}) {
+  final previousBridge = DiagnosticsBridge.instance;
+  final previousFlutterError = FlutterError.onError;
+  final previousPlatformError = PlatformDispatcher.instance.onError;
+  final previousDebugPrint = debugPrint;
+  final fake = FakeDiagnosticsBridge()..appendError = appendError;
+  DiagnosticsBridge.instance = fake;
+  // Silence expected error/stack prints from the global hooks under test.
+  debugPrint = (String? message, {int? wrapWidth}) {};
+  addTearDown(() {
+    debugPrint = previousDebugPrint;
+    DiagnosticsBridge.instance = previousBridge;
+    FlutterError.onError = previousFlutterError;
+    PlatformDispatcher.instance.onError = previousPlatformError;
+  });
+  installGlobalErrorHooks();
+  return fake;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('installGlobalErrorHooks forwards FlutterError and PlatformDispatcher errors to bridge', () async {
-    final previousBridge = DiagnosticsBridge.instance;
-    final previousFlutterError = FlutterError.onError;
-    final previousPlatformError = PlatformDispatcher.instance.onError;
-    final fake = FakeDiagnosticsBridge();
-    DiagnosticsBridge.instance = fake;
-    addTearDown(() {
-      DiagnosticsBridge.instance = previousBridge;
-      FlutterError.onError = previousFlutterError;
-      PlatformDispatcher.instance.onError = previousPlatformError;
-    });
-
-    installGlobalErrorHooks();
+    final fake = _installFakeErrorHooks();
 
     FlutterError.onError!(
       FlutterErrorDetails(
@@ -53,18 +61,7 @@ void main() {
   });
 
   test('installGlobalErrorHooks swallows bridge failures', () async {
-    final previousBridge = DiagnosticsBridge.instance;
-    final previousFlutterError = FlutterError.onError;
-    final previousPlatformError = PlatformDispatcher.instance.onError;
-    final fake = FakeDiagnosticsBridge()..appendError = Exception('ipc down');
-    DiagnosticsBridge.instance = fake;
-    addTearDown(() {
-      DiagnosticsBridge.instance = previousBridge;
-      FlutterError.onError = previousFlutterError;
-      PlatformDispatcher.instance.onError = previousPlatformError;
-    });
-
-    installGlobalErrorHooks();
+    _installFakeErrorHooks(appendError: Exception('ipc down'));
     final handled = PlatformDispatcher.instance.onError!(
       StateError('still-handled'),
       StackTrace.current,
