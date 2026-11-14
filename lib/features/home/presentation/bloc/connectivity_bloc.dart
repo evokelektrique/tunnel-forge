@@ -139,7 +139,10 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
         _activeCancel = null;
       }
     }
-    if (cancel.isCompleted || runId != _runId || emit.isDone || result == null) {
+    if (cancel.isCompleted ||
+        runId != _runId ||
+        emit.isDone ||
+        result == null) {
       return;
     }
 

@@ -67,25 +67,27 @@ void main() {
     verify(() => client.close(force: true)).called(1);
   });
 
-  test('cancelSignal closes client immediately without waiting for response', () async {
-    final client = _Client();
-    final uri = Uri.parse('https://example.com/check');
-    final pendingRequest = Completer<HttpClientRequest>();
-    final cancelCompleter = Completer<void>();
-    when(() => client.getUrl(uri)).thenAnswer((_) => pendingRequest.future);
+  test(
+    'cancelSignal closes client immediately without waiting for response',
+    () async {
+      final client = _Client();
+      final uri = Uri.parse('https://example.com/check');
+      final pendingRequest = Completer<HttpClientRequest>();
+      final cancelCompleter = Completer<void>();
+      when(() => client.getUrl(uri)).thenAnswer((_) => pendingRequest.future);
 
-    final resultFuture = HttpConnectivityChecker(
-      clientFactory: () => client,
-    ).ping(
-      ConnectivityPingRequest.direct(uri.toString()),
-      cancelSignal: cancelCompleter.future,
-    );
+      final resultFuture = HttpConnectivityChecker(clientFactory: () => client)
+          .ping(
+            ConnectivityPingRequest.direct(uri.toString()),
+            cancelSignal: cancelCompleter.future,
+          );
 
-    cancelCompleter.complete();
-    final result = await resultFuture;
+      cancelCompleter.complete();
+      final result = await resultFuture;
 
-    expect(result.reachable, isFalse);
-    expect(result.error, 'Cancelled');
-    verify(() => client.close(force: true)).called(1);
-  });
+      expect(result.reachable, isFalse);
+      expect(result.error, 'Cancelled');
+      verify(() => client.close(force: true)).called(1);
+    },
+  );
 }

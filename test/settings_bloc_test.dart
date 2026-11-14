@@ -886,9 +886,7 @@ void main() {
             BatteryOptimizationStatus(
               state: BatteryOptimizationState.restricted,
             ),
-            BatteryOptimizationStatus(
-              state: BatteryOptimizationState.allowed,
-            ),
+            BatteryOptimizationStatus(state: BatteryOptimizationState.allowed),
           ])
           ..requestCompleter = Completer<BatteryOptimizationRequestResult>();
         return SettingsBloc(

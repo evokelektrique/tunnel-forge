@@ -41,9 +41,7 @@ void main() {
         expect(bloc.state.badgeState, ConnectivityBadgeState.checking);
         expect(bloc.state.runId, 2);
 
-        firstCompleter.complete(
-          ConnectivityPingResult.failure(error: 'stale'),
-        );
+        firstCompleter.complete(ConnectivityPingResult.failure(error: 'stale'));
         await Future<void>.delayed(Duration.zero);
         expect(bloc.state.badgeState, ConnectivityBadgeState.checking);
 

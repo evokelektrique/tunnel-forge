@@ -459,7 +459,11 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
               status.state != BatteryOptimizationState.allowed)) {
         _pendingExternalBatterySettingsLog = true;
       }
-      _logBatteryOptimization(action: logAction, status: status, result: result);
+      _logBatteryOptimization(
+        action: logAction,
+        status: status,
+        result: result,
+      );
       emit(
         state.copyWith(
           batteryOptimizationBusy: false,

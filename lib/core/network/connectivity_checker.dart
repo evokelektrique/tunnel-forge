@@ -201,10 +201,7 @@ class HttpConnectivityChecker implements ConnectivityChecker {
     }
 
     unawaited(
-      cancelSignal.then<void>(
-        (_) => onCancel(),
-        onError: (_) => onCancel(),
-      ),
+      cancelSignal.then<void>((_) => onCancel(), onError: (_) => onCancel()),
     );
     return Future.any<ConnectivityPingResult>([
       runPing(),
