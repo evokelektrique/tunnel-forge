@@ -72,6 +72,10 @@ class VpnContractTest {
     @Test
     fun proxyExposureChannel() {
         assertEquals("onProxyExposureChanged", VpnContract.ON_PROXY_EXPOSURE_CHANGED)
+        assertEquals(
+            "onBatteryOptimizationStatusChanged",
+            VpnContract.ON_BATTERY_OPTIMIZATION_STATUS_CHANGED,
+        )
         assertEquals("proxyExposureActive", VpnContract.ARG_PROXY_EXPOSURE_ACTIVE)
         assertEquals("proxyExposureBindAddress", VpnContract.ARG_PROXY_EXPOSURE_BIND_ADDRESS)
         assertEquals("proxyExposureDisplayAddress", VpnContract.ARG_PROXY_EXPOSURE_DISPLAY_ADDRESS)

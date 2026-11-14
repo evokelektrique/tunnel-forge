@@ -70,6 +70,7 @@ object VpnContract {
     const val ARG_ENGINE_LOG_MESSAGE = "engineLogMessage"
 
     const val ON_PROXY_EXPOSURE_CHANGED = "onProxyExposureChanged"
+    const val ON_BATTERY_OPTIMIZATION_STATUS_CHANGED = "onBatteryOptimizationStatusChanged"
 
     const val ARG_PROXY_EXPOSURE_ACTIVE = "proxyExposureActive"
     const val ARG_PROXY_EXPOSURE_BIND_ADDRESS = "proxyExposureBindAddress"

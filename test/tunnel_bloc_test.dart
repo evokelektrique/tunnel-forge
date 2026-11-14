@@ -529,6 +529,10 @@ class _FakeTunnelRepository implements TunnelRepository {
   Stream<ProxyExposure> get proxyExposures => const Stream.empty();
 
   @override
+  Stream<BatteryOptimizationStatus> get batteryOptimizationStatuses =>
+      const Stream.empty();
+
+  @override
   Stream<TunnelHostUpdate> get tunnelStates => const Stream.empty();
 
   @override

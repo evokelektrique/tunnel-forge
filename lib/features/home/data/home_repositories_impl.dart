@@ -453,6 +453,9 @@ class TunnelRepositoryImpl implements TunnelRepository {
           onProxyExposureChanged: (exposure) {
             _proxyExposureController.add(exposure);
           },
+          onBatteryOptimizationStatusChanged: (status) {
+            _batteryOptimizationStatusController.add(status);
+          },
         );
   }
 
@@ -463,12 +466,19 @@ class TunnelRepositoryImpl implements TunnelRepository {
       StreamController<EngineLogMessage>.broadcast();
   final StreamController<ProxyExposure> _proxyExposureController =
       StreamController<ProxyExposure>.broadcast();
+  final StreamController<BatteryOptimizationStatus>
+  _batteryOptimizationStatusController =
+      StreamController<BatteryOptimizationStatus>.broadcast();
 
   @override
   Stream<EngineLogMessage> get engineLogs => _engineLogController.stream;
 
   @override
   Stream<ProxyExposure> get proxyExposures => _proxyExposureController.stream;
+
+  @override
+  Stream<BatteryOptimizationStatus> get batteryOptimizationStatuses =>
+      _batteryOptimizationStatusController.stream;
 
   @override
   Stream<TunnelHostUpdate> get tunnelStates => _tunnelStateController.stream;
@@ -516,6 +526,7 @@ class TunnelRepositoryImpl implements TunnelRepository {
     unawaited(_tunnelStateController.close());
     unawaited(_engineLogController.close());
     unawaited(_proxyExposureController.close());
+    unawaited(_batteryOptimizationStatusController.close());
   }
 
   @override

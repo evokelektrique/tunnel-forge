@@ -60,6 +60,7 @@ abstract class TunnelRepository {
   Stream<TunnelHostUpdate> get tunnelStates;
   Stream<EngineLogMessage> get engineLogs;
   Stream<ProxyExposure> get proxyExposures;
+  Stream<BatteryOptimizationStatus> get batteryOptimizationStatuses;
 
   Future<bool> prepareVpn();
   Future<TunnelRuntimeState> getRuntimeState();

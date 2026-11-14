@@ -137,6 +137,10 @@ class _RecordingTunnelRepository implements TunnelRepository {
   Stream<ProxyExposure> get proxyExposures => const Stream.empty();
 
   @override
+  Stream<BatteryOptimizationStatus> get batteryOptimizationStatuses =>
+      const Stream.empty();
+
+  @override
   Future<bool> prepareVpn() async => true;
 
   @override

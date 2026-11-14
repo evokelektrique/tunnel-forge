@@ -137,10 +137,16 @@ class _FakeLogsRepository implements LogsRepository {
 class _FakeTunnelRepository implements TunnelRepository {
   BatteryOptimizationStatus batteryOptimizationStatus =
       const BatteryOptimizationStatus.unknown();
+  final List<BatteryOptimizationStatus> batteryOptimizationStatusSequence =
+      <BatteryOptimizationStatus>[];
   BatteryOptimizationRequestResult requestResult =
       const BatteryOptimizationRequestResult(
         outcome: BatteryOptimizationRequestOutcome.requested,
       );
+  Completer<BatteryOptimizationRequestResult>? requestCompleter;
+  final StreamController<BatteryOptimizationStatus>
+  batteryOptimizationStatusController =
+      StreamController<BatteryOptimizationStatus>.broadcast();
   int batteryOptimizationRequestCount = 0;
 
   @override
@@ -148,6 +154,10 @@ class _FakeTunnelRepository implements TunnelRepository {
 
   @override
   Stream<ProxyExposure> get proxyExposures => const Stream.empty();
+
+  @override
+  Stream<BatteryOptimizationStatus> get batteryOptimizationStatuses =>
+      batteryOptimizationStatusController.stream;
 
   @override
   Stream<TunnelHostUpdate> get tunnelStates => const Stream.empty();
@@ -162,13 +172,18 @@ class _FakeTunnelRepository implements TunnelRepository {
   }) async {}
 
   @override
-  void dispose() {}
+  void dispose() {
+    unawaited(batteryOptimizationStatusController.close());
+  }
 
   @override
   Future<Uint8List?> getAppIcon(String packageName) async => null;
 
   @override
   Future<BatteryOptimizationStatus> getBatteryOptimizationStatus() async {
+    if (batteryOptimizationStatusSequence.isNotEmpty) {
+      return batteryOptimizationStatusSequence.removeAt(0);
+    }
     return batteryOptimizationStatus;
   }
 
@@ -205,6 +220,8 @@ class _FakeTunnelRepository implements TunnelRepository {
   @override
   Future<BatteryOptimizationRequestResult> requestIgnoreBatteryOptimizations() {
     batteryOptimizationRequestCount += 1;
+    final completer = requestCompleter;
+    if (completer != null) return completer.future;
     return Future.value(requestResult);
   }
 
@@ -855,6 +872,136 @@ void main() {
               'message text',
               'Battery optimization disabled for TunnelForge.',
             ),
+      ],
+    );
+
+    blocTest<SettingsBloc, SettingsState>(
+      'replays queued battery refresh requested while action was busy',
+      build: () {
+        tunnelRepository = _FakeTunnelRepository()
+          ..batteryOptimizationStatus = const BatteryOptimizationStatus(
+            state: BatteryOptimizationState.restricted,
+          )
+          ..batteryOptimizationStatusSequence.addAll(const [
+            BatteryOptimizationStatus(
+              state: BatteryOptimizationState.restricted,
+            ),
+            BatteryOptimizationStatus(
+              state: BatteryOptimizationState.allowed,
+            ),
+          ])
+          ..requestCompleter = Completer<BatteryOptimizationRequestResult>();
+        return SettingsBloc(
+          _FakeSettingsRepository(),
+          _FakeAppVersionRepository(
+            const AppVersionInfo(
+              displayVersion: '0.3.0+11',
+              semanticVersion: SemanticVersion(major: 0, minor: 3, patch: 0),
+            ),
+          ),
+          _FakeAppUpdateRepository(
+            release: AppReleaseInfo(
+              version: const SemanticVersion(major: 0, minor: 3, patch: 0),
+              htmlUrl:
+                  'https://github.com/evokelektrique/tunnel-forge/releases',
+              publishedAt: DateTime.utc(2026, 4, 19),
+              prerelease: true,
+            ),
+          ),
+          _FakeLogsRepository(),
+          tunnelRepository,
+        );
+      },
+      seed: () => const SettingsState(
+        batteryOptimizationStatus: BatteryOptimizationStatus(
+          state: BatteryOptimizationState.restricted,
+        ),
+      ),
+      act: (bloc) async {
+        bloc.add(const SettingsBatteryOptimizationRequestPressed());
+        await Future<void>.delayed(Duration.zero);
+
+        // Resume arrives while the request call is still in flight.
+        bloc.add(const SettingsBatteryOptimizationRefreshRequested());
+        await Future<void>.delayed(Duration.zero);
+
+        tunnelRepository.requestCompleter!.complete(
+          const BatteryOptimizationRequestResult(
+            outcome: BatteryOptimizationRequestOutcome.requested,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+      },
+      expect: () => [
+        const SettingsState(
+          batteryOptimizationStatus: BatteryOptimizationStatus(
+            state: BatteryOptimizationState.restricted,
+          ),
+          batteryOptimizationBusy: true,
+        ),
+        isA<SettingsState>()
+            .having((s) => s.batteryOptimizationBusy, 'busy', isFalse)
+            .having(
+              (s) => s.batteryOptimizationStatus.state,
+              'battery state',
+              BatteryOptimizationState.restricted,
+            ),
+        isA<SettingsState>().having(
+          (s) => s.batteryOptimizationStatus.state,
+          'battery state',
+          BatteryOptimizationState.allowed,
+        ),
+      ],
+    );
+
+    blocTest<SettingsBloc, SettingsState>(
+      'updates status when host pushes battery optimization status stream',
+      build: () {
+        tunnelRepository = _FakeTunnelRepository()
+          ..batteryOptimizationStatus = const BatteryOptimizationStatus(
+            state: BatteryOptimizationState.restricted,
+          );
+        return SettingsBloc(
+          _FakeSettingsRepository(),
+          _FakeAppVersionRepository(
+            const AppVersionInfo(
+              displayVersion: '0.3.0+11',
+              semanticVersion: SemanticVersion(major: 0, minor: 3, patch: 0),
+            ),
+          ),
+          _FakeAppUpdateRepository(
+            release: AppReleaseInfo(
+              version: const SemanticVersion(major: 0, minor: 3, patch: 0),
+              htmlUrl:
+                  'https://github.com/evokelektrique/tunnel-forge/releases',
+              publishedAt: DateTime.utc(2026, 4, 19),
+              prerelease: true,
+            ),
+          ),
+          _FakeLogsRepository(),
+          tunnelRepository,
+        );
+      },
+      seed: () => const SettingsState(
+        batteryOptimizationStatus: BatteryOptimizationStatus(
+          state: BatteryOptimizationState.restricted,
+        ),
+      ),
+      act: (bloc) async {
+        tunnelRepository.batteryOptimizationStatusController.add(
+          const BatteryOptimizationStatus(
+            state: BatteryOptimizationState.allowed,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+      },
+      expect: () => [
+        const SettingsState(
+          batteryOptimizationStatus: BatteryOptimizationStatus(
+            state: BatteryOptimizationState.allowed,
+          ),
+        ),
       ],
     );
   });

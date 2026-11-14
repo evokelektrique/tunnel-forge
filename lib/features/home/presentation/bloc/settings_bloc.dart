@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
@@ -46,6 +48,15 @@ final class SettingsVersionCheckConsentGranted extends SettingsEvent {
 
 final class SettingsBatteryOptimizationRefreshRequested extends SettingsEvent {
   const SettingsBatteryOptimizationRefreshRequested();
+}
+
+final class SettingsBatteryOptimizationStatusChanged extends SettingsEvent {
+  const SettingsBatteryOptimizationStatusChanged(this.status);
+
+  final BatteryOptimizationStatus status;
+
+  @override
+  List<Object?> get props => [status];
 }
 
 final class SettingsBatteryOptimizationRequestPressed extends SettingsEvent {
@@ -228,6 +239,9 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     on<SettingsBatteryOptimizationRefreshRequested>(
       _onBatteryOptimizationRefreshRequested,
     );
+    on<SettingsBatteryOptimizationStatusChanged>(
+      _onBatteryOptimizationStatusChanged,
+    );
     on<SettingsBatteryOptimizationRequestPressed>(
       _onBatteryOptimizationRequestPressed,
     );
@@ -240,6 +254,12 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     on<SettingsManufacturerBackgroundSettingsPressed>(
       _onManufacturerBackgroundSettingsPressed,
     );
+    _batteryStatusSubscription = _tunnelRepository.batteryOptimizationStatuses
+        .listen((status) {
+          if (!isClosed) {
+            add(SettingsBatteryOptimizationStatusChanged(status));
+          }
+        });
   }
 
   final SettingsRepository _settingsRepository;
@@ -247,11 +267,19 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
   final AppUpdateRepository _appUpdateRepository;
   final LogsRepository _logsRepository;
   final TunnelRepository _tunnelRepository;
+  StreamSubscription<BatteryOptimizationStatus>? _batteryStatusSubscription;
   int _messageId = 0;
   bool _batteryOptimizationConnectPromptInFlight = false;
   bool _batteryRefreshInFlight = false;
+  bool _batteryRefreshQueued = false;
   bool _batteryUnrestrictedLoggedThisSession = false;
   bool _pendingExternalBatterySettingsLog = false;
+
+  @override
+  Future<void> close() async {
+    await _batteryStatusSubscription?.cancel();
+    return super.close();
+  }
 
   Future<void> _onStarted(
     SettingsStarted event,
@@ -310,21 +338,46 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     SettingsBatteryOptimizationRefreshRequested event,
     Emitter<SettingsState> emit,
   ) async {
-    if (_batteryRefreshInFlight || state.batteryOptimizationBusy) return;
+    if (_batteryRefreshInFlight || state.batteryOptimizationBusy) {
+      _batteryRefreshQueued = true;
+      return;
+    }
     _batteryRefreshInFlight = true;
     try {
       final status = await _tunnelRepository.getBatteryOptimizationStatus();
-      final changed = status != state.batteryOptimizationStatus;
-      final shouldLog = changed || _pendingExternalBatterySettingsLog;
-      _pendingExternalBatterySettingsLog = false;
-      if (shouldLog && status.state != BatteryOptimizationState.unknown) {
-        _logBatteryOptimization(action: 'refresh', status: status);
-      }
-      if (changed) {
-        emit(state.copyWith(batteryOptimizationStatus: status));
-      }
+      _applyBatteryOptimizationStatus(status, emit: emit);
     } finally {
       _batteryRefreshInFlight = false;
+      if (_batteryRefreshQueued && !isClosed) {
+        _batteryRefreshQueued = false;
+        add(const SettingsBatteryOptimizationRefreshRequested());
+      }
+    }
+  }
+
+  void _onBatteryOptimizationStatusChanged(
+    SettingsBatteryOptimizationStatusChanged event,
+    Emitter<SettingsState> emit,
+  ) {
+    if (state.batteryOptimizationBusy) {
+      _batteryRefreshQueued = true;
+      return;
+    }
+    _applyBatteryOptimizationStatus(event.status, emit: emit);
+  }
+
+  void _applyBatteryOptimizationStatus(
+    BatteryOptimizationStatus status, {
+    required Emitter<SettingsState> emit,
+  }) {
+    final changed = status != state.batteryOptimizationStatus;
+    final shouldLog = changed || _pendingExternalBatterySettingsLog;
+    _pendingExternalBatterySettingsLog = false;
+    if (shouldLog && status.state != BatteryOptimizationState.unknown) {
+      _logBatteryOptimization(action: 'refresh', status: status);
+    }
+    if (changed) {
+      emit(state.copyWith(batteryOptimizationStatus: status));
     }
   }
 
@@ -397,23 +450,35 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     required String logAction,
   }) async {
     emit(state.copyWith(batteryOptimizationBusy: true, clearMessage: true));
-    final result = await action();
-    final status = await _tunnelRepository.getBatteryOptimizationStatus();
-    final message = _batteryOptimizationMessage(result, status);
-    if (result.outcome == BatteryOptimizationRequestOutcome.settingsOpened) {
-      _pendingExternalBatterySettingsLog = true;
-    }
-    _logBatteryOptimization(action: logAction, status: status, result: result);
-    emit(
-      state.copyWith(
-        batteryOptimizationBusy: false,
-        batteryOptimizationStatus: status,
-        message: _nextMessage(
-          message,
-          error: result.outcome == BatteryOptimizationRequestOutcome.failed,
+    try {
+      final result = await action();
+      final status = await _tunnelRepository.getBatteryOptimizationStatus();
+      final message = _batteryOptimizationMessage(result, status);
+      if (result.outcome == BatteryOptimizationRequestOutcome.settingsOpened ||
+          (result.outcome == BatteryOptimizationRequestOutcome.requested &&
+              status.state != BatteryOptimizationState.allowed)) {
+        _pendingExternalBatterySettingsLog = true;
+      }
+      _logBatteryOptimization(action: logAction, status: status, result: result);
+      emit(
+        state.copyWith(
+          batteryOptimizationBusy: false,
+          batteryOptimizationStatus: status,
+          message: _nextMessage(
+            message,
+            error: result.outcome == BatteryOptimizationRequestOutcome.failed,
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      if (state.batteryOptimizationBusy) {
+        emit(state.copyWith(batteryOptimizationBusy: false));
+      }
+      if (_batteryRefreshQueued && !isClosed) {
+        _batteryRefreshQueued = false;
+        add(const SettingsBatteryOptimizationRefreshRequested());
+      }
+    }
   }
 
   void _logBatteryOptimization({

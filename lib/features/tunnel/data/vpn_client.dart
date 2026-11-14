@@ -25,16 +25,23 @@ typedef VpnEngineLogCallback =
 /// Host -> Dart: current proxy listener exposure after startup or shutdown.
 typedef VpnProxyExposureCallback = void Function(ProxyExposure exposure);
 
+/// Host -> Dart: battery optimization status pushed when returning to the app.
+typedef VpnBatteryOptimizationStatusCallback =
+    void Function(BatteryOptimizationStatus status);
+
 class VpnClient {
   VpnClient({
     MethodChannel? channel,
     VpnTunnelHostCallback? onTunnelState,
     VpnEngineLogCallback? onEngineLog,
     VpnProxyExposureCallback? onProxyExposureChanged,
+    VpnBatteryOptimizationStatusCallback? onBatteryOptimizationStatusChanged,
   }) : _channel = channel ?? MethodChannel(VpnContract.channel),
        _onTunnelState = onTunnelState,
        _onEngineLog = onEngineLog,
-       _onProxyExposureChanged = onProxyExposureChanged {
+       _onProxyExposureChanged = onProxyExposureChanged,
+       _onBatteryOptimizationStatusChanged =
+           onBatteryOptimizationStatusChanged {
     _channel.setMethodCallHandler(_handleHostCall);
   }
 
@@ -42,6 +49,8 @@ class VpnClient {
   final VpnTunnelHostCallback? _onTunnelState;
   final VpnEngineLogCallback? _onEngineLog;
   final VpnProxyExposureCallback? _onProxyExposureChanged;
+  final VpnBatteryOptimizationStatusCallback?
+  _onBatteryOptimizationStatusChanged;
 
   Future<dynamic> _handleHostCall(MethodCall call) async {
     if (call.method == VpnContract.onTunnelState) {
@@ -83,6 +92,12 @@ class VpnClient {
       if (exposure != null) {
         _onProxyExposureChanged?.call(exposure);
       }
+      return;
+    }
+    if (call.method == VpnContract.onBatteryOptimizationStatusChanged) {
+      _onBatteryOptimizationStatusChanged?.call(
+        BatteryOptimizationStatus.fromMap(call.arguments),
+      );
     }
   }
 

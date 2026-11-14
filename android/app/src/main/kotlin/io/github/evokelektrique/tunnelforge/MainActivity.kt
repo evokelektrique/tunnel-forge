@@ -41,6 +41,7 @@ class MainActivity : FlutterActivity() {
     private var vpnPermissionResult: MethodChannel.Result? = null
     private var notificationPermissionResult: MethodChannel.Result? = null
     private var batteryOptimizationPermissionResult: MethodChannel.Result? = null
+    private var awaitingBatteryOptimizationReturn = false
     private var pendingConnectIntent: Intent? = null
     private var vpnChannel: MethodChannel? = null
     private var profileTransferChannel: MethodChannel? = null
@@ -458,14 +459,34 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    override fun onPause() {
+        mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
+        super.onPause()
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        dispatchBatteryOptimizationStatusOnReturn()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            dispatchBatteryOptimizationStatusOnReturn()
+        }
+    }
+
     override fun onDestroy() {
         vpnPermissionResult = null
         notificationPermissionResult = null
         batteryOptimizationPermissionResult = null
+        awaitingBatteryOptimizationReturn = false
         pendingConnectIntent = null
         profileTransferConsumerReady = false
         profileTransferChannel = null
         mainHandler.removeCallbacksAndMessages(PROFILE_IMPORT_CALLBACK_TOKEN)
+        mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
+        mainHandler.removeCallbacksAndMessages(BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN)
         profileTransferExecutor.shutdownNow()
         diagnosticsExecutor.shutdownNow()
         vpnChannel?.let { VpnTunnelEvents.detach(it) }
@@ -485,10 +506,7 @@ class MainActivity : FlutterActivity() {
         if (requestCode == REQUEST_BATTERY_OPTIMIZATION) {
             val pending = batteryOptimizationPermissionResult ?: return
             batteryOptimizationPermissionResult = null
-            if (isIgnoringBatteryOptimizations()) {
-                BatteryOptimizationLogPolicy.shared.markUnrestrictedLogged()
-            }
-            pending.success(batteryOptimizationResult(BATTERY_OUTCOME_REQUESTED))
+            resolveBatteryOptimizationPermissionResult(pending, BATTERY_RESULT_POLL_MAX_ATTEMPTS)
             return
         }
         if (requestCode != REQUEST_VPN_PERMISSION) return
@@ -680,6 +698,7 @@ class MainActivity : FlutterActivity() {
             }
         if (launchSafely(requestIntent, REQUEST_BATTERY_OPTIMIZATION)) {
             batteryOptimizationPermissionResult = result
+            awaitingBatteryOptimizationReturn = true
             AppLog.d(TAG, "battery_optimization request dialog opened")
         } else {
             AppLog.w(TAG, "battery_optimization request unavailable; opening app settings fallback")
@@ -698,6 +717,7 @@ class MainActivity : FlutterActivity() {
         }
         val settingsIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
         return if (launchSafely(settingsIntent)) {
+            awaitingBatteryOptimizationReturn = true
             batteryOptimizationResult(BATTERY_OUTCOME_SETTINGS_OPENED)
         } else {
             openAppDetailsSettings(
@@ -716,6 +736,7 @@ class MainActivity : FlutterActivity() {
                 }
         for (intent in intents) {
             if (launchSafely(intent)) {
+                awaitingBatteryOptimizationReturn = true
                 return batteryOptimizationResult(BATTERY_OUTCOME_SETTINGS_OPENED)
             }
         }
@@ -770,10 +791,82 @@ class MainActivity : FlutterActivity() {
             data = Uri.parse("package:$packageName")
         }
         return if (launchSafely(intent)) {
+            awaitingBatteryOptimizationReturn = true
             batteryOptimizationResult(fallbackOutcome)
         } else {
             batteryOptimizationResult(BATTERY_OUTCOME_FAILED, failureMessage)
         }
+    }
+
+    private fun resolveBatteryOptimizationPermissionResult(
+        pending: MethodChannel.Result,
+        remainingAttempts: Int,
+    ) {
+        if (isIgnoringBatteryOptimizations()) {
+            BatteryOptimizationLogPolicy.shared.markUnrestrictedLogged()
+            awaitingBatteryOptimizationReturn = false
+            mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
+            mainHandler.removeCallbacksAndMessages(BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN)
+            pending.success(batteryOptimizationResult(BATTERY_OUTCOME_REQUESTED))
+            vpnChannel?.invokeMethod(
+                VpnContract.ON_BATTERY_OPTIMIZATION_STATUS_CHANGED,
+                batteryOptimizationStatus(),
+            )
+            return
+        }
+        if (remainingAttempts > 0) {
+            mainHandler.removeCallbacksAndMessages(BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN)
+            mainHandler.postAtTime(
+                {
+                    if (isFinishing || isDestroyed) return@postAtTime
+                    resolveBatteryOptimizationPermissionResult(pending, remainingAttempts - 1)
+                },
+                BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN,
+                SystemClock.uptimeMillis() + BATTERY_RESULT_POLL_INTERVAL_MS,
+            )
+            return
+        }
+        awaitingBatteryOptimizationReturn = true
+        pending.success(batteryOptimizationResult(BATTERY_OUTCOME_REQUESTED))
+        scheduleBatteryOptimizationReturnPolling(BATTERY_RETURN_RECHECK_MAX_ATTEMPTS)
+    }
+
+    private fun dispatchBatteryOptimizationStatusOnReturn() {
+        val channel = vpnChannel ?: return
+        channel.invokeMethod(
+            VpnContract.ON_BATTERY_OPTIMIZATION_STATUS_CHANGED,
+            batteryOptimizationStatus(),
+        )
+        if (isIgnoringBatteryOptimizations()) {
+            BatteryOptimizationLogPolicy.shared.markUnrestrictedLogged()
+            awaitingBatteryOptimizationReturn = false
+            mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
+            return
+        }
+        if (!awaitingBatteryOptimizationReturn) return
+        scheduleBatteryOptimizationReturnPolling(BATTERY_RETURN_RECHECK_MAX_ATTEMPTS)
+    }
+
+    private fun scheduleBatteryOptimizationReturnPolling(remainingAttempts: Int) {
+        mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
+        if (remainingAttempts <= 0) return
+        mainHandler.postAtTime(
+            {
+                if (isFinishing || isDestroyed) return@postAtTime
+                if (isIgnoringBatteryOptimizations()) {
+                    BatteryOptimizationLogPolicy.shared.markUnrestrictedLogged()
+                    awaitingBatteryOptimizationReturn = false
+                    vpnChannel?.invokeMethod(
+                        VpnContract.ON_BATTERY_OPTIMIZATION_STATUS_CHANGED,
+                        batteryOptimizationStatus(),
+                    )
+                } else if (awaitingBatteryOptimizationReturn && remainingAttempts > 1) {
+                    scheduleBatteryOptimizationReturnPolling(remainingAttempts - 1)
+                }
+            },
+            BATTERY_REFRESH_CALLBACK_TOKEN,
+            SystemClock.uptimeMillis() + BATTERY_RETURN_RECHECK_INTERVAL_MS,
+        )
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean =
@@ -1056,6 +1149,12 @@ class MainActivity : FlutterActivity() {
         private const val PROFILE_IMPORT_READ_TIMEOUT_MS = 5_000L
         private const val PROFILE_IMPORT_MAX_CONCURRENT_READS = 4
         private val PROFILE_IMPORT_CALLBACK_TOKEN = Any()
+        private const val BATTERY_RESULT_POLL_INTERVAL_MS = 150L
+        private const val BATTERY_RESULT_POLL_MAX_ATTEMPTS = 10
+        private const val BATTERY_RETURN_RECHECK_INTERVAL_MS = 200L
+        private const val BATTERY_RETURN_RECHECK_MAX_ATTEMPTS = 50
+        private val BATTERY_REFRESH_CALLBACK_TOKEN = Any()
+        private val BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN = Any()
         private const val BATTERY_OUTCOME_UNSUPPORTED = "unsupported"
         private const val BATTERY_OUTCOME_ALREADY_ALLOWED = "alreadyAllowed"
         private const val BATTERY_OUTCOME_REQUESTED = "requested"

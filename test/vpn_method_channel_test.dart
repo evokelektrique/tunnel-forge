@@ -479,5 +479,40 @@ void main() {
         ),
       );
     });
+
+    test('battery optimization status callback parses native update', () async {
+      BatteryOptimizationStatus? seenStatus;
+      final client = VpnClient(
+        onBatteryOptimizationStatusChanged: (status) {
+          seenStatus = status;
+        },
+      );
+      const codec = StandardMethodCodec();
+      final data = codec.encodeMethodCall(
+        const MethodCall(
+          VpnContract.onBatteryOptimizationStatusChanged,
+          <String, Object?>{
+            VpnContract.argBatteryOptimizationState: 'allowed',
+            VpnContract.argBatteryOptimizationPowerSaveMode: false,
+            VpnContract.argBatteryOptimizationManufacturer: 'Samsung',
+            VpnContract.argBatteryOptimizationAndroidSdkInt: 35,
+          },
+        ),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(VpnContract.channel, data, (ByteData? _) {});
+      await Future<void>.delayed(Duration.zero);
+      client.dispose();
+
+      expect(
+        seenStatus,
+        const BatteryOptimizationStatus(
+          state: BatteryOptimizationState.allowed,
+          powerSaveMode: false,
+          manufacturer: 'Samsung',
+          androidSdkInt: 35,
+        ),
+      );
+    });
   });
 }

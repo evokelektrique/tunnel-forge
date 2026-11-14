@@ -80,6 +80,10 @@ abstract final class VpnContract {
   /// Android -> Dart: active local-proxy listener address/port exposure.
   static const String onProxyExposureChanged = 'onProxyExposureChanged';
 
+  /// Android -> Dart: updated battery optimization status on activity return.
+  static const String onBatteryOptimizationStatusChanged =
+      'onBatteryOptimizationStatusChanged';
+
   static const String argProxyExposureActive = 'proxyExposureActive';
   static const String argProxyExposureBindAddress = 'proxyExposureBindAddress';
   static const String argProxyExposureDisplayAddress =
