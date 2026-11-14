@@ -35,6 +35,7 @@ class TunnelForgeApp extends StatefulWidget {
     this.appUpdateRepository,
     this.onboardingRepository,
     this.appExitController,
+    this.skipOnboardingDisclosure,
   });
 
   final ProfileStore? profileStore;
@@ -45,6 +46,7 @@ class TunnelForgeApp extends StatefulWidget {
   final AppUpdateRepository? appUpdateRepository;
   final OnboardingRepository? onboardingRepository;
   final AppExitController? appExitController;
+  final bool? skipOnboardingDisclosure;
 
   @override
   State<TunnelForgeApp> createState() => _TunnelForgeAppState();
@@ -67,6 +69,7 @@ class _TunnelForgeAppState extends State<TunnelForgeApp> {
       appUpdateRepository: widget.appUpdateRepository,
       onboardingRepository: widget.onboardingRepository,
       appExitController: widget.appExitController,
+      skipOnboardingDisclosure: widget.skipOnboardingDisclosure,
     );
   }
 

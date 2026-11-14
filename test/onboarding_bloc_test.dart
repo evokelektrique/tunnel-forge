@@ -51,12 +51,36 @@ void main() {
 
     blocTest<OnboardingBloc, OnboardingState>(
       'presents language choice on first launch',
-      build: () =>
-          OnboardingBloc(_FakeOnboardingRepository(), _FakeAppExitController()),
+      build: () => OnboardingBloc(
+        _FakeOnboardingRepository(),
+        _FakeAppExitController(),
+        skipDisclosureSteps: false,
+      ),
       act: (bloc) => bloc.add(const OnboardingStarted()),
       expect: () => [
         const OnboardingState(status: OnboardingFlowStatus.presenting),
       ],
+    );
+
+    test(
+      'debug mode skips intro and security notice on continue from language',
+      () async {
+        final repository = _FakeOnboardingRepository();
+        final bloc = OnboardingBloc(repository, _FakeAppExitController());
+        addTearDown(bloc.close);
+
+        bloc.add(const OnboardingStarted());
+        await Future<void>.delayed(Duration.zero);
+        expect(bloc.state.status, OnboardingFlowStatus.presenting);
+        expect(bloc.state.step, OnboardingStep.language);
+        expect(bloc.state.skipDisclosureSteps, isTrue);
+
+        bloc.add(const OnboardingContinuePressed());
+        await Future<void>.delayed(Duration.zero);
+
+        expect(repository.savedVersion, kCurrentL2tpDisclosureVersion);
+        expect(bloc.state.status, OnboardingFlowStatus.accepted);
+      },
     );
 
     test(
@@ -65,6 +89,7 @@ void main() {
         final bloc = OnboardingBloc(
           _FakeOnboardingRepository(),
           _FakeAppExitController(),
+          skipDisclosureSteps: false,
         );
         addTearDown(bloc.close);
 
@@ -86,7 +111,11 @@ void main() {
 
     test('agree requires both checkbox and completed timer', () async {
       final repository = _FakeOnboardingRepository();
-      final bloc = OnboardingBloc(repository, _FakeAppExitController());
+      final bloc = OnboardingBloc(
+        repository,
+        _FakeAppExitController(),
+        skipDisclosureSteps: false,
+      );
       addTearDown(bloc.close);
 
       bloc.add(const OnboardingStarted());
@@ -126,7 +155,11 @@ void main() {
       'agree saves the acknowledgement version and accepts the flow',
       () async {
         final repository = _FakeOnboardingRepository();
-        final bloc = OnboardingBloc(repository, _FakeAppExitController());
+        final bloc = OnboardingBloc(
+          repository,
+          _FakeAppExitController(),
+          skipDisclosureSteps: false,
+        );
         addTearDown(bloc.close);
 
         bloc.add(const OnboardingStarted());

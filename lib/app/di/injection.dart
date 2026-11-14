@@ -33,6 +33,7 @@ GetIt createAppLocator({
   AppUpdateRepository? appUpdateRepository,
   OnboardingRepository? onboardingRepository,
   AppExitController? appExitController,
+  bool? skipOnboardingDisclosure,
 }) {
   final locator = GetIt.asNewInstance();
 
@@ -100,6 +101,7 @@ GetIt createAppLocator({
     () => OnboardingBloc(
       locator<OnboardingRepository>(),
       locator<AppExitController>(),
+      skipDisclosureSteps: skipOnboardingDisclosure,
     ),
   );
   locator.registerFactory<HomeNavBloc>(HomeNavBloc.new);

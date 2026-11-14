@@ -47,6 +47,7 @@ void main() {
     WidgetTester tester, {
     required OnboardingRepository onboardingRepository,
     required AppExitController appExitController,
+    bool? skipOnboardingDisclosure,
   }) async {
     SharedPreferences.setMockInitialValues({});
     await tester.binding.setSurfaceSize(const Size(480, 1200));
@@ -58,6 +59,7 @@ void main() {
         profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
         onboardingRepository: onboardingRepository,
         appExitController: appExitController,
+        skipOnboardingDisclosure: skipOnboardingDisclosure,
       ),
     );
     await tester.pump();
@@ -126,7 +128,7 @@ void main() {
   });
 
   testWidgets(
-    'agree unlocks only after checkbox and countdown then opens home',
+    'debug mode skips intro and security notice after language continue',
     (tester) async {
       final repository = _FakeOnboardingRepository();
       await pumpApp(
@@ -135,8 +137,41 @@ void main() {
         appExitController: _FakeAppExitController(),
       );
 
+      expect(find.text('Choose your language'), findsOneWidget);
+      expect(find.byKey(const Key('onboarding_step_indicator')), findsNothing);
+
+      await tester.ensureVisible(
+        find.byKey(const Key('onboarding_continue_button')),
+      );
+      await tester.tap(find.byKey(const Key('onboarding_continue_button')));
+      await tester.pump();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(repository.savedVersion, kCurrentL2tpDisclosureVersion);
+      expect(find.byKey(const Key('vpn_status')), findsOneWidget);
+      expect(find.text('Review security notice'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'agree unlocks only after checkbox and countdown then opens home',
+    (tester) async {
+      final repository = _FakeOnboardingRepository();
+      await pumpApp(
+        tester,
+        onboardingRepository: repository,
+        appExitController: _FakeAppExitController(),
+        skipOnboardingDisclosure: false,
+      );
+
       expect(find.text('Continue'), findsOneWidget);
       expect(find.text('Choose your language'), findsOneWidget);
+      expect(
+        find.byKey(const Key('onboarding_step_indicator')),
+        findsOneWidget,
+      );
 
       await tester.ensureVisible(
         find.byKey(const Key('onboarding_continue_button')),

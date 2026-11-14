@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../domain/app_exit_controller.dart';
 import '../../domain/onboarding_repository.dart';
@@ -70,6 +71,7 @@ class OnboardingState extends Equatable {
     this.step = OnboardingStep.language,
     this.checkboxChecked = false,
     this.secondsRemaining = kOnboardingAgreeCountdownSeconds,
+    this.skipDisclosureSteps = false,
   });
 
   final OnboardingFlowStatus status;
@@ -77,6 +79,7 @@ class OnboardingState extends Equatable {
   final OnboardingStep step;
   final bool checkboxChecked;
   final int secondsRemaining;
+  final bool skipDisclosureSteps;
 
   bool get timerComplete => secondsRemaining <= 0;
   bool get isBlocking => mode == OnboardingMode.blockingFirstLaunch;
@@ -95,6 +98,7 @@ class OnboardingState extends Equatable {
     OnboardingStep? step,
     bool? checkboxChecked,
     int? secondsRemaining,
+    bool? skipDisclosureSteps,
   }) {
     return OnboardingState(
       status: status ?? this.status,
@@ -102,6 +106,7 @@ class OnboardingState extends Equatable {
       step: step ?? this.step,
       checkboxChecked: checkboxChecked ?? this.checkboxChecked,
       secondsRemaining: secondsRemaining ?? this.secondsRemaining,
+      skipDisclosureSteps: skipDisclosureSteps ?? this.skipDisclosureSteps,
     );
   }
 
@@ -112,12 +117,17 @@ class OnboardingState extends Equatable {
     step,
     checkboxChecked,
     secondsRemaining,
+    skipDisclosureSteps,
   ];
 }
 
 class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
-  OnboardingBloc(this._repository, this._appExitController)
-    : super(const OnboardingState()) {
+  OnboardingBloc(
+    this._repository,
+    this._appExitController, {
+    bool? skipDisclosureSteps,
+  }) : _skipDisclosureSteps = skipDisclosureSteps ?? kDebugMode,
+       super(const OnboardingState()) {
     on<OnboardingStarted>(_onStarted);
     on<OnboardingReadOnlyOpened>(_onReadOnlyOpened);
     on<OnboardingContinuePressed>(_onContinuePressed);
@@ -130,6 +140,7 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
 
   final OnboardingRepository _repository;
   final AppExitController _appExitController;
+  final bool _skipDisclosureSteps;
   StreamSubscription<int>? _countdownSubscription;
 
   Future<void> _onStarted(
@@ -148,6 +159,7 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
         step: OnboardingStep.language,
         checkboxChecked: false,
         secondsRemaining: kOnboardingAgreeCountdownSeconds,
+        skipDisclosureSteps: _skipDisclosureSteps,
       ),
     );
   }
@@ -174,6 +186,13 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
   ) async {
     if (!state.isBlocking) return;
     if (state.step == OnboardingStep.language) {
+      if (_skipDisclosureSteps) {
+        await _repository.saveAcknowledgedVersion(
+          kCurrentL2tpDisclosureVersion,
+        );
+        emit(state.copyWith(status: OnboardingFlowStatus.accepted));
+        return;
+      }
       emit(state.copyWith(step: OnboardingStep.intro));
       return;
     }

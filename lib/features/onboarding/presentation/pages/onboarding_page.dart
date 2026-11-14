@@ -143,8 +143,12 @@ class _OnboardingContent extends StatelessWidget {
 
     return Column(
       children: [
-        if (!state.isReadOnly) ...[
-          _StepIndicatorRow(state: state, isIntro: isIntro),
+        if (!state.isReadOnly && !state.skipDisclosureSteps) ...[
+          _StepIndicatorRow(
+            key: const Key('onboarding_step_indicator'),
+            state: state,
+            isIntro: isIntro,
+          ),
           SizedBox(height: compact ? 14 : 18),
         ],
         _HeroSection(
@@ -177,7 +181,11 @@ class _OnboardingContent extends StatelessWidget {
 }
 
 class _StepIndicatorRow extends StatelessWidget {
-  const _StepIndicatorRow({required this.state, required this.isIntro});
+  const _StepIndicatorRow({
+    super.key,
+    required this.state,
+    required this.isIntro,
+  });
 
   final OnboardingState state;
   final bool isIntro;
