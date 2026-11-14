@@ -21,9 +21,16 @@ abstract class ProfilesRepository {
     ProfileTransferEnvelope envelope, {
     bool selectAsLastProfile = true,
   });
+  Future<List<Profile>> saveImportedProfiles(
+    List<ProfileTransferEnvelope> envelopes, {
+    bool selectAsLastProfile = true,
+  });
   Future<void> deleteProfile(String id);
+  Future<void> deleteProfiles(List<String> ids);
   Future<void> copyProfileShareLink(String id);
+  Future<void> copyProfileShareLinks(List<String> ids);
   Future<void> exportProfileFile(String id);
+  Future<void> exportProfileFiles(List<String> ids, {bool combined = false});
   Future<void> checkSecureStorageUpgrade();
   Future<void> resetSecureStorage();
   String newProfileId();

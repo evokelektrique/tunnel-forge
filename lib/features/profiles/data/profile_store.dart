@@ -383,27 +383,47 @@ class ProfileStore {
     ProfileTransferEnvelope envelope, {
     bool selectAsLastProfile = true,
   }) async {
-    final imported = envelope.toProfile(newProfileId());
-    final list = await loadProfiles()
-      ..add(imported);
-    await _secrets.write(_passwordKey(imported.id), envelope.password);
-    await _secrets.write(_pskKey(imported.id), envelope.psk);
+    final saved = await saveImportedProfiles([
+      envelope,
+    ], selectAsLastProfile: selectAsLastProfile);
+    return saved.single;
+  }
+
+  Future<List<Profile>> saveImportedProfiles(
+    List<ProfileTransferEnvelope> envelopes, {
+    bool selectAsLastProfile = true,
+  }) async {
+    if (envelopes.isEmpty) return const [];
+    final list = await loadProfiles();
+    final imported = <Profile>[];
+    for (final envelope in envelopes) {
+      final profile = envelope.toProfile(newProfileId());
+      await _secrets.write(_passwordKey(profile.id), envelope.password);
+      await _secrets.write(_pskKey(profile.id), envelope.psk);
+      list.add(profile);
+      imported.add(profile);
+    }
     await _saveProfileList(list);
     if (selectAsLastProfile) {
-      await setLastProfileId(imported.id);
+      await setLastProfileId(imported.last.id);
     }
     return imported;
   }
 
-  Future<void> deleteProfile(String id) async {
-    if (id.isEmpty) return;
+  Future<void> deleteProfile(String id) => deleteProfiles([id]);
+
+  Future<void> deleteProfiles(Iterable<String> ids) async {
+    final idSet = ids.where((id) => id.isNotEmpty).toSet();
+    if (idSet.isEmpty) return;
     final list = await loadProfiles();
-    list.removeWhere((e) => e.id == id);
+    list.removeWhere((e) => idSet.contains(e.id));
     await _saveProfileList(list);
-    await _secrets.delete(_passwordKey(id));
-    await _secrets.delete(_pskKey(id));
+    for (final id in idSet) {
+      await _secrets.delete(_passwordKey(id));
+      await _secrets.delete(_pskKey(id));
+    }
     final last = await loadLastProfileId();
-    if (last == id) await setLastProfileId(null);
+    if (last != null && idSet.contains(last)) await setLastProfileId(null);
   }
 
   Future<void> resetSecureStorage() async {

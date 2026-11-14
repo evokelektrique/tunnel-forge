@@ -26,53 +26,105 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
 
   final ProfileStore _profileStore;
 
-  @override
-  Future<void> copyProfileShareLink(String id) async {
-    final row = await _profileStore.loadProfileWithSecrets(id);
-    if (row == null) {
-      throw const ProfileRepositoryException('This profile no longer exists.');
+  Future<List<({Profile profile, ProfileTransferEnvelope envelope})>>
+  _loadTransferEnvelopes(List<String> ids) async {
+    final items = <({Profile profile, ProfileTransferEnvelope envelope})>[];
+    final missingNames = <String>[];
+    for (final id in ids) {
+      final row = await _profileStore.loadProfileWithSecrets(id);
+      if (row == null) {
+        throw ProfileRepositoryException(
+          ids.length == 1
+              ? 'This profile no longer exists.'
+              : 'One or more selected profiles no longer exist.',
+        );
+      }
+      if (row.secretsMissing) {
+        missingNames.add(row.profile.displayName);
+      } else {
+        items.add((
+          profile: row.profile,
+          envelope: ProfileTransferEnvelope.fromProfile(
+            profile: row.profile,
+            password: row.password,
+            psk: row.psk,
+          ),
+        ));
+      }
     }
-    if (row.secretsMissing) {
-      throw const ProfileRepositoryException(
-        'Saved password/PSK could not be read. Re-enter them before sharing.',
+    if (missingNames.isNotEmpty) {
+      throw ProfileRepositoryException(
+        ids.length == 1
+            ? 'Saved password/PSK could not be read. Re-enter them before sharing.'
+            : 'Saved password/PSK could not be read for: ${missingNames.join(', ')}. Re-enter them before sharing.',
       );
     }
-    final envelope = ProfileTransferEnvelope.fromProfile(
-      profile: row.profile,
-      password: row.password,
-      psk: row.psk,
-    );
-    await Clipboard.setData(ClipboardData(text: envelope.toTfUri()));
+    return items;
+  }
+
+  @override
+  Future<void> copyProfileShareLink(String id) => copyProfileShareLinks([id]);
+
+  @override
+  Future<void> copyProfileShareLinks(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final items = await _loadTransferEnvelopes(ids);
+    final payload = items.map((item) => item.envelope.toTfUri()).join('\n');
+    await Clipboard.setData(ClipboardData(text: payload));
   }
 
   @override
   Future<void> deleteProfile(String id) => _profileStore.deleteProfile(id);
 
   @override
-  Future<void> exportProfileFile(String id) async {
-    final row = await _profileStore.loadProfileWithSecrets(id);
-    if (row == null) {
-      throw const ProfileRepositoryException('This profile no longer exists.');
-    }
-    if (row.secretsMissing) {
-      throw const ProfileRepositoryException(
-        'Saved password/PSK could not be read. Re-enter them before sharing.',
+  Future<void> deleteProfiles(List<String> ids) =>
+      _profileStore.deleteProfiles(ids);
+
+  @override
+  Future<void> exportProfileFile(String id) => exportProfileFiles([id]);
+
+  @override
+  Future<void> exportProfileFiles(
+    List<String> ids, {
+    bool combined = false,
+  }) async {
+    if (ids.isEmpty) return;
+    final items = await _loadTransferEnvelopes(ids);
+    final List<XFile> files;
+    final List<String> fileNames;
+    if (combined && items.length > 1) {
+      final jsonText = ProfileTransferEnvelope.toBundleFileJson(
+        items.map((item) => item.envelope).toList(),
+      );
+      files = [
+        XFile.fromData(
+          Uint8List.fromList(utf8.encode(jsonText)),
+          mimeType: ProfileTransferEnvelope.mimeType,
+        ),
+      ];
+      fileNames = [
+        ProfileTransferEnvelope.combinedExportFileNameFor(items.length),
+      ];
+    } else {
+      files = items
+          .map(
+            (item) => XFile.fromData(
+              Uint8List.fromList(utf8.encode(item.envelope.toFileJson())),
+              mimeType: ProfileTransferEnvelope.mimeType,
+            ),
+          )
+          .toList();
+      fileNames = ProfileTransferEnvelope.exportFileNamesFor(
+        items.map((item) => item.profile),
       );
     }
-    final envelope = ProfileTransferEnvelope.fromProfile(
-      profile: row.profile,
-      password: row.password,
-      psk: row.psk,
-    );
-    final bytes = Uint8List.fromList(utf8.encode(envelope.toFileJson()));
-    final fileName = ProfileTransferEnvelope.exportFileNameFor(row.profile);
     await SharePlus.instance.share(
       ShareParams(
-        files: [
-          XFile.fromData(bytes, mimeType: ProfileTransferEnvelope.mimeType),
-        ],
-        fileNameOverrides: [fileName],
-        title: 'Export TunnelForge profile',
+        files: files,
+        fileNameOverrides: fileNames,
+        title: ids.length == 1
+            ? 'Export TunnelForge profile'
+            : 'Export TunnelForge profiles',
       ),
     );
   }
@@ -112,6 +164,17 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
   }) {
     return _profileStore.saveImportedProfile(
       envelope,
+      selectAsLastProfile: selectAsLastProfile,
+    );
+  }
+
+  @override
+  Future<List<Profile>> saveImportedProfiles(
+    List<ProfileTransferEnvelope> envelopes, {
+    bool selectAsLastProfile = true,
+  }) {
+    return _profileStore.saveImportedProfiles(
+      envelopes,
       selectAsLastProfile: selectAsLastProfile,
     );
   }

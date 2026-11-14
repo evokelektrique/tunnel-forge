@@ -40,6 +40,19 @@ final class ProfilesImportRequested extends ProfilesEvent {
   List<Object?> get props => [request];
 }
 
+final class ProfilesImportBatchRequested extends ProfilesEvent {
+  const ProfilesImportBatchRequested(
+    this.transfers, {
+    required this.selectAsLastProfile,
+  });
+
+  final List<IncomingProfileTransfer> transfers;
+  final bool selectAsLastProfile;
+
+  @override
+  List<Object?> get props => [transfers, selectAsLastProfile];
+}
+
 final class ProfilesDeleteRequested extends ProfilesEvent {
   const ProfilesDeleteRequested(this.id);
 
@@ -47,6 +60,15 @@ final class ProfilesDeleteRequested extends ProfilesEvent {
 
   @override
   List<Object?> get props => [id];
+}
+
+final class ProfilesDeleteMultipleRequested extends ProfilesEvent {
+  const ProfilesDeleteMultipleRequested(this.ids);
+
+  final List<String> ids;
+
+  @override
+  List<Object?> get props => [ids];
 }
 
 final class ProfilesRefreshRequested extends ProfilesEvent {
@@ -67,6 +89,15 @@ final class ProfilesCopyShareLinkRequested extends ProfilesEvent {
   List<Object?> get props => [id];
 }
 
+final class ProfilesCopyShareLinksRequested extends ProfilesEvent {
+  const ProfilesCopyShareLinksRequested(this.ids);
+
+  final List<String> ids;
+
+  @override
+  List<Object?> get props => [ids];
+}
+
 final class ProfilesExportFileRequested extends ProfilesEvent {
   const ProfilesExportFileRequested(this.id);
 
@@ -74,6 +105,16 @@ final class ProfilesExportFileRequested extends ProfilesEvent {
 
   @override
   List<Object?> get props => [id];
+}
+
+final class ProfilesExportFilesRequested extends ProfilesEvent {
+  const ProfilesExportFilesRequested(this.ids, {this.combined = false});
+
+  final List<String> ids;
+  final bool combined;
+
+  @override
+  List<Object?> get props => [ids, combined];
 }
 
 final class ProfilesImportSelectionPolicyChanged extends ProfilesEvent {
@@ -153,10 +194,14 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     on<ProfilesStarted>(_onStarted);
     on<ProfilesSelectionChanged>(_onSelectionChanged);
     on<ProfilesImportRequested>(_onImportRequested);
+    on<ProfilesImportBatchRequested>(_onImportBatchRequested);
     on<ProfilesDeleteRequested>(_onDeleteRequested);
+    on<ProfilesDeleteMultipleRequested>(_onDeleteMultipleRequested);
     on<ProfilesRefreshRequested>(_onRefreshRequested);
     on<ProfilesCopyShareLinkRequested>(_onCopyShareLinkRequested);
+    on<ProfilesCopyShareLinksRequested>(_onCopyShareLinksRequested);
     on<ProfilesExportFileRequested>(_onExportFileRequested);
+    on<ProfilesExportFilesRequested>(_onExportFilesRequested);
     on<ProfilesImportSelectionPolicyChanged>(_onImportSelectionPolicyChanged);
   }
 
@@ -235,15 +280,18 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       return;
     }
     try {
-      final envelope = ProfileTransferEnvelope.fromIncomingTransfer(transfer);
-      final imported = await _profilesRepository.saveImportedProfile(
-        envelope,
+      final envelopes = ProfileTransferEnvelope.fromIncomingTransferList(
+        transfer,
+      );
+      final imported = await _profilesRepository.saveImportedProfiles(
+        envelopes,
         selectAsLastProfile: event.request.selectAsLastProfile,
       );
       await _reloadProfiles(
         emit,
-        preferredActiveId: event.request.selectAsLastProfile
-            ? imported.id
+        preferredActiveId:
+            event.request.selectAsLastProfile && imported.isNotEmpty
+            ? imported.last.id
             : null,
       );
       final source = switch ((transfer.source, transfer.type)) {
@@ -258,13 +306,19 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         ),
         _ => AppText.pick('a .tfp file', 'یک فایل .tfp'),
       };
+      final count = imported.length;
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick(
-              'Imported profile "${imported.displayName}" from $source',
-              'پروفایل «${imported.displayName}» از $source وارد شد',
-            ),
+            count == 1
+                ? AppText.pick(
+                    'Imported profile "${imported.single.displayName}" from $source',
+                    'پروفایل «${imported.single.displayName}» از $source وارد شد',
+                  )
+                : AppText.pick(
+                    'Imported $count profiles from $source',
+                    '$count پروفایل از $source وارد شد',
+                  ),
           ),
         ),
       );
@@ -282,13 +336,86 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     }
   }
 
+  Future<void> _onImportBatchRequested(
+    ProfilesImportBatchRequested event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    if (event.transfers.isEmpty) return;
+    try {
+      final envelopes = <ProfileTransferEnvelope>[];
+      for (final transfer in event.transfers) {
+        if (transfer.isError) {
+          throw FormatException(
+            transfer.message ??
+                AppText.pick(
+                  'Couldn\'t open the incoming profile',
+                  'پروفایل دریافتی باز نشد',
+                ),
+          );
+        }
+        envelopes.add(ProfileTransferEnvelope.fromIncomingTransfer(transfer));
+      }
+      final imported = await _profilesRepository.saveImportedProfiles(
+        envelopes,
+        selectAsLastProfile: event.selectAsLastProfile,
+      );
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: event.selectAsLastProfile && imported.isNotEmpty
+            ? imported.last.id
+            : null,
+      );
+      final count = imported.length;
+      emit(
+        state.copyWith(
+          message: _nextMessage(
+            count == 1
+                ? AppText.pick(
+                    'Imported profile "${imported.single.displayName}" from the clipboard',
+                    'پروفایل «${imported.single.displayName}» از کلیپ‌بورد وارد شد',
+                  )
+                : AppText.pick(
+                    'Imported $count profiles from the clipboard',
+                    '$count پروفایل از کلیپ‌بورد وارد شد',
+                  ),
+          ),
+        ),
+      );
+    } on FormatException catch (error) {
+      emit(state.copyWith(message: _nextMessage(error.message, error: true)));
+    } catch (_) {
+      emit(
+        state.copyWith(
+          message: _nextMessage(
+            AppText.pick('Couldn\'t import profiles', 'پروفایل‌ها وارد نشدند'),
+            error: true,
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _onDeleteRequested(
     ProfilesDeleteRequested event,
     Emitter<ProfilesState> emit,
+  ) => _deleteProfiles([event.id], emit);
+
+  Future<void> _onDeleteMultipleRequested(
+    ProfilesDeleteMultipleRequested event,
+    Emitter<ProfilesState> emit,
+  ) => _deleteProfiles(event.ids, emit);
+
+  Future<void> _deleteProfiles(
+    List<String> ids,
+    Emitter<ProfilesState> emit,
   ) async {
+    final uniqueIds = ids.where((id) => id.isNotEmpty).toSet().toList();
+    if (uniqueIds.isEmpty) return;
     try {
-      await _profilesRepository.deleteProfile(event.id);
-      final shouldSelectFallback = state.activeProfileId == event.id;
+      await _profilesRepository.deleteProfiles(uniqueIds);
+      final shouldSelectFallback =
+          state.activeProfileId != null &&
+          uniqueIds.contains(state.activeProfileId);
       final nextId = shouldSelectFallback ? null : state.activeProfileId;
       await _reloadProfiles(emit, preferredActiveId: nextId);
       if (shouldSelectFallback &&
@@ -296,18 +423,30 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           state.profiles.isNotEmpty) {
         add(ProfilesSelectionChanged(state.profiles.first.id));
       }
+      final count = uniqueIds.length;
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Profile removed', 'پروفایل حذف شد'),
+            count == 1
+                ? AppText.pick('Profile removed', 'پروفایل حذف شد')
+                : AppText.pick(
+                    '$count profiles removed',
+                    '$count پروفایل حذف شد',
+                  ),
           ),
         ),
       );
     } catch (_) {
+      final count = uniqueIds.length;
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Couldn\'t delete profile', 'پروفایل حذف نشد'),
+            count == 1
+                ? AppText.pick('Couldn\'t delete profile', 'پروفایل حذف نشد')
+                : AppText.pick(
+                    'Couldn\'t delete profiles',
+                    'پروفایل‌ها حذف نشدند',
+                  ),
             error: true,
           ),
         ),
@@ -328,23 +467,49 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
   Future<void> _onCopyShareLinkRequested(
     ProfilesCopyShareLinkRequested event,
     Emitter<ProfilesState> emit,
+  ) => _copyShareLinks([event.id], emit);
+
+  Future<void> _onCopyShareLinksRequested(
+    ProfilesCopyShareLinksRequested event,
+    Emitter<ProfilesState> emit,
+  ) => _copyShareLinks(event.ids, emit);
+
+  Future<void> _copyShareLinks(
+    List<String> ids,
+    Emitter<ProfilesState> emit,
   ) async {
+    if (ids.isEmpty) return;
     try {
-      await _profilesRepository.copyProfileShareLink(event.id);
+      await _profilesRepository.copyProfileShareLinks(ids);
+      final count = ids.length;
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Share link copied', 'پیوند اشتراک کپی شد'),
+            count == 1
+                ? AppText.pick('Share link copied', 'پیوند اشتراک کپی شد')
+                : AppText.pick(
+                    '$count share links copied',
+                    '$count پیوند اشتراک کپی شد',
+                  ),
           ),
         ),
       );
     } on ProfileRepositoryException catch (error) {
       emit(state.copyWith(message: _nextMessage(error.message, error: true)));
     } catch (_) {
+      final count = ids.length;
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Couldn\'t copy share link', 'پیوند اشتراک کپی نشد'),
+            count == 1
+                ? AppText.pick(
+                    'Couldn\'t copy share link',
+                    'پیوند اشتراک کپی نشد',
+                  )
+                : AppText.pick(
+                    'Couldn\'t copy share links',
+                    'پیوندهای اشتراک کپی نشدند',
+                  ),
             error: true,
           ),
         ),
@@ -355,26 +520,53 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
   Future<void> _onExportFileRequested(
     ProfilesExportFileRequested event,
     Emitter<ProfilesState> emit,
-  ) async {
+  ) => _exportFiles([event.id], emit);
+
+  Future<void> _onExportFilesRequested(
+    ProfilesExportFilesRequested event,
+    Emitter<ProfilesState> emit,
+  ) => _exportFiles(event.ids, emit, combined: event.combined);
+
+  Future<void> _exportFiles(
+    List<String> ids,
+    Emitter<ProfilesState> emit, {
+    bool combined = false,
+  }) async {
+    if (ids.isEmpty) return;
     try {
-      await _profilesRepository.exportProfileFile(event.id);
+      await _profilesRepository.exportProfileFiles(ids, combined: combined);
+      final count = ids.length;
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick(
-              'Profile file ready to save or share',
-              'فایل پروفایل برای ذخیره یا اشتراک آماده است',
-            ),
+            count == 1 || combined
+                ? AppText.pick(
+                    'Profile file ready to save or share',
+                    'فایل پروفایل برای ذخیره یا اشتراک آماده است',
+                  )
+                : AppText.pick(
+                    '$count profile files ready to save or share',
+                    '$count فایل پروفایل برای ذخیره یا اشتراک آماده است',
+                  ),
           ),
         ),
       );
     } on ProfileRepositoryException catch (error) {
       emit(state.copyWith(message: _nextMessage(error.message, error: true)));
     } catch (_) {
+      final count = ids.length;
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick('Couldn\'t export .tfp file', 'خروجی .tfp ساخته نشد'),
+            count == 1 || combined
+                ? AppText.pick(
+                    'Couldn\'t export .tfp file',
+                    'خروجی .tfp ساخته نشد',
+                  )
+                : AppText.pick(
+                    'Couldn\'t export .tfp files',
+                    'فایل‌های خروجی .tfp ساخته نشدند',
+                  ),
             error: true,
           ),
         ),

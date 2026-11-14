@@ -101,6 +101,101 @@ void main() {
       expect(decoded.dns1Host, 'wikimedia-dns.org/dns-query');
       expect(decoded.dns1Protocol, DnsProtocol.dnsOverHttps);
     });
+
+    test('exportFileNamesFor deduplicates colliding names', () {
+      const profiles = [
+        Profile(
+          id: '1',
+          displayName: 'Office',
+          server: 'a.example.com',
+          user: 'u',
+        ),
+        Profile(
+          id: '2',
+          displayName: 'Office',
+          server: 'b.example.com',
+          user: 'u',
+        ),
+        Profile(
+          id: '3',
+          displayName: 'Home',
+          server: 'c.example.com',
+          user: 'u',
+        ),
+        Profile(
+          id: '4',
+          displayName: 'Office',
+          server: 'd.example.com',
+          user: 'u',
+        ),
+      ];
+
+      expect(ProfileTransferEnvelope.exportFileNamesFor(profiles), [
+        'office.tfp',
+        'office-2.tfp',
+        'home.tfp',
+        'office-3.tfp',
+      ]);
+    });
+
+    test(
+      'round-trips combined bundle through .tfp json and names tf_export_x.tfp',
+      () {
+        const first = ProfileTransferEnvelope(
+          displayName: 'Alpha',
+          server: 'alpha.example.com',
+          user: 'alice',
+          password: 'pw1',
+          psk: 'psk1',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+          mtu: 1400,
+        );
+        const second = ProfileTransferEnvelope(
+          displayName: 'Beta',
+          server: 'beta.example.com',
+          user: 'bob',
+          password: 'pw2',
+          psk: 'psk2',
+          dnsAutomatic: false,
+          dns1Host: '1.1.1.1',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+          mtu: 1380,
+        );
+
+        expect(
+          ProfileTransferEnvelope.combinedExportFileNameFor(2),
+          'tf_export_2.tfp',
+        );
+
+        final bundleJson = ProfileTransferEnvelope.toBundleFileJson([
+          first,
+          second,
+        ]);
+        final decoded = ProfileTransferEnvelope.fromFileJsonList(bundleJson);
+
+        expect(decoded, hasLength(2));
+        expect(decoded[0].displayName, 'Alpha');
+        expect(decoded[0].password, 'pw1');
+        expect(decoded[1].displayName, 'Beta');
+        expect(decoded[1].dns1Host, '1.1.1.1');
+        expect(
+          () => ProfileTransferEnvelope.fromFileJson(bundleJson),
+          throwsFormatException,
+        );
+        expect(
+          () => ProfileTransferEnvelope.fromFileJsonList(
+            '{"v": 3, "profiles": []}',
+          ),
+          throwsFormatException,
+        );
+      },
+    );
   });
 
   group('ProfileStore imported profiles', () {
@@ -153,6 +248,50 @@ void main() {
       expect(importedRow, isNotNull);
       expect(importedRow!.password, 'new');
       expect(importedRow.psk, 'new-psk');
+    });
+
+    test('saveImportedProfiles and deleteProfiles handle batches', () async {
+      final imported = await store.saveImportedProfiles(const [
+        ProfileTransferEnvelope(
+          displayName: 'One',
+          server: 'one.example.com',
+          user: 'alice',
+          password: 'pw1',
+          psk: 'psk1',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+          mtu: 1400,
+        ),
+        ProfileTransferEnvelope(
+          displayName: 'Two',
+          server: 'two.example.com',
+          user: 'bob',
+          password: 'pw2',
+          psk: 'psk2',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+          mtu: 1400,
+        ),
+      ]);
+
+      expect(imported, hasLength(2));
+      expect(await store.loadLastProfileId(), imported.last.id);
+
+      await store.deleteProfiles([imported.first.id, imported.last.id]);
+
+      expect(await store.loadProfiles(), isEmpty);
+      expect(await store.loadLastProfileId(), isNull);
+      expect(
+        await secrets.read(ProfileStore.passwordKey(imported.first.id)),
+        isNull,
+      );
+      expect(await secrets.read(ProfileStore.pskKey(imported.last.id)), isNull);
     });
   });
 }

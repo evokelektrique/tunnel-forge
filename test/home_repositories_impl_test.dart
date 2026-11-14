@@ -6,6 +6,7 @@ import 'package:tunnel_forge/features/home/data/home_repositories_impl.dart';
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
+import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
 
 void main() {
   group('AppVersionRepositoryImpl', () {
@@ -153,5 +154,89 @@ void main() {
         throwsA(isA<ProfileRepositoryException>()),
       );
     });
+
+    test(
+      'copyProfileShareLinks writes one tf uri per line and fails fast on missing secrets',
+      () async {
+        TestWidgetsFlutterBinding.ensureInitialized();
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        final secrets = MemorySecretStore();
+        final store = ProfileStore(
+          prefsOverride: prefs,
+          secretsOverride: secrets,
+        );
+        await store.upsertProfile(
+          const Profile(
+            id: 'p1',
+            displayName: 'Alpha',
+            server: 'alpha.example',
+            user: 'alice',
+          ),
+          password: 'pw1',
+          psk: 'psk1',
+        );
+        await store.upsertProfile(
+          const Profile(
+            id: 'p2',
+            displayName: 'Beta',
+            server: 'beta.example',
+            user: 'bob',
+          ),
+          password: 'pw2',
+          psk: 'psk2',
+        );
+
+        String? clipboardText;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+              if (call.method == 'Clipboard.setData') {
+                final args = Map<String, dynamic>.from(call.arguments as Map);
+                clipboardText = args['text'] as String?;
+              }
+              return null;
+            });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(SystemChannels.platform, null);
+        });
+
+        final repo = ProfilesRepositoryImpl(store);
+        await repo.copyProfileShareLinks(['p1', 'p2']);
+
+        final lines = clipboardText!.split('\n');
+        expect(lines, hasLength(2));
+        expect(
+          ProfileTransferEnvelope.fromTfUri(lines[0]).displayName,
+          'Alpha',
+        );
+        expect(ProfileTransferEnvelope.fromTfUri(lines[1]).displayName, 'Beta');
+
+        clipboardText = null;
+        await secrets.delete(ProfileStore.passwordKey('p2'));
+        await expectLater(
+          repo.copyProfileShareLinks(['p1', 'p2']),
+          throwsA(
+            isA<ProfileRepositoryException>().having(
+              (e) => e.message,
+              'message',
+              contains('Beta'),
+            ),
+          ),
+        );
+        await expectLater(
+          repo.exportProfileFiles(['p1', 'p2'], combined: true),
+          throwsA(
+            isA<ProfileRepositoryException>().having(
+              (e) => e.message,
+              'message',
+              contains('Beta'),
+            ),
+          ),
+        );
+        expect(clipboardText, isNull);
+      },
+    );
   });
 }

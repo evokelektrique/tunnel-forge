@@ -472,6 +472,8 @@ extension AppStrings on AppLocalizations {
   String get latest => AppText.pick('Latest', 'آخرین');
 
   String get profiles => AppText.pick('Profiles', 'پروفایل‌ها');
+  String selectedCount(int count) =>
+      AppText.pick('$count selected', '$count انتخاب شده');
   String get addProfile => AppText.pick('Add profile', 'افزودن پروفایل');
   String get createNewProfile =>
       AppText.pick('Create new profile', 'ساخت پروفایل جدید');
@@ -487,7 +489,19 @@ extension AppStrings on AppLocalizations {
       AppText.pick('Profile actions', 'کنش‌های پروفایل');
   String get copyShareLink =>
       AppText.pick('Copy share link', 'کپی پیوند اشتراک');
+  String get copyShareLinks =>
+      AppText.pick('Copy share links', 'کپی پیوندهای اشتراک');
   String get exportTfp => AppText.pick('Export .tfp', 'خروجی .tfp');
+  String get chooseExportFormat => AppText.pick(
+    'Choose how to export the selected profiles.',
+    'روش خروجی گرفتن از پروفایل‌های انتخاب‌شده را انتخاب کنید.',
+  );
+  String combinedTfpFile(String fileName) =>
+      AppText.pick('Combined file ($fileName)', 'فایل ترکیبی ($fileName)');
+  String separateTfpFiles(int count) => AppText.pick(
+    'Separate .tfp files ($count)',
+    'فایل‌های .tfp جداگانه ($count)',
+  );
   String get editProfile => AppText.pick('Edit profile', 'ویرایش پروفایل');
   String get deleteProfile => AppText.pick('Delete profile', 'حذف پروفایل');
   String get deleteProfileQuestion =>
@@ -496,6 +510,15 @@ extension AppStrings on AppLocalizations {
     'This will remove the server and saved credentials from this device.',
     'این کار سرور و اطلاعات ورود ذخیره‌شده را از این دستگاه حذف می‌کند.',
   );
+  String deleteProfilesQuestion(int count) => count == 1
+      ? deleteProfileQuestion
+      : AppText.pick('Delete $count profiles?', '$count پروفایل حذف شود؟');
+  String deleteProfilesBody(int count) => count == 1
+      ? deleteProfileBody
+      : AppText.pick(
+          'This will remove $count servers and their saved credentials from this device.',
+          'این کار $count سرور و اطلاعات ورود ذخیره‌شده آن‌ها را از این دستگاه حذف می‌کند.',
+        );
   String get profileSaved => AppText.pick('Profile saved', 'پروفایل ذخیره شد');
   String get profileRefreshTimedOut => AppText.pick(
     'Profile list refresh timed out',

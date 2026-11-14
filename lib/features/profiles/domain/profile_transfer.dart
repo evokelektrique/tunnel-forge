@@ -73,6 +73,13 @@ class ProfileTransferEnvelope {
 
   String toFileJson() => const JsonEncoder.withIndent('  ').convert(toJson());
 
+  static String toBundleFileJson(List<ProfileTransferEnvelope> envelopes) {
+    return const JsonEncoder.withIndent('  ').convert(<String, Object?>{
+      'v': currentVersion,
+      'profiles': envelopes.map((e) => e.toJson()).toList(),
+    });
+  }
+
   String toTfUri() {
     final jsonBytes = utf8.encode(jsonEncode(toJson()));
     final compressed = GZipEncoder().encode(jsonBytes);
@@ -103,23 +110,59 @@ class ProfileTransferEnvelope {
   static ProfileTransferEnvelope fromIncomingTransfer(
     IncomingProfileTransfer transfer,
   ) {
+    final list = fromIncomingTransferList(transfer);
+    if (list.length != 1) {
+      throw const FormatException('Transfer contains multiple profiles');
+    }
+    return list.single;
+  }
+
+  static List<ProfileTransferEnvelope> fromIncomingTransferList(
+    IncomingProfileTransfer transfer,
+  ) {
     final data = transfer.data;
     if (data == null || data.isEmpty) {
       throw const FormatException('Incoming profile transfer is empty');
     }
     return switch (transfer.type) {
-      ProfileTransferContract.typeTfpJson => fromFileJson(data),
-      ProfileTransferContract.typeTfUri => fromTfUri(data),
+      ProfileTransferContract.typeTfpJson => fromFileJsonList(data),
+      ProfileTransferContract.typeTfUri => [fromTfUri(data)],
       _ => throw FormatException(transfer.message ?? 'Unsupported transfer'),
     };
   }
 
   static ProfileTransferEnvelope fromFileJson(String text) {
+    final list = fromFileJsonList(text);
+    if (list.length != 1) {
+      throw const FormatException('Profile file contains multiple profiles');
+    }
+    return list.single;
+  }
+
+  static List<ProfileTransferEnvelope> fromFileJsonList(String text) {
     final decoded = jsonDecode(text);
     if (decoded is! Map) {
       throw const FormatException('Profile file must contain a JSON object');
     }
-    return fromJsonMap(Map<String, Object?>.from(decoded));
+    final map = Map<String, Object?>.from(decoded);
+    if (map.containsKey('profiles')) {
+      final version = map['v'];
+      if (version is! int || version != currentVersion) {
+        throw FormatException('Unsupported profile transfer version: $version');
+      }
+      final rawProfiles = map['profiles'];
+      if (rawProfiles is! List || rawProfiles.isEmpty) {
+        throw const FormatException('Profile bundle contains no profiles');
+      }
+      return [
+        for (final entry in rawProfiles)
+          if (entry is Map)
+            fromJsonMap(Map<String, Object?>.from(entry))
+          else
+            throw const FormatException('Profile entry must be a JSON object'),
+      ];
+    }
+    return [fromJsonMap(map)];
   }
 
   static ProfileTransferEnvelope fromTfUri(String text) {
@@ -199,12 +242,35 @@ class ProfileTransferEnvelope {
     );
   }
 
+  static String combinedExportFileNameFor(int count) =>
+      'tf_export_$count.$fileExtension';
+
   static String exportFileNameFor(Profile profile) {
     final base = _sanitizeFileName(
       profile.displayName.trim().isEmpty ? profile.server : profile.displayName,
     );
     final fallback = base.isEmpty ? 'tunnel-forge-profile' : base;
     return '$fallback.$fileExtension';
+  }
+
+  static List<String> exportFileNamesFor(Iterable<Profile> profiles) {
+    final used = <String, int>{};
+    final out = <String>[];
+    for (final profile in profiles) {
+      final initial = exportFileNameFor(profile);
+      final count = (used[initial] ?? 0) + 1;
+      used[initial] = count;
+      if (count == 1) {
+        out.add(initial);
+      } else {
+        final stem = initial.substring(
+          0,
+          initial.length - fileExtension.length - 1,
+        );
+        out.add('$stem-$count.$fileExtension');
+      }
+    }
+    return out;
   }
 
   static String _sanitizeFileName(String value) {

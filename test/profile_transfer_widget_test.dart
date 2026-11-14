@@ -467,6 +467,243 @@ void main() {
       expect(find.text('primary.example.com'), findsOneWidget);
     },
   );
+
+  testWidgets(
+    '1-second hold enters multi-select to copy one link per line and batch delete',
+    (tester) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: MemorySecretStore(),
+      );
+      await store.upsertProfile(
+        const Profile(
+          id: 'p1',
+          displayName: 'Alpha',
+          server: 'alpha.example.com',
+          user: 'alice',
+        ),
+        password: 'pw1',
+        psk: 'psk1',
+      );
+      await store.upsertProfile(
+        const Profile(
+          id: 'p2',
+          displayName: 'Beta',
+          server: 'beta.example.com',
+          user: 'bob',
+        ),
+        password: 'pw2',
+        psk: 'psk2',
+      );
+      await store.upsertProfile(
+        const Profile(
+          id: 'p3',
+          displayName: 'Gamma',
+          server: 'gamma.example.com',
+          user: 'carol',
+        ),
+        password: 'pw3',
+        psk: 'psk3',
+      );
+
+      String? clipboardText;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel(ProfileTransferContract.channel),
+            (call) async => <Object?>[],
+          );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              final args = Map<String, dynamic>.from(call.arguments as Map);
+              clipboardText = args['text'] as String?;
+            }
+            if (call.method == 'Clipboard.getData') {
+              return <String, Object?>{'text': clipboardText};
+            }
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+              const MethodChannel(ProfileTransferContract.channel),
+              null,
+            );
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpApp(tester, store);
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+
+      // Holding for less than 1 second does not trigger multi-select.
+      final alphaFinder = find.text('Alpha');
+      var gesture = await tester.startGesture(tester.getCenter(alphaFinder));
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+      await gesture.moveBy(const Offset(0, 40));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+
+      // Holding for 1 full second triggers multi-select.
+      gesture = await tester.startGesture(tester.getCenter(alphaFinder));
+      await tester.pump(const Duration(seconds: 1));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsOneWidget);
+      expect(find.byKey(const Key('multi_select_delete')), findsOneWidget);
+
+      // Select all then clear all stays in multi-select mode until X is tapped.
+      await tester.tap(find.byKey(const Key('multi_select_toggle_all')));
+      await tester.pumpAndSettle();
+      expect(find.text('3 selected'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('multi_select_toggle_all')));
+      await tester.pumpAndSettle();
+      expect(find.text('0 selected'), findsOneWidget);
+      expect(find.byKey(const Key('multi_select_delete')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('multi_select_close')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+
+      // Re-enter via 1s hold; deselecting last item manually exits multi-select.
+      gesture = await tester.startGesture(tester.getCenter(alphaFinder));
+      await tester.pump(const Duration(seconds: 1));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      await tester.tap(alphaFinder);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+
+      gesture = await tester.startGesture(tester.getCenter(alphaFinder));
+      await tester.pump(const Duration(seconds: 1));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Beta'));
+      await tester.pumpAndSettle();
+      expect(find.text('2 selected'), findsOneWidget);
+
+      // Multi-export prompts between combined tf_export_2.tfp and separate files.
+      await tester.tap(find.byKey(const Key('multi_select_export')));
+      await tester.pumpAndSettle();
+      expect(find.text('Combined file (tf_export_2.tfp)'), findsOneWidget);
+      expect(find.text('Separate .tfp files (2)'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      // Copy share links writes one tf:// link per line.
+      await tester.tap(find.byKey(const Key('multi_select_copy')));
+      await tester.pumpAndSettle();
+      expect(clipboardText, isNotNull);
+      final copiedLines = clipboardText!.split('\n');
+      expect(copiedLines, hasLength(2));
+      expect(
+        ProfileTransferEnvelope.fromTfUri(copiedLines[0]).displayName,
+        'Alpha',
+      );
+      expect(
+        ProfileTransferEnvelope.fromTfUri(copiedLines[1]).displayName,
+        'Beta',
+      );
+      expect(find.text('2 share links copied'), findsOneWidget);
+
+      // Batch delete via trashcan icon removes selected profiles.
+      await tester.tap(find.byKey(const Key('multi_select_delete')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete 2 profiles?'), findsOneWidget);
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      expect((await store.loadProfiles()).map((p) => p.displayName), ['Gamma']);
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+
+      // Import from clipboard restores both profiles from multi-line links.
+      await tester.tap(find.byTooltip('Add profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Import from clipboard').last);
+      await tester.pumpAndSettle();
+
+      final restored = await store.loadProfiles();
+      expect(restored.map((p) => p.displayName), ['Gamma', 'Alpha', 'Beta']);
+      expect(
+        find.text('Imported 2 profiles from the clipboard'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('combined .tfp bundle imports all profiles via host transfer', (
+    tester,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    final store = ProfileStore(
+      prefsOverride: prefs,
+      secretsOverride: MemorySecretStore(),
+    );
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel(ProfileTransferContract.channel),
+          (call) async => <Object?>[],
+        );
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel(ProfileTransferContract.channel),
+            null,
+          );
+    });
+
+    await pumpApp(tester, store);
+
+    final bundleJson = ProfileTransferEnvelope.toBundleFileJson(const [
+      ProfileTransferEnvelope(
+        displayName: 'Alpha',
+        server: 'alpha.example.com',
+        user: 'alice',
+        password: 'pw1',
+        psk: 'psk1',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: 1400,
+      ),
+      ProfileTransferEnvelope(
+        displayName: 'Beta',
+        server: 'beta.example.com',
+        user: 'bob',
+        password: 'pw2',
+        psk: 'psk2',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: 1400,
+      ),
+    ]);
+    await sendHostTransfer(
+      tester,
+      type: ProfileTransferContract.typeTfpJson,
+      data: bundleJson,
+    );
+    await tester.pumpAndSettle();
+
+    final profiles = await store.loadProfiles();
+    expect(profiles.map((p) => p.displayName), ['Alpha', 'Beta']);
+    expect(find.text('Imported 2 profiles from a .tfp file'), findsOneWidget);
+  });
 }
 
 class TestProfileTransferBridge extends ProfileTransferBridge {
