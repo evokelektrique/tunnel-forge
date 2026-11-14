@@ -81,6 +81,21 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
       _profileStore.deleteProfiles(ids);
 
   @override
+  Future<({List<Profile> profiles, bool limitReached, bool favorite})>
+  toggleProfileFavorite(String id) => _profileStore.toggleProfileFavorite(id);
+
+  @override
+  Future<List<Profile>> reorderProfiles({
+    required bool favoritesSection,
+    required int oldIndex,
+    required int newIndex,
+  }) => _profileStore.reorderProfiles(
+    favoritesSection: favoritesSection,
+    oldIndex: oldIndex,
+    newIndex: newIndex,
+  );
+
+  @override
   Future<void> exportProfileFile(String id) => exportProfileFiles([id]);
 
   @override

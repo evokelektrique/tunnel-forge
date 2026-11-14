@@ -64,6 +64,14 @@ class ProfilePickerSheet extends StatefulWidget {
 }
 
 class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
+  static const Color _kFavoriteStarLight = Color(0xFFD48806);
+  static const Color _kFavoriteStarDark = Color(0xFFF5C249);
+  static const BoxConstraints _kCompactButtonConstraints = BoxConstraints(
+    minWidth: 40,
+    minHeight: 40,
+  );
+  static const EdgeInsets _kCompactButtonPadding = EdgeInsets.all(8);
+
   _ProfileSheetMode _mode = _ProfileSheetMode.list;
   String? _editingProfileId;
   int _editorSession = 0;
@@ -469,8 +477,8 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     final allSelected =
         state.profiles.isNotEmpty &&
         selectedIds.length == state.profiles.length;
-    const compactConstraints = BoxConstraints(minWidth: 40, minHeight: 40);
-    const compactPadding = EdgeInsets.all(8);
+    const compactConstraints = _kCompactButtonConstraints;
+    const compactPadding = _kCompactButtonPadding;
 
     final addButton = PopupMenuButton<_AddProfileAction>(
       tooltip: t.addProfile,
@@ -599,6 +607,180 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     );
   }
 
+  Widget _reorderProxyDecorator(
+    Widget child,
+    int index,
+    Animation<double> animation,
+  ) {
+    final theme = Theme.of(context);
+    final sheetColor =
+        theme.bottomSheetTheme.backgroundColor ??
+        theme.colorScheme.surfaceContainerLow;
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, child) {
+        final elev = 4.0 * Curves.easeInOut.transform(animation.value);
+        return Material(elevation: elev, color: sheetColor, child: child);
+      },
+      child: child,
+    );
+  }
+
+  Widget _buildReorderableSection(
+    BuildContext context, {
+    required ProfilesState state,
+    required List<Profile> section,
+    required bool favoritesSection,
+    required Set<String> selectedIds,
+    required bool isMultiSelect,
+    required bool atFavoriteLimit,
+  }) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final t = AppLocalizations.of(context);
+    final canReorder = section.length > 1;
+    final handleColor = canReorder
+        ? cs.onSurfaceVariant
+        : cs.onSurface.withValues(alpha: 0.38);
+
+    return SliverReorderableList(
+      itemCount: section.length,
+      proxyDecorator: _reorderProxyDecorator,
+      onReorderItem: (oldIndex, newIndex) => _profilesBloc.add(
+        ProfilesGroupReordered(
+          favoritesSection: favoritesSection,
+          oldIndex: oldIndex,
+          newIndex: newIndex,
+        ),
+      ),
+      itemBuilder: (context, i) {
+        final profile = section[i];
+        final isActive = profile.id == state.activeProfileId;
+        final isChecked = selectedIds.contains(profile.id);
+        final starColor = profile.favorite
+            ? (theme.brightness == Brightness.light
+                  ? _kFavoriteStarLight
+                  : _kFavoriteStarDark)
+            : (atFavoriteLimit
+                  ? cs.onSurface.withValues(alpha: 0.38)
+                  : cs.onSurfaceVariant);
+
+        return _HoldToSelectTile(
+          key: ValueKey<String>(profile.id),
+          enabled: !state.loading,
+          multiSelect: isMultiSelect,
+          checked: isChecked,
+          active: isActive,
+          title: profile.displayName,
+          subtitle: profile.server,
+          onHoldTriggered: () => _enterMultiSelect(profile.id),
+          onTap: () {
+            if (isMultiSelect) {
+              _toggleSelection(profile.id, state.profiles);
+            } else {
+              _selectProfile(profile.id);
+            }
+          },
+          trailing: isMultiSelect
+              ? ReorderableDragStartListener(
+                  key: ValueKey<String>('drag_handle_${profile.id}'),
+                  index: i,
+                  enabled: canReorder && !state.loading,
+                  child: Semantics(
+                    label: t.reorderProfile,
+                    child: SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Center(
+                        child: Icon(Icons.drag_handle, color: handleColor),
+                      ),
+                    ),
+                  ),
+                )
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      key: ValueKey<String>('favorite_button_${profile.id}'),
+                      tooltip: profile.favorite
+                          ? t.removeFromFavorites
+                          : t.addToFavorites,
+                      constraints: _kCompactButtonConstraints,
+                      padding: _kCompactButtonPadding,
+                      icon: Icon(
+                        profile.favorite
+                            ? Icons.star_rounded
+                            : Icons.star_border_rounded,
+                        color: starColor,
+                      ),
+                      onPressed: state.loading
+                          ? null
+                          : () => _profilesBloc.add(
+                              ProfilesFavoriteToggled(profile.id),
+                            ),
+                    ),
+                    PopupMenuButton<_ProfileTileAction>(
+                      tooltip: t.profileActions,
+                      enabled: !state.loading,
+                      onSelected: (action) async {
+                        switch (action) {
+                          case _ProfileTileAction.edit:
+                            _openEditor(profileId: profile.id);
+                            break;
+                          case _ProfileTileAction.copyShareLink:
+                            _profilesBloc.add(
+                              ProfilesCopyShareLinkRequested(profile.id),
+                            );
+                            break;
+                          case _ProfileTileAction.exportFile:
+                            _profilesBloc.add(
+                              ProfilesExportFileRequested(profile.id),
+                            );
+                            break;
+                          case _ProfileTileAction.delete:
+                            await _confirmDeleteProfiles([profile.id]);
+                            break;
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        PopupMenuItem<_ProfileTileAction>(
+                          value: _ProfileTileAction.edit,
+                          child: _PopupMenuIconLabel(
+                            icon: Icons.edit_outlined,
+                            label: t.editProfile,
+                          ),
+                        ),
+                        PopupMenuItem<_ProfileTileAction>(
+                          value: _ProfileTileAction.copyShareLink,
+                          child: _PopupMenuIconLabel(
+                            icon: Icons.link_outlined,
+                            label: t.copyShareLink,
+                          ),
+                        ),
+                        PopupMenuItem<_ProfileTileAction>(
+                          value: _ProfileTileAction.exportFile,
+                          child: _PopupMenuIconLabel(
+                            icon: Icons.file_download_outlined,
+                            label: t.exportTfp,
+                          ),
+                        ),
+                        PopupMenuItem<_ProfileTileAction>(
+                          value: _ProfileTileAction.delete,
+                          child: _PopupMenuIconLabel(
+                            icon: Icons.delete_outline,
+                            label: t.deleteProfile,
+                            color: cs.error,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+        );
+      },
+    );
+  }
+
   Widget _buildList(BuildContext context, ProfilesState state) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
@@ -606,6 +788,9 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     final t = AppLocalizations.of(context);
     final selectedIds = _activeSelection(state.profiles);
     final isMultiSelect = _isMultiSelect(state);
+    final favorites = state.profiles.where((p) => p.favorite).toList();
+    final others = state.profiles.where((p) => !p.favorite).toList();
+    final atFavoriteLimit = favorites.length >= Profile.maxFavorites;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -625,98 +810,38 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
                     style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                   ),
                 )
-              : ListView.builder(
-                  itemCount: state.profiles.length,
-                  itemBuilder: (context, i) {
-                    final profile = state.profiles[i];
-                    final isActive = profile.id == state.activeProfileId;
-                    final isChecked = selectedIds.contains(profile.id);
-                    return _HoldToSelectTile(
-                      key: ValueKey<String>(profile.id),
-                      enabled: !state.loading,
-                      multiSelect: isMultiSelect,
-                      checked: isChecked,
-                      active: isActive,
-                      title: profile.displayName,
-                      subtitle: profile.server,
-                      onHoldTriggered: () => _enterMultiSelect(profile.id),
-                      onTap: () {
-                        if (isMultiSelect) {
-                          _toggleSelection(profile.id, state.profiles);
-                        } else {
-                          _selectProfile(profile.id);
-                        }
-                      },
-                      trailing: isMultiSelect
-                          ? null
-                          : Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                PopupMenuButton<_ProfileTileAction>(
-                                  tooltip: t.profileActions,
-                                  enabled: !state.loading,
-                                  onSelected: (action) async {
-                                    switch (action) {
-                                      case _ProfileTileAction.edit:
-                                        _openEditor(profileId: profile.id);
-                                        break;
-                                      case _ProfileTileAction.copyShareLink:
-                                        _profilesBloc.add(
-                                          ProfilesCopyShareLinkRequested(
-                                            profile.id,
-                                          ),
-                                        );
-                                        break;
-                                      case _ProfileTileAction.exportFile:
-                                        _profilesBloc.add(
-                                          ProfilesExportFileRequested(
-                                            profile.id,
-                                          ),
-                                        );
-                                        break;
-                                      case _ProfileTileAction.delete:
-                                        await _confirmDeleteProfiles([
-                                          profile.id,
-                                        ]);
-                                        break;
-                                    }
-                                  },
-                                  itemBuilder: (context) => [
-                                    PopupMenuItem<_ProfileTileAction>(
-                                      value: _ProfileTileAction.edit,
-                                      child: _PopupMenuIconLabel(
-                                        icon: Icons.edit_outlined,
-                                        label: t.editProfile,
-                                      ),
-                                    ),
-                                    PopupMenuItem<_ProfileTileAction>(
-                                      value: _ProfileTileAction.copyShareLink,
-                                      child: _PopupMenuIconLabel(
-                                        icon: Icons.link_outlined,
-                                        label: t.copyShareLink,
-                                      ),
-                                    ),
-                                    PopupMenuItem<_ProfileTileAction>(
-                                      value: _ProfileTileAction.exportFile,
-                                      child: _PopupMenuIconLabel(
-                                        icon: Icons.file_download_outlined,
-                                        label: t.exportTfp,
-                                      ),
-                                    ),
-                                    PopupMenuItem<_ProfileTileAction>(
-                                      value: _ProfileTileAction.delete,
-                                      child: _PopupMenuIconLabel(
-                                        icon: Icons.delete_outline,
-                                        label: t.deleteProfile,
-                                        color: cs.error,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                    );
-                  },
+              : CustomScrollView(
+                  slivers: [
+                    if (favorites.isNotEmpty)
+                      _buildReorderableSection(
+                        context,
+                        state: state,
+                        section: favorites,
+                        favoritesSection: true,
+                        selectedIds: selectedIds,
+                        isMultiSelect: isMultiSelect,
+                        atFavoriteLimit: atFavoriteLimit,
+                      ),
+                    if (favorites.isNotEmpty && others.isNotEmpty)
+                      const SliverToBoxAdapter(
+                        child: Divider(
+                          key: Key('favorites_divider'),
+                          height: 1,
+                          indent: 16,
+                          endIndent: 16,
+                        ),
+                      ),
+                    if (others.isNotEmpty)
+                      _buildReorderableSection(
+                        context,
+                        state: state,
+                        section: others,
+                        favoritesSection: false,
+                        selectedIds: selectedIds,
+                        isMultiSelect: isMultiSelect,
+                        atFavoriteLimit: atFavoriteLimit,
+                      ),
+                  ],
                 ),
         ),
       ],

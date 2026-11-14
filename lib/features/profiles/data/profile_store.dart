@@ -1,4 +1,5 @@
 // Profile list JSON in [SharedPreferences]; password and PSK in [SecretStore].
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
@@ -114,6 +115,59 @@ class ProfileStore {
   final SecretStore _secrets;
   final ProfileStoreLog? _onLog;
   bool _upgradeChecked = false;
+  Future<void> _writeQueue = Future<void>.value();
+
+  Future<T> _runSerialized<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _writeQueue = _writeQueue.catchError((_) {}).then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  /// Keeps favorites at the front (capped at [Profile.maxFavorites]) while preserving relative order.
+  static List<Profile> normalizeProfiles(List<Profile> profiles) {
+    final favorites = <Profile>[];
+    final others = <Profile>[];
+    for (final profile in profiles) {
+      if (profile.favorite && favorites.length < Profile.maxFavorites) {
+        favorites.add(profile);
+      } else {
+        others.add(
+          profile.favorite ? profile.copyWith(favorite: false) : profile,
+        );
+      }
+    }
+    return <Profile>[...favorites, ...others];
+  }
+
+  /// Reorders an item strictly within either the favorites or non-favorites slice.
+  /// Expects [newIndex] as the post-removal destination index (matching [SliverReorderableList.onReorderItem]).
+  static List<Profile> reorderProfileSection(
+    List<Profile> profiles, {
+    required bool favoritesSection,
+    required int oldIndex,
+    required int newIndex,
+  }) {
+    final normalized = normalizeProfiles(profiles);
+    final favorites = normalized.where((p) => p.favorite).toList();
+    final others = normalized.where((p) => !p.favorite).toList();
+    final target = favoritesSection ? favorites : others;
+    if (oldIndex < 0 ||
+        oldIndex >= target.length ||
+        newIndex < 0 ||
+        newIndex >= target.length ||
+        oldIndex == newIndex) {
+      return normalized;
+    }
+    final moved = target.removeAt(oldIndex);
+    target.insert(newIndex, moved);
+    return <Profile>[...favorites, ...others];
+  }
 
   static String passwordKey(String profileId) =>
       'tunnel_forge/profile/$profileId/password';
@@ -193,7 +247,7 @@ class ProfileStore {
           _onLog?.call(LogLevel.error, 'Dropped profile row index=$i $detail');
         }
       }
-      return out;
+      return normalizeProfiles(out);
     } catch (e) {
       await _backupProfilesJsonIfAbsent(p, raw);
       _onLog?.call(
@@ -354,9 +408,10 @@ class ProfileStore {
 
   Future<void> _saveProfileList(List<Profile> list) async {
     final p = await _prefs();
+    final normalized = normalizeProfiles(list);
     await p.setString(
       prefsKeyProfilesJson,
-      jsonEncode(list.map((e) => e.toJson()).toList()),
+      jsonEncode(normalized.map((e) => e.toJson()).toList()),
     );
   }
 
@@ -364,19 +419,67 @@ class ProfileStore {
     Profile profile, {
     required String password,
     required String psk,
-  }) async {
-    final list = await loadProfiles();
-    final idx = list.indexWhere((e) => e.id == profile.id);
-    if (idx >= 0) {
-      list[idx] = profile;
-    } else {
-      list.add(profile);
-    }
-    // Write secrets before the profile list so a failed secret write never leaves a secretless profile.
-    await _secrets.write(_passwordKey(profile.id), password);
-    await _secrets.write(_pskKey(profile.id), psk);
-    await _saveProfileList(list);
-    await setLastProfileId(profile.id);
+  }) {
+    return _runSerialized(() async {
+      final list = await loadProfiles();
+      final idx = list.indexWhere((e) => e.id == profile.id);
+      if (idx >= 0) {
+        list[idx] = profile;
+      } else {
+        list.add(profile);
+      }
+      // Write secrets before the profile list so a failed secret write never leaves a secretless profile.
+      await _secrets.write(_passwordKey(profile.id), password);
+      await _secrets.write(_pskKey(profile.id), psk);
+      await _saveProfileList(list);
+      await setLastProfileId(profile.id);
+    });
+  }
+
+  Future<({List<Profile> profiles, bool limitReached, bool favorite})>
+  toggleProfileFavorite(String id) {
+    return _runSerialized(() async {
+      final list = await loadProfiles();
+      final idx = list.indexWhere((e) => e.id == id);
+      if (idx < 0) {
+        return (profiles: list, limitReached: false, favorite: false);
+      }
+      final target = list[idx];
+      final favCount = list.where((p) => p.favorite).length;
+      if (!target.favorite) {
+        if (favCount >= Profile.maxFavorites) {
+          return (profiles: list, limitReached: true, favorite: false);
+        }
+        final updated = List<Profile>.of(list)..removeAt(idx);
+        updated.insert(favCount, target.copyWith(favorite: true));
+        final normalized = normalizeProfiles(updated);
+        await _saveProfileList(normalized);
+        return (profiles: normalized, limitReached: false, favorite: true);
+      }
+      final updated = List<Profile>.of(list)..removeAt(idx);
+      updated.insert(favCount - 1, target.copyWith(favorite: false));
+      final normalized = normalizeProfiles(updated);
+      await _saveProfileList(normalized);
+      return (profiles: normalized, limitReached: false, favorite: false);
+    });
+  }
+
+  Future<List<Profile>> reorderProfiles({
+    required bool favoritesSection,
+    required int oldIndex,
+    required int newIndex,
+  }) {
+    return _runSerialized(() async {
+      final list = await loadProfiles();
+      final next = reorderProfileSection(
+        list,
+        favoritesSection: favoritesSection,
+        oldIndex: oldIndex,
+        newIndex: newIndex,
+      );
+      await _saveProfileList(next);
+      return next;
+    });
   }
 
   Future<Profile> saveImportedProfile(
@@ -392,38 +495,42 @@ class ProfileStore {
   Future<List<Profile>> saveImportedProfiles(
     List<ProfileTransferEnvelope> envelopes, {
     bool selectAsLastProfile = true,
-  }) async {
-    if (envelopes.isEmpty) return const [];
-    final list = await loadProfiles();
-    final imported = <Profile>[];
-    for (final envelope in envelopes) {
-      final profile = envelope.toProfile(newProfileId());
-      await _secrets.write(_passwordKey(profile.id), envelope.password);
-      await _secrets.write(_pskKey(profile.id), envelope.psk);
-      list.add(profile);
-      imported.add(profile);
-    }
-    await _saveProfileList(list);
-    if (selectAsLastProfile) {
-      await setLastProfileId(imported.last.id);
-    }
-    return imported;
+  }) {
+    if (envelopes.isEmpty) return Future.value(const []);
+    return _runSerialized(() async {
+      final list = await loadProfiles();
+      final imported = <Profile>[];
+      for (final envelope in envelopes) {
+        final profile = envelope.toProfile(newProfileId());
+        await _secrets.write(_passwordKey(profile.id), envelope.password);
+        await _secrets.write(_pskKey(profile.id), envelope.psk);
+        list.add(profile);
+        imported.add(profile);
+      }
+      await _saveProfileList(list);
+      if (selectAsLastProfile) {
+        await setLastProfileId(imported.last.id);
+      }
+      return imported;
+    });
   }
 
   Future<void> deleteProfile(String id) => deleteProfiles([id]);
 
-  Future<void> deleteProfiles(Iterable<String> ids) async {
+  Future<void> deleteProfiles(Iterable<String> ids) {
     final idSet = ids.where((id) => id.isNotEmpty).toSet();
-    if (idSet.isEmpty) return;
-    final list = await loadProfiles();
-    list.removeWhere((e) => idSet.contains(e.id));
-    await _saveProfileList(list);
-    for (final id in idSet) {
-      await _secrets.delete(_passwordKey(id));
-      await _secrets.delete(_pskKey(id));
-    }
-    final last = await loadLastProfileId();
-    if (last != null && idSet.contains(last)) await setLastProfileId(null);
+    if (idSet.isEmpty) return Future.value();
+    return _runSerialized(() async {
+      final list = await loadProfiles();
+      list.removeWhere((e) => idSet.contains(e.id));
+      await _saveProfileList(list);
+      for (final id in idSet) {
+        await _secrets.delete(_passwordKey(id));
+        await _secrets.delete(_pskKey(id));
+      }
+      final last = await loadLastProfileId();
+      if (last != null && idSet.contains(last)) await setLastProfileId(null);
+    });
   }
 
   Future<void> resetSecureStorage() async {

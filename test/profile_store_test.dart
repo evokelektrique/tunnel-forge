@@ -344,6 +344,7 @@ void main() {
       expect(p.dns2Host, 'dns.example');
       expect(p.dns2Protocol, DnsProtocol.dnsOverTls);
       expect(p.mtu, 1380);
+      expect(p.favorite, isFalse);
     });
 
     test(
@@ -569,5 +570,169 @@ void main() {
         );
       },
     );
+
+    test(
+      'toggleProfileFavorite orders starred first, unstars to top of others, and enforces max 5',
+      () async {
+        for (var i = 1; i <= 6; i++) {
+          await store.upsertProfile(
+            Profile(
+              id: 'p$i',
+              displayName: 'Profile $i',
+              server: 's$i.example',
+              user: 'u',
+            ),
+            password: 'pw',
+            psk: '',
+          );
+        }
+
+        // First starred goes to top; second starred follows it.
+        var res = await store.toggleProfileFavorite('p4');
+        expect(res.limitReached, isFalse);
+        expect(res.favorite, isTrue);
+        expect(res.profiles.map((p) => p.id), [
+          'p4',
+          'p1',
+          'p2',
+          'p3',
+          'p5',
+          'p6',
+        ]);
+
+        res = await store.toggleProfileFavorite('p2');
+        expect(res.limitReached, isFalse);
+        expect(res.profiles.map((p) => p.id), [
+          'p4',
+          'p2',
+          'p1',
+          'p3',
+          'p5',
+          'p6',
+        ]);
+
+        // Star up to 5.
+        await store.toggleProfileFavorite('p6');
+        await store.toggleProfileFavorite('p1');
+        res = await store.toggleProfileFavorite('p5');
+        expect(res.profiles.where((p) => p.favorite).length, 5);
+        expect(res.profiles.map((p) => p.id), [
+          'p4',
+          'p2',
+          'p6',
+          'p1',
+          'p5',
+          'p3',
+        ]);
+
+        // 6th favorite is rejected without modifying order.
+        final blocked = await store.toggleProfileFavorite('p3');
+        expect(blocked.limitReached, isTrue);
+        expect(blocked.favorite, isFalse);
+        expect(blocked.profiles.map((p) => p.id), [
+          'p4',
+          'p2',
+          'p6',
+          'p1',
+          'p5',
+          'p3',
+        ]);
+        expect((await store.loadProfiles()).where((p) => p.favorite).length, 5);
+
+        // Unstarring p4 puts it right below remaining favorites (top of non-favorites).
+        final unstarred = await store.toggleProfileFavorite('p4');
+        expect(unstarred.limitReached, isFalse);
+        expect(unstarred.favorite, isFalse);
+        expect(unstarred.profiles.map((p) => p.id), [
+          'p2',
+          'p6',
+          'p1',
+          'p5',
+          'p4',
+          'p3',
+        ]);
+      },
+    );
+
+    test(
+      'reorderProfiles moves favorites and non-favorites separately and persists',
+      () async {
+        for (final id in ['a', 'b', 'c', 'd', 'e']) {
+          await store.upsertProfile(
+            Profile(
+              id: id,
+              displayName: id.toUpperCase(),
+              server: '$id.example',
+              user: 'u',
+            ),
+            password: 'pw',
+            psk: '',
+          );
+        }
+        await store.toggleProfileFavorite('d');
+        await store.toggleProfileFavorite('b');
+        // Order now: [d*, b*, a, c, e]
+
+        final favReordered = await store.reorderProfiles(
+          favoritesSection: true,
+          oldIndex: 0,
+          newIndex: 1,
+        );
+        expect(favReordered.map((p) => p.id), ['b', 'd', 'a', 'c', 'e']);
+
+        final otherReordered = await store.reorderProfiles(
+          favoritesSection: false,
+          oldIndex: 2,
+          newIndex: 0,
+        );
+        expect(otherReordered.map((p) => p.id), ['b', 'd', 'e', 'a', 'c']);
+
+        final reloaded = await store.loadProfiles();
+        expect(reloaded.map((p) => p.id), ['b', 'd', 'e', 'a', 'c']);
+        expect(reloaded.where((p) => p.favorite).map((p) => p.id), ['b', 'd']);
+      },
+    );
+
+    test('upsertProfile preserves favorite flag and position', () async {
+      await store.upsertProfile(
+        const Profile(
+          id: 'p1',
+          displayName: 'One',
+          server: 'one.example',
+          user: 'u',
+        ),
+        password: 'pw',
+        psk: '',
+      );
+      await store.upsertProfile(
+        const Profile(
+          id: 'p2',
+          displayName: 'Two',
+          server: 'two.example',
+          user: 'u',
+        ),
+        password: 'pw',
+        psk: '',
+      );
+      await store.toggleProfileFavorite('p2');
+      // Order: [p2*, p1]
+
+      await store.upsertProfile(
+        const Profile(
+          id: 'p2',
+          displayName: 'Two Updated',
+          server: 'two.example',
+          user: 'u',
+          favorite: true,
+        ),
+        password: 'pw',
+        psk: '',
+      );
+
+      final loaded = await store.loadProfiles();
+      expect(loaded.map((p) => p.id), ['p2', 'p1']);
+      expect(loaded.first.favorite, isTrue);
+      expect(loaded.first.displayName, 'Two Updated');
+    });
   });
 }

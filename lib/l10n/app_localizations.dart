@@ -487,6 +487,16 @@ extension AppStrings on AppLocalizations {
   );
   String get profileActions =>
       AppText.pick('Profile actions', 'کنش‌های پروفایل');
+  String get addToFavorites =>
+      AppText.pick('Add to favorites', 'افزودن به برگزیده‌ها');
+  String get removeFromFavorites =>
+      AppText.pick('Remove from favorites', 'حذف از برگزیده‌ها');
+  String get reorderProfile =>
+      AppText.pick('Reorder profile', 'جابه‌جایی پروفایل');
+  String favoriteLimitReached(int max) => AppText.pick(
+    'You can favorite up to $max profiles',
+    'حداکثر $max پروفایل را می‌توانید برگزیده کنید',
+  );
   String get copyShareLink =>
       AppText.pick('Copy share link', 'کپی پیوند اشتراک');
   String get copyShareLinks =>

@@ -145,6 +145,7 @@ class ProfileFormState extends Equatable {
     this.dns2 = '',
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
     this.mtu = '${Profile.defaultVpnMtu}',
+    this.favorite = false,
     this.messageId = 0,
     this.message,
     this.saved = false,
@@ -166,6 +167,7 @@ class ProfileFormState extends Equatable {
   final String dns2;
   final DnsProtocol dns2Protocol;
   final String mtu;
+  final bool favorite;
   final int messageId;
   final String? message;
   final bool saved;
@@ -194,6 +196,7 @@ class ProfileFormState extends Equatable {
     String? dns2,
     DnsProtocol? dns2Protocol,
     String? mtu,
+    bool? favorite,
     int? messageId,
     String? message,
     bool clearMessage = false,
@@ -216,6 +219,7 @@ class ProfileFormState extends Equatable {
       dns2: dns2 ?? this.dns2,
       dns2Protocol: dns2Protocol ?? this.dns2Protocol,
       mtu: mtu ?? this.mtu,
+      favorite: favorite ?? this.favorite,
       messageId: messageId ?? this.messageId,
       message: clearMessage ? null : (message ?? this.message),
       saved: saved ?? this.saved,
@@ -241,6 +245,7 @@ class ProfileFormState extends Equatable {
     dns2,
     dns2Protocol,
     mtu,
+    favorite,
     messageId,
     message,
     saved,
@@ -336,6 +341,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           dns2: '',
           dns2Protocol: DnsProtocol.dnsOverUdp,
           mtu: '${Profile.defaultVpnMtu}',
+          favorite: false,
           saved: false,
         ),
       );
@@ -372,6 +378,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         dns2: profile.dns2Host,
         dns2Protocol: profile.dns2Protocol,
         mtu: '${profile.mtu}',
+        favorite: profile.favorite,
       ),
     );
   }
@@ -462,6 +469,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       ),
       dns2Protocol: state.dns2Protocol,
       mtu: Profile.normalizeMtu(mtuParsed),
+      favorite: state.favorite,
     );
   }
 

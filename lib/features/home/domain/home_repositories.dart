@@ -27,6 +27,13 @@ abstract class ProfilesRepository {
   });
   Future<void> deleteProfile(String id);
   Future<void> deleteProfiles(List<String> ids);
+  Future<({List<Profile> profiles, bool limitReached, bool favorite})>
+  toggleProfileFavorite(String id);
+  Future<List<Profile>> reorderProfiles({
+    required bool favoritesSection,
+    required int oldIndex,
+    required int newIndex,
+  });
   Future<void> copyProfileShareLink(String id);
   Future<void> copyProfileShareLinks(List<String> ids);
   Future<void> exportProfileFile(String id);

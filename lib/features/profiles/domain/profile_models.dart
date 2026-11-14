@@ -416,7 +416,11 @@ class Profile {
     this.dns2Host = '',
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
     this.mtu = defaultVpnMtu,
+    this.favorite = false,
   });
+
+  /// Maximum number of profiles a user can mark as favorites.
+  static const int maxFavorites = 5;
 
   /// TUN interface MTU (bytes). Shared default for new profiles and quick-connect.
   static const int defaultVpnMtu = 1450;
@@ -436,6 +440,23 @@ class Profile {
 
   /// Android VpnService [Builder.setMtu]; clamped [minVpnMtu]–[maxVpnMtu].
   final int mtu;
+  final bool favorite;
+
+  Profile copyWith({bool? favorite}) {
+    return Profile(
+      id: id,
+      displayName: displayName,
+      server: server,
+      user: user,
+      dnsAutomatic: dnsAutomatic,
+      dns1Host: dns1Host,
+      dns1Protocol: dns1Protocol,
+      dns2Host: dns2Host,
+      dns2Protocol: dns2Protocol,
+      mtu: mtu,
+      favorite: favorite ?? this.favorite,
+    );
+  }
 
   List<DnsServerConfig> get manualDnsServers => orderedDnsServers(
     dns1Host: dns1Host,
@@ -613,6 +634,7 @@ class Profile {
     'dns2Host': normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
     'dns2Protocol': dns2Protocol.jsonValue,
     'mtu': mtu,
+    'favorite': favorite,
   };
 
   static Profile? tryFromJson(Object? raw) {
@@ -650,6 +672,7 @@ class Profile {
     } else if (mtuRaw is String) {
       mtu = mtuFromText(mtuRaw, fallback: defaultVpnMtu);
     }
+    final favorite = m['favorite'] is bool ? m['favorite'] as bool : false;
     return Profile(
       id: id,
       displayName: displayName,
@@ -661,6 +684,7 @@ class Profile {
       dns2Host: normalizeDnsServerForProtocol(dns2Host, parsedDns2Protocol),
       dns2Protocol: parsedDns2Protocol,
       mtu: mtu,
+      favorite: favorite,
     );
   }
 }

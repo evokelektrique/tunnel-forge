@@ -4,6 +4,7 @@ import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
 import 'package:tunnel_forge/l10n/app_localizations.dart';
+import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_contract.dart';
@@ -128,6 +129,30 @@ final class ProfilesImportSelectionPolicyChanged extends ProfilesEvent {
   List<Object?> get props => [selectImportedProfileWhenIdle];
 }
 
+final class ProfilesFavoriteToggled extends ProfilesEvent {
+  const ProfilesFavoriteToggled(this.id);
+
+  final String id;
+
+  @override
+  List<Object?> get props => [id];
+}
+
+final class ProfilesGroupReordered extends ProfilesEvent {
+  const ProfilesGroupReordered({
+    required this.favoritesSection,
+    required this.oldIndex,
+    required this.newIndex,
+  });
+
+  final bool favoritesSection;
+  final int oldIndex;
+  final int newIndex;
+
+  @override
+  List<Object?> get props => [favoritesSection, oldIndex, newIndex];
+}
+
 class ProfilesState extends Equatable {
   const ProfilesState({
     this.loading = true,
@@ -203,6 +228,8 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     on<ProfilesExportFileRequested>(_onExportFileRequested);
     on<ProfilesExportFilesRequested>(_onExportFilesRequested);
     on<ProfilesImportSelectionPolicyChanged>(_onImportSelectionPolicyChanged);
+    on<ProfilesFavoriteToggled>(_onFavoriteToggled);
+    on<ProfilesGroupReordered>(_onGroupReordered);
   }
 
   final ProfilesRepository _profilesRepository;
@@ -583,6 +610,106 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         selectImportedProfileWhenIdle: event.selectImportedProfileWhenIdle,
       ),
     );
+  }
+
+  Future<void> _onFavoriteToggled(
+    ProfilesFavoriteToggled event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    try {
+      final result = await _profilesRepository.toggleProfileFavorite(event.id);
+      if (result.limitReached) {
+        emit(
+          state.copyWith(
+            message: _nextMessage(
+              AppText.current.favoriteLimitReached(Profile.maxFavorites),
+            ),
+          ),
+        );
+        return;
+      }
+      final currentActiveRow = state.activeProfileRow;
+      var nextActiveRow = currentActiveRow;
+      if (currentActiveRow != null && currentActiveRow.profile.id == event.id) {
+        for (final profile in result.profiles) {
+          if (profile.id == event.id) {
+            nextActiveRow = ProfileSecretRow(
+              profile: profile,
+              password: currentActiveRow.password,
+              psk: currentActiveRow.psk,
+              secretsMissing: currentActiveRow.secretsMissing,
+            );
+            break;
+          }
+        }
+      }
+      emit(
+        state.copyWith(
+          profiles: result.profiles,
+          activeProfileRow: nextActiveRow,
+        ),
+      );
+    } catch (_) {
+      emit(
+        state.copyWith(
+          message: _nextMessage(
+            AppText.pick(
+              'Couldn\'t update favorite profile',
+              'وضعیت برگزیده پروفایل به‌روز نشد',
+            ),
+            error: true,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onGroupReordered(
+    ProfilesGroupReordered event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    final nextProfiles = ProfileStore.reorderProfileSection(
+      state.profiles,
+      favoritesSection: event.favoritesSection,
+      oldIndex: event.oldIndex,
+      newIndex: event.newIndex,
+    );
+    if (_sameProfileOrder(state.profiles, nextProfiles)) return;
+    // Emit immediately so SliverReorderableList does not snap back before disk write finishes.
+    emit(state.copyWith(profiles: nextProfiles));
+    try {
+      final persisted = await _profilesRepository.reorderProfiles(
+        favoritesSection: event.favoritesSection,
+        oldIndex: event.oldIndex,
+        newIndex: event.newIndex,
+      );
+      if (!_sameProfileOrder(state.profiles, persisted)) {
+        emit(state.copyWith(profiles: persisted));
+      }
+    } catch (_) {
+      await _reloadProfiles(emit, preferredActiveId: state.activeProfileId);
+      emit(
+        state.copyWith(
+          message: _nextMessage(
+            AppText.pick(
+              'Couldn\'t save profile order',
+              'ترتیب پروفایل‌ها ذخیره نشد',
+            ),
+            error: true,
+          ),
+        ),
+      );
+    }
+  }
+
+  static bool _sameProfileOrder(List<Profile> a, List<Profile> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id || a[i].favorite != b[i].favorite) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _queueIncomingTransfer(IncomingProfileTransfer transfer) {
