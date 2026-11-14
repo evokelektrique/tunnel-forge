@@ -18,6 +18,7 @@ build/
 *.aab
 *.dex
 *.class
+output-metadata.json
 
 # Symbolication & obfuscation maps
 app.*.symbols
@@ -60,6 +61,7 @@ pubspec-overrides.yaml
 # Android CMake / NDK cache
 .cxx/
 **/.cxx/
+.externalNativeBuild/
 captures/
 
 # Python cache
@@ -105,6 +107,7 @@ local.properties
 **/local.properties
 key.properties
 **/key.properties
+google-services.json
 
 # Android keystores & signing keys
 *.jks
@@ -122,6 +125,9 @@ key.properties
 *.iml
 *.ipr
 *.iws
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
 
 # Visual Studio Code
 .vscode/
@@ -155,8 +161,3 @@ $RECYCLE.BIN/
 # Version control & migration scratch
 .svn/
 migrate_working_dir/
-
-# -----------------------------------------------------------------------------
-# Local Documentation / Notes
-# -----------------------------------------------------------------------------
-/docs/
