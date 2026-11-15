@@ -129,6 +129,10 @@ class TunnelFailure extends Equatable {
       'Server unreachable',
       'The VPN server stopped responding to keepalive probes.',
     ),
+    '15': (
+      'Disconnected by server',
+      'The VPN server closed the connection.',
+    ),
   };
 
   bool get _hasGeneralError =>

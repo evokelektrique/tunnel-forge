@@ -598,6 +598,58 @@ void main() {
       ),
     ],
   );
+
+  blocTest<TunnelBloc, TunnelState>(
+    'emits failure popup message when connected tunnel is closed by server',
+    build: () => TunnelBloc(_FakeTunnelRepository(), _FakeLogsRepository()),
+    seed: () => const TunnelState(
+      tunnelUp: true,
+      connectionMode: ConnectionMode.vpnTunnel,
+      activeAttemptId: 'attempt-server-close',
+    ),
+    act: (bloc) {
+      bloc.add(
+        const TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.failed,
+            detail: 'VPN server closed the connection.',
+            attemptId: 'attempt-server-close',
+            failure: TunnelFailure(
+              namespace: 'l2tp-cdn',
+              code: '1',
+              detail: 'VPN server closed the connection.',
+            ),
+          ),
+        ),
+      );
+    },
+    expect: () => const [
+      TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: false,
+        recoveryPhase: TunnelRecoveryPhase.none,
+        connectionMode: ConnectionMode.vpnTunnel,
+        activeAttemptId: null,
+      ),
+      TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: false,
+        recoveryPhase: TunnelRecoveryPhase.none,
+        connectionMode: ConnectionMode.vpnTunnel,
+        activeAttemptId: null,
+        message: HomeMessage(
+          id: 1,
+          text: 'VPN server closed the connection.',
+          error: true,
+          failure: TunnelFailure(
+            namespace: 'l2tp-cdn',
+            code: '1',
+            detail: 'VPN server closed the connection.',
+          ),
+        ),
+      ),
+    ],
+  );
 }
 
 late _MutableRuntimeTunnelRepository _mutableRuntimeRepository;

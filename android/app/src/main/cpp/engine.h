@@ -33,6 +33,7 @@
 #define TUNNEL_EXIT_STOPPED 12
 #define TUNNEL_EXIT_NETWORK_LOST 13
 #define TUNNEL_EXIT_PEER_UNREACHABLE 14
+#define TUNNEL_EXIT_PEER_CLOSED 15
 
 /** VpnService.protect(fd) when protection is enabled; no-op if disabled or JNI missing. */
 int util_protect_fd(int fd);

@@ -216,6 +216,7 @@ class TunnelVpnService : VpnService() {
             ACTION_START -> {
                 // Required immediately after Context.startForegroundService(); must run before any early return.
                 startForegroundWithType(buildNotification(getString(R.string.vpn_notification_connecting)))
+                TunnelDisconnectNotification.cancel(this)
                 val attemptId = intent.getStringExtra(EXTRA_ATTEMPT_ID) ?: ""
                 val server = intent.getStringExtra(EXTRA_SERVER)
                 if (server.isNullOrEmpty()) {
@@ -732,6 +733,12 @@ class TunnelVpnService : VpnService() {
                 when (result.kind) {
                     AttemptResultKind.CLEAN_STOP -> {
                         if (!sessionStopRequested && !hasRecordedDisconnectReason()) {
+                            TunnelDisconnectNotification.show(
+                                context = this,
+                                detail = result.detail,
+                                failure = result.failure,
+                                profileLabel = activeProfileName?.takeIf { it.isNotEmpty() } ?: activeServer,
+                            )
                             recordDisconnectReason(
                                 attemptId = attemptId,
                                 reason = "peer_or_native_closed",
@@ -743,7 +750,21 @@ class TunnelVpnService : VpnService() {
                         break
                     }
                     AttemptResultKind.FATAL_FAILURE -> {
-                        recordDisconnectReason(attemptId, "native_exit_error", Log.ERROR, result.detail)
+                        if (!sessionStopRequested) {
+                            TunnelDisconnectNotification.show(
+                                context = this,
+                                detail = result.detail,
+                                failure = result.failure,
+                                profileLabel = activeProfileName?.takeIf { it.isNotEmpty() } ?: activeServer,
+                            )
+                        }
+                        val reason =
+                            if (TunnelDisconnectNotification.isPeerTeardownFailure(0, result.failure)) {
+                                "peer_closed"
+                            } else {
+                                "native_exit_error"
+                            }
+                        recordDisconnectReason(attemptId, reason, Log.ERROR, result.detail)
                         emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, result.detail, result.failure)
                         break
                     }
@@ -967,9 +988,10 @@ class TunnelVpnService : VpnService() {
         }
 
         val interrupt = networkInterruptEvent
-        if (interrupt != null ||
-            code == VpnBridge.EXIT_NETWORK_LOST ||
-            code == VpnBridge.EXIT_PEER_UNREACHABLE
+        if (code != VpnBridge.EXIT_PEER_CLOSED &&
+            (interrupt != null ||
+                code == VpnBridge.EXIT_NETWORK_LOST ||
+                code == VpnBridge.EXIT_PEER_UNREACHABLE)
         ) {
             val effectiveCode =
                 if (code == VpnBridge.EXIT_NETWORK_LOST || code == VpnBridge.EXIT_PEER_UNREACHABLE) {
@@ -1326,6 +1348,7 @@ class TunnelVpnService : VpnService() {
             12 -> "Tunnel stopped"
             13 -> "Network connection lost."
             14 -> "VPN server stopped responding."
+            15 -> "VPN server closed the connection."
             else -> "Tunnel engine exited with code $code"
         }
 

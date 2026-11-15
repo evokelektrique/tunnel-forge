@@ -560,7 +560,7 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
                                      g_state.ike.peer_len, &g_state.l2tp, plain, plain_len, endpoint, &g_state.ppp);
           if (dispatch_rc == L2TP_DISPATCH_REMOTE_CLOSED) {
             tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "peer requested L2TP tunnel teardown");
-            exit_code = TUNNEL_EXIT_OK;
+            exit_code = TUNNEL_EXIT_PEER_CLOSED;
             close_reason = "peer teardown";
             send_teardown = 1;
             break;

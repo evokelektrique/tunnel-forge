@@ -80,6 +80,14 @@ int main(void) {
   assert(send(sockets[0], incoming, length, 0) == (ssize_t)length);
   assert(recv_ctrl_update_nr(sockets[1], &esp, NULL, incoming, sizeof(incoming), 100, &session, &mt, NULL) == -1);
   assert(failure[0] == 2 && failure[1] == 2 && failure[2] == 8);
+  failure[0] = failure[1] = failure[2] = 0;
+  off = 0;
+  assert(l2tp_avp_append_u16(avps, sizeof(avps), &off, L2TP_AVP_MSG_TYPE, L2TP_MSG_CDN) == 0);
+  assert(l2tp_avp_append_result(avps, sizeof(avps), &off, 1, 0) == 0);
+  assert(l2tp_ctrl_build(incoming, sizeof(incoming), 0, 0, 2, 1, avps, off, &length) == 0);
+  assert(l2tp_dispatch_incoming(sockets[1], NULL, NULL, 0, &session, incoming, length, NULL, NULL) ==
+         L2TP_DISPATCH_REMOTE_CLOSED);
+  assert(failure[0] == 3 && failure[1] == 1 && failure[2] == 0);
   close(sockets[0]);
   close(sockets[1]);
   return 0;

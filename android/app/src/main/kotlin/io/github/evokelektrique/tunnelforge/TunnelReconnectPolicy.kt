@@ -22,7 +22,8 @@ internal object TunnelReconnectPolicy {
     ): Boolean {
         if (exitCode == VpnBridge.EXIT_BAD_ARGS ||
             exitCode == VpnBridge.EXIT_PROXY_NOT_IMPLEMENTED ||
-            exitCode == VpnBridge.EXIT_STOPPED
+            exitCode == VpnBridge.EXIT_STOPPED ||
+            exitCode == VpnBridge.EXIT_PEER_CLOSED
         ) {
             return true
         }

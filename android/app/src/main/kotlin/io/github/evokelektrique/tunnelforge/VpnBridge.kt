@@ -15,6 +15,7 @@ object VpnBridge {
     const val EXIT_STOPPED = 12
     const val EXIT_NETWORK_LOST = 13
     const val EXIT_PEER_UNREACHABLE = 14
+    const val EXIT_PEER_CLOSED = 15
 
     init {
         System.loadLibrary("tunnel_engine")

@@ -11,4 +11,7 @@
     <string name="proxy_notification_waiting_network">Waiting for network</string>
     <string name="vpn_notification_action_disconnect">Disconnect</string>
     <string name="vpn_notification_channel_name">VPN</string>
+    <string name="vpn_notification_alert_channel_name">Connection alerts</string>
+    <string name="vpn_notification_disconnected_title">TunnelForge disconnected</string>
+    <string name="vpn_notification_disconnected_server">VPN server closed the connection.</string>
 </resources>

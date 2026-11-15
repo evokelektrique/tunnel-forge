@@ -879,10 +879,13 @@ static int l2tp_dispatch_control(int esp_fd, esp_keys_t *esp, const struct socka
       uint16_t rc = 0, ec = 0;
       char em[128];
       em[0] = '\0';
-      if (l2tp_ctrl_result_details(data, len, &rc, &ec, em, sizeof(em)) == 0)
+      if (l2tp_ctrl_result_details(data, len, &rc, &ec, em, sizeof(em)) == 0) {
+        if (rc != 0)
+          tunnel_set_failure(mt == L2TP_MSG_STOPCCN ? 2 : 3, (int)rc, (int)ec);
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: peer sent %s result=%u error=%u msg=%s",
                           mt == L2TP_MSG_STOPCCN ? "StopCCN" : "CDN", (unsigned)rc, (unsigned)ec,
                           em[0] != '\0' ? em : "-");
+      }
     }
     l2tp_log_ctrl_result_details(mt, data, len);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp ctrl dataplane: remote teardown mt=%u peer_ns=%u peer_nr=%u",

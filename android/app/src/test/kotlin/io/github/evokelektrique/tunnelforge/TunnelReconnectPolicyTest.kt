@@ -39,6 +39,18 @@ class TunnelReconnectPolicyTest {
                 mapOf("namespace" to "l2tp-stopccn", "code" to 4, "generalError" to 0),
             ),
         )
+        assertTrue(
+            TunnelReconnectPolicy.isTerminalFailure(
+                VpnBridge.EXIT_PEER_CLOSED,
+                mapOf("namespace" to "l2tp-cdn", "code" to 1, "generalError" to 0),
+            ),
+        )
+        assertTrue(
+            TunnelReconnectPolicy.isTerminalFailure(
+                VpnBridge.EXIT_PEER_CLOSED,
+                null,
+            ),
+        )
     }
 
     @Test
@@ -134,6 +146,31 @@ class TunnelReconnectPolicyTest {
                 hasDnsServer = false,
                 hasLocalProxyRuntime = false,
                 hasBlockingTunInterface = true,
+            ),
+        )
+    }
+
+    @Test
+    fun disconnectNotificationFormatsPeerTeardownAndGenericErrors() {
+        assertTrue(
+            TunnelDisconnectNotification.isPeerTeardownFailure(
+                VpnBridge.EXIT_PEER_CLOSED,
+                null,
+            ),
+        )
+        assertEquals(
+            "Work: VPN server closed the connection.",
+            TunnelDisconnectNotification.formatDisconnectMessage(
+                detail = "Disconnected by peer",
+                failure = mapOf("namespace" to "l2tp-cdn", "code" to 1, "generalError" to 0),
+                profileLabel = "Work",
+            ),
+        )
+        assertEquals(
+            "PPP negotiation failed.",
+            TunnelDisconnectNotification.formatDisconnectMessage(
+                detail = "PPP negotiation failed.",
+                failure = mapOf("namespace" to "mschap", "code" to 691, "generalError" to 0),
             ),
         )
     }

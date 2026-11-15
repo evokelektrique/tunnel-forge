@@ -85,6 +85,7 @@ class ProxyTunnelService : Service() {
 
             ACTION_START -> {
                 startForegroundWithType(buildNotification("Starting local proxy..."))
+                TunnelDisconnectNotification.cancel(this)
                 val attemptId = intent.getStringExtra(EXTRA_ATTEMPT_ID) ?: ""
                 val server = intent.getStringExtra(EXTRA_SERVER)
                 val user = intent.getStringExtra(EXTRA_USER) ?: ""
@@ -349,6 +350,14 @@ class ProxyTunnelService : Service() {
                 when (outcome.kind) {
                     ProxyAttemptOutcomeKind.CLEAN_STOP -> break
                     ProxyAttemptOutcomeKind.FATAL_FAILURE -> {
+                        if (!stopRequested) {
+                            TunnelDisconnectNotification.show(
+                                context = this,
+                                detail = outcome.detail,
+                                failure = outcome.failure,
+                                profileLabel = label,
+                            )
+                        }
                         emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, outcome.detail, outcome.failure)
                         break
                     }
@@ -682,9 +691,10 @@ class ProxyTunnelService : Service() {
                 return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.CLEAN_STOP)
             }
             val interrupt = networkInterruptEvent
-            if (interrupt != null ||
-                loopExitCode == VpnBridge.EXIT_NETWORK_LOST ||
-                loopExitCode == VpnBridge.EXIT_PEER_UNREACHABLE
+            if (loopExitCode != VpnBridge.EXIT_PEER_CLOSED &&
+                (interrupt != null ||
+                    loopExitCode == VpnBridge.EXIT_NETWORK_LOST ||
+                    loopExitCode == VpnBridge.EXIT_PEER_UNREACHABLE)
             ) {
                 val code =
                     if (loopExitCode == VpnBridge.EXIT_NETWORK_LOST || loopExitCode == VpnBridge.EXIT_PEER_UNREACHABLE) {
@@ -1056,6 +1066,7 @@ class ProxyTunnelService : Service() {
             11 -> "Proxy transport is not implemented yet."
             13 -> "Network connection lost."
             14 -> "VPN server stopped responding."
+            15 -> "VPN server closed the connection."
             else -> "Tunnel engine exited with code $code"
         }
 
