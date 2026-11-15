@@ -333,7 +333,9 @@ static int send_ctrl(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, s
     snprintf(hexbuf + hi * 3, 4, "%02x ", pkt[hi]);
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp send_ctrl hex: %s", hexbuf);
   if (esp_encrypt_send(esp_fd, esp, peer, peer_len, pkt, tot) < 0) {
+    int saved_errno = errno;
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp send_ctrl: esp_encrypt_send failed");
+    errno = saved_errno;
     return -1;
   }
   s->send_ns = (uint16_t)(s->send_ns + 1u);
@@ -395,6 +397,25 @@ int l2tp_send_teardown(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer,
   }
 
   return rc;
+}
+
+int l2tp_send_hello(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *s) {
+  if (esp == NULL || peer == NULL || s == NULL || s->tunnel_id == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  uint8_t avps[16];
+  size_t ao = 0;
+  l2tp_session_t ctrl = *s;
+  ctrl.session_id = 0;
+  if (l2tp_avp_append_u16(avps, sizeof(avps), &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_HELLO) != 0)
+    return -1;
+  if (send_ctrl(esp_fd, esp, peer, peer_len, &ctrl, avps, ao) != 0)
+    return -1;
+  s->send_ns = ctrl.send_ns;
+  tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp: sent HELLO keepalive tid=%u ns=%u", (unsigned)s->tunnel_id,
+                    (unsigned)(s->send_ns - 1u));
+  return 0;
 }
 
 static int new_tunnel_id(uint16_t *id) {

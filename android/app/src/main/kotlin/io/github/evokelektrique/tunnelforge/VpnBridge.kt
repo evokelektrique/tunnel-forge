@@ -5,6 +5,17 @@ import androidx.annotation.Keep
 /** JNI `tunnel_engine`. TUN fd owned by [TunnelVpnService] (do not close from native). UDP: [TunnelVpnService.protectSocketFd] before I/O. */
 @Keep
 object VpnBridge {
+    const val EXIT_OK = 0
+    const val EXIT_IKE_FAILED = 1
+    const val EXIT_L2TP_FAILED = 2
+    const val EXIT_PPP_FAILED = 3
+    const val EXIT_POLL_ERROR = 4
+    const val EXIT_BAD_ARGS = 10
+    const val EXIT_PROXY_NOT_IMPLEMENTED = 11
+    const val EXIT_STOPPED = 12
+    const val EXIT_NETWORK_LOST = 13
+    const val EXIT_PEER_UNREACHABLE = 14
+
     init {
         System.loadLibrary("tunnel_engine")
     }

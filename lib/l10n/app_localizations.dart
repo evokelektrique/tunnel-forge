@@ -440,6 +440,16 @@ extension AppStrings on AppLocalizations {
     'Connecting... tap to cancel',
     'در حال اتصال... برای لغو بزنید',
   );
+  String get waitingForNetwork =>
+      AppText.pick('Waiting for network', 'در انتظار شبکه');
+  String get waitingForNetworkBlocking => AppText.pick(
+    'Waiting for network · blocking internet',
+    'در انتظار شبکه · مسدودسازی اینترنت',
+  );
+  String get reconnectingTapCancel => AppText.pick(
+    'Reconnecting... tap to cancel',
+    'در حال اتصال مجدد... برای لغو بزنید',
+  );
   String get disconnecting =>
       AppText.pick('Disconnecting...', 'در حال قطع اتصال...');
   String get canceling => AppText.pick('Canceling...', 'در حال لغو...');

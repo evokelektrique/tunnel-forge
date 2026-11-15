@@ -33,6 +33,10 @@ add_executable(test_nat_t_keepalive test_nat_t_keepalive.c ../../android/app/src
 target_include_directories(test_nat_t_keepalive PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME nat_t_keepalive COMMAND test_nat_t_keepalive)
 
+add_executable(test_tunnel_liveness test_tunnel_liveness.c ../../android/app/src/main/cpp/tunnel_liveness.c)
+target_include_directories(test_tunnel_liveness PRIVATE ../../android/app/src/main/cpp)
+add_test(NAME tunnel_liveness COMMAND test_tunnel_liveness)
+
 add_executable(test_packet_endpoint test_packet_endpoint.c ../../android/app/src/main/cpp/packet_endpoint.c)
 target_include_directories(test_packet_endpoint PRIVATE ../../android/app/src/main/cpp)
 target_link_libraries(test_packet_endpoint PRIVATE pthread)

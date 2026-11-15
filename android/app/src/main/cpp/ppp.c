@@ -1745,6 +1745,24 @@ static int ppp_send_lcp_echo_reply(int esp_fd, esp_keys_t *esp, const struct soc
   return l2tp_send_ppp(esp_fd, esp, peer, peer_len, l2tp, buf, ppp_prefix + (size_t)lcp_len);
 }
 
+int ppp_send_lcp_echo_request(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                              l2tp_session_t *l2tp, ppp_session_t *ppp, uint8_t id) {
+  if (esp == NULL || peer == NULL || l2tp == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+  uint8_t buf[32];
+  const size_t ppp_prefix = ppp_write_frame_prefix(buf, sizeof(buf), PROTO_LCP, ppp);
+  if (ppp_prefix == 0u || ppp_prefix + 8u > sizeof(buf))
+    return -1;
+  buf[ppp_prefix + 0u] = (uint8_t)LCP_CODE_ECHO_REQUEST;
+  buf[ppp_prefix + 1u] = id;
+  util_write_be16(buf + ppp_prefix + 2u, 8u);
+  /* We never negotiated Magic-Number, so request magic stays zero per RFC 1661 section 5.8. */
+  util_write_be32(buf + ppp_prefix + 4u, 0u);
+  return l2tp_send_ppp(esp_fd, esp, peer, peer_len, l2tp, buf, ppp_prefix + 8u);
+}
+
 /**
  * Data-plane demux for one PPP frame from peer: IPv4 to endpoint, IPv6CP Protocol-Reject, LCP Echo-Reply, else warn.
  *
@@ -1820,11 +1838,15 @@ int ppp_dispatch_ppp_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *p
     }
     return 0;
   }
-  /* 0xc021: post-negotiation LCP (typically Echo-Request keepalive). */
+  /* 0xc021: post-negotiation LCP (Echo-Request / Echo-Reply keepalives). */
   if (proto == PROTO_LCP) {
+    if (len >= 4 && p[0] == (uint8_t)LCP_CODE_ECHO_REPLY) {
+      return 0;
+    }
     if (len >= 4 && p[0] == (uint8_t)LCP_CODE_ECHO_REQUEST && esp != NULL && peer != NULL && l2tp != NULL) {
       if (ppp_send_lcp_echo_reply(esp_fd, esp, peer, peer_len, l2tp, ppp, p, len) >= 0)
         return 0;
+      return -1;
     }
     static time_t s_last_lcp_dataplane_warn;
     time_t now_lcp = time(NULL);

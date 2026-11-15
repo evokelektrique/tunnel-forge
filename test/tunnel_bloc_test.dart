@@ -495,8 +495,112 @@ void main() {
     act: (bloc) => bloc.add(const TunnelStarted()),
     expect: () => const <TunnelState>[],
   );
+
+  blocTest<TunnelBloc, TunnelState>(
+    'transitions connected through waitingForNetwork and reconnecting back to connected',
+    build: () => TunnelBloc(_FakeTunnelRepository(), _FakeLogsRepository()),
+    seed: () => const TunnelState(
+      tunnelUp: true,
+      activeAttemptId: 'attempt-recover',
+    ),
+    act: (bloc) {
+      bloc.add(
+        const TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.waitingForNetwork,
+            detail: 'Waiting for network (blocking internet)',
+            attemptId: 'attempt-recover',
+          ),
+        ),
+      );
+      bloc.add(
+        const TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.reconnecting,
+            detail: 'Reconnecting...',
+            attemptId: 'attempt-recover',
+          ),
+        ),
+      );
+      bloc.add(
+        const TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.connected,
+            detail: 'TUN ready',
+            attemptId: 'attempt-recover',
+          ),
+        ),
+      );
+    },
+    expect: () => [
+      const TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: true,
+        recoveryPhase: TunnelRecoveryPhase.waitingForNetwork,
+        activeAttemptId: 'attempt-recover',
+      ),
+      const TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: true,
+        recoveryPhase: TunnelRecoveryPhase.reconnecting,
+        activeAttemptId: 'attempt-recover',
+      ),
+      const TunnelState(
+        tunnelUp: true,
+        awaitingTunnel: false,
+        recoveryPhase: TunnelRecoveryPhase.none,
+        activeAttemptId: 'attempt-recover',
+      ),
+      const TunnelState(
+        tunnelUp: true,
+        awaitingTunnel: false,
+        recoveryPhase: TunnelRecoveryPhase.none,
+        activeAttemptId: 'attempt-recover',
+        message: HomeMessage(id: 1, text: 'VPN connected'),
+      ),
+    ],
+  );
+
+  blocTest<TunnelBloc, TunnelState>(
+    'syncs waitingForNetwork and clears stale active state when runtime reports stopped',
+    build: () {
+      _mutableRuntimeRepository = _MutableRuntimeTunnelRepository(
+        const TunnelRuntimeState(
+          state: VpnTunnelState.waitingForNetwork,
+          detail: 'Waiting for network (blocking internet)',
+          attemptId: 'attempt-bg-wait',
+          connectionMode: ConnectionMode.vpnTunnel,
+        ),
+      );
+      return TunnelBloc(_mutableRuntimeRepository, _FakeLogsRepository());
+    },
+    act: (bloc) async {
+      bloc.add(const TunnelRuntimeSyncRequested());
+      await Future<void>.delayed(Duration.zero);
+      _mutableRuntimeRepository.currentRuntimeState =
+          const TunnelRuntimeState.idle();
+      bloc.add(const TunnelRuntimeSyncRequested());
+    },
+    expect: () => [
+      const TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: true,
+        recoveryPhase: TunnelRecoveryPhase.waitingForNetwork,
+        activeAttemptId: 'attempt-bg-wait',
+        connectionMode: ConnectionMode.vpnTunnel,
+      ),
+      const TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: false,
+        recoveryPhase: TunnelRecoveryPhase.none,
+        activeAttemptId: null,
+        connectionMode: ConnectionMode.vpnTunnel,
+      ),
+    ],
+  );
 }
 
+late _MutableRuntimeTunnelRepository _mutableRuntimeRepository;
 late _CountingTunnelRepository _countingTunnelRepository;
 late _DeferredTunnelRepository _deferredTunnelRepository;
 

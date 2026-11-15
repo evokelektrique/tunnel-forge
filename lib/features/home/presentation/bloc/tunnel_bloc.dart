@@ -82,11 +82,18 @@ final class TunnelDisconnectTimedOut extends TunnelEvent {
   List<Object?> get props => [attemptId];
 }
 
+final class TunnelRuntimeSyncRequested extends TunnelEvent {
+  const TunnelRuntimeSyncRequested();
+}
+
+enum TunnelRecoveryPhase { none, waitingForNetwork, reconnecting }
+
 class TunnelState extends Equatable {
   const TunnelState({
     this.busy = false,
     this.tunnelUp = false,
     this.awaitingTunnel = false,
+    this.recoveryPhase = TunnelRecoveryPhase.none,
     this.stopRequested = false,
     this.timedOutThisAttempt = false,
     this.connectionMode = ConnectionMode.vpnTunnel,
@@ -99,6 +106,7 @@ class TunnelState extends Equatable {
   final bool busy;
   final bool tunnelUp;
   final bool awaitingTunnel;
+  final TunnelRecoveryPhase recoveryPhase;
   final bool stopRequested;
   final bool timedOutThisAttempt;
   final ConnectionMode connectionMode;
@@ -111,6 +119,7 @@ class TunnelState extends Equatable {
     bool? busy,
     bool? tunnelUp,
     bool? awaitingTunnel,
+    TunnelRecoveryPhase? recoveryPhase,
     bool? stopRequested,
     bool? timedOutThisAttempt,
     ConnectionMode? connectionMode,
@@ -127,6 +136,7 @@ class TunnelState extends Equatable {
       busy: busy ?? this.busy,
       tunnelUp: tunnelUp ?? this.tunnelUp,
       awaitingTunnel: awaitingTunnel ?? this.awaitingTunnel,
+      recoveryPhase: recoveryPhase ?? this.recoveryPhase,
       stopRequested: stopRequested ?? this.stopRequested,
       timedOutThisAttempt: timedOutThisAttempt ?? this.timedOutThisAttempt,
       connectionMode: connectionMode ?? this.connectionMode,
@@ -148,6 +158,7 @@ class TunnelState extends Equatable {
     busy,
     tunnelUp,
     awaitingTunnel,
+    recoveryPhase,
     stopRequested,
     timedOutThisAttempt,
     connectionMode,
@@ -162,6 +173,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
   TunnelBloc(this._tunnelRepository, this._logsRepository)
     : super(const TunnelState()) {
     on<TunnelStarted>(_onStarted);
+    on<TunnelRuntimeSyncRequested>(_onRuntimeSyncRequested);
     on<TunnelConnectRequested>(_onConnectRequested);
     on<TunnelDisconnectRequested>(_onDisconnectRequested);
     on<TunnelHostStateReceived>(_onHostStateReceived);
@@ -197,6 +209,18 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     _proxyExposureSub = _tunnelRepository.proxyExposures.listen((exposure) {
       add(TunnelProxyExposureReceived(exposure));
     });
+    await _runRuntimeBootstrap(emit);
+  }
+
+  Future<void> _onRuntimeSyncRequested(
+    TunnelRuntimeSyncRequested event,
+    Emitter<TunnelState> emit,
+  ) async {
+    if (_runtimeBootstrapFuture != null) return;
+    await _runRuntimeBootstrap(emit);
+  }
+
+  Future<void> _runRuntimeBootstrap(Emitter<TunnelState> emit) async {
     final bootstrap = _bootstrapRuntimeState(emit);
     _runtimeBootstrapFuture = bootstrap;
     try {
@@ -520,6 +544,9 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     }
     switch (update.state) {
       case VpnTunnelState.connecting:
+        if (state.recoveryPhase != TunnelRecoveryPhase.none) {
+          emit(state.copyWith(recoveryPhase: TunnelRecoveryPhase.none));
+        }
         _logInfo(
           'Android${state.activeAttemptId == null ? '' : ' attempt=${state.activeAttemptId!}'}: ${update.detail}',
           source: LogSource.kotlin,
@@ -535,6 +562,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           state.copyWith(
             awaitingTunnel: false,
             tunnelUp: true,
+            recoveryPhase: TunnelRecoveryPhase.none,
             stopRequested: state.stopRequested,
             timedOutThisAttempt: false,
           ),
@@ -555,6 +583,40 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           );
         }
         break;
+      case VpnTunnelState.waitingForNetwork:
+        _cancelAwaitTimer();
+        emit(
+          state.copyWith(
+            awaitingTunnel: true,
+            tunnelUp: false,
+            recoveryPhase: TunnelRecoveryPhase.waitingForNetwork,
+            timedOutThisAttempt: false,
+            clearProxyExposure: true,
+          ),
+        );
+        _logInfo(
+          'Android${state.activeAttemptId == null ? '' : ' attempt=${state.activeAttemptId!}'}: ${update.detail.isEmpty ? 'Waiting for network' : update.detail}',
+          source: LogSource.kotlin,
+          tag: 'TunnelState',
+        );
+        break;
+      case VpnTunnelState.reconnecting:
+        _cancelAwaitTimer();
+        emit(
+          state.copyWith(
+            awaitingTunnel: true,
+            tunnelUp: false,
+            recoveryPhase: TunnelRecoveryPhase.reconnecting,
+            timedOutThisAttempt: false,
+            clearProxyExposure: true,
+          ),
+        );
+        _logInfo(
+          'Android${state.activeAttemptId == null ? '' : ' attempt=${state.activeAttemptId!}'}: ${update.detail.isEmpty ? 'Reconnecting...' : update.detail}',
+          source: LogSource.kotlin,
+          tag: 'TunnelState',
+        );
+        break;
       case VpnTunnelState.failed:
         _cancelAwaitTimer();
         _cancelDisconnectTimer();
@@ -563,6 +625,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
             state.copyWith(
               awaitingTunnel: false,
               tunnelUp: false,
+              recoveryPhase: TunnelRecoveryPhase.none,
               stopRequested: false,
               timedOutThisAttempt: false,
               clearActiveAttemptId: true,
@@ -581,6 +644,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           state.copyWith(
             awaitingTunnel: false,
             tunnelUp: false,
+            recoveryPhase: TunnelRecoveryPhase.none,
             stopRequested: false,
             timedOutThisAttempt: false,
             clearActiveAttemptId: true,
@@ -612,6 +676,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           state.copyWith(
             awaitingTunnel: false,
             tunnelUp: false,
+            recoveryPhase: TunnelRecoveryPhase.none,
             stopRequested: false,
             timedOutThisAttempt: false,
             clearActiveAttemptId: true,
@@ -757,6 +822,26 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
   Future<void> _bootstrapRuntimeState(Emitter<TunnelState> emit) async {
     final runtimeState = await _tunnelRepository.getRuntimeState();
     if (runtimeState.state == VpnTunnelState.stopped) {
+      if (state.tunnelUp ||
+          state.awaitingTunnel ||
+          state.recoveryPhase != TunnelRecoveryPhase.none ||
+          state.activeAttemptId != null) {
+        _cancelAwaitTimer();
+        _cancelDisconnectTimer();
+        emit(
+          state.copyWith(
+            busy: false,
+            tunnelUp: false,
+            awaitingTunnel: false,
+            recoveryPhase: TunnelRecoveryPhase.none,
+            stopRequested: false,
+            timedOutThisAttempt: false,
+            clearActiveAttemptId: true,
+            clearConnectStartedAt: true,
+            clearProxyExposure: true,
+          ),
+        );
+      }
       final lastTerminal = runtimeState.lastTerminal;
       if (lastTerminal != null) {
         final attemptSuffix = lastTerminal.attemptId.isEmpty
@@ -791,14 +876,23 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     }
     final connected = runtimeState.state == VpnTunnelState.connected;
     final connecting = runtimeState.state == VpnTunnelState.connecting;
-    if (!connected && !connecting) {
+    final waitingForNetwork =
+        runtimeState.state == VpnTunnelState.waitingForNetwork;
+    final reconnecting = runtimeState.state == VpnTunnelState.reconnecting;
+    if (!connected && !connecting && !waitingForNetwork && !reconnecting) {
       return;
     }
+    final recoveryPhase = waitingForNetwork
+        ? TunnelRecoveryPhase.waitingForNetwork
+        : reconnecting
+        ? TunnelRecoveryPhase.reconnecting
+        : TunnelRecoveryPhase.none;
     emit(
       state.copyWith(
         busy: false,
         tunnelUp: connected,
-        awaitingTunnel: connecting,
+        awaitingTunnel: connecting || waitingForNetwork || reconnecting,
+        recoveryPhase: recoveryPhase,
         stopRequested: false,
         timedOutThisAttempt: false,
         connectionMode: runtimeState.connectionMode,
@@ -806,7 +900,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
             ? null
             : runtimeState.attemptId,
         connectStartedAt: connecting ? DateTime.now() : null,
-        clearConnectStartedAt: connected,
+        clearConnectStartedAt: !connecting,
         proxyExposure: runtimeState.proxyExposure,
         clearProxyExposure: runtimeState.proxyExposure == null,
         clearMessage: true,

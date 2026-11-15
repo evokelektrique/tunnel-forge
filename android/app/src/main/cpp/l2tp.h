@@ -74,4 +74,7 @@ int l2tp_send_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, sock
 /** Best-effort graceful close: CDN for the call, then STOPCCN for the control tunnel. */
 int l2tp_send_teardown(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *s);
 
+/** Send an L2TPv2 HELLO control keepalive on the established tunnel; returns 0 or -1 with errno preserved. */
+int l2tp_send_hello(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *s);
+
 #endif

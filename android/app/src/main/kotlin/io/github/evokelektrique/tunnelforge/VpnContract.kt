@@ -87,6 +87,8 @@ object VpnContract {
 
     const val TUNNEL_CONNECTING = "connecting"
     const val TUNNEL_CONNECTED = "connected"
+    const val TUNNEL_WAITING_FOR_NETWORK = "waitingForNetwork"
+    const val TUNNEL_RECONNECTING = "reconnecting"
     const val TUNNEL_FAILED = "failed"
     const val TUNNEL_STOPPED = "stopped"
 }

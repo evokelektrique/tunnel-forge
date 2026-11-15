@@ -24,6 +24,7 @@
 #include "l2tp.h"
 #include "nat_t_keepalive.h"
 #include "ppp.h"
+#include "tunnel_liveness.h"
 #include "util_endian.h"
 
 #define LOG_TAG "tunnel_engine"
@@ -355,6 +356,25 @@ void tunnel_negotiated_dns_ipv4(uint8_t primary_out[4], uint8_t secondary_out[4]
  * - Uses atomics g_stop, g_vpn_dns_bridge_active, g_vpn_dns_tun_fd.
  * - May call tunnel_close_active_session(), which closes ESP fd and clears g_state.ready.
  */
+static int64_t monotonic_ms(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return (int64_t)time(NULL) * 1000LL;
+  return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+}
+
+static int send_dead_peer_probes(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                                 l2tp_session_t *l2tp, ppp_session_t *ppp, uint8_t probe_id) {
+  if (l2tp_send_hello(esp_fd, esp, peer, peer_len, l2tp) < 0 && tunnel_is_fatal_socket_errno(errno)) {
+    return -1;
+  }
+  if (ppp_send_lcp_echo_request(esp_fd, esp, peer, peer_len, l2tp, ppp, probe_id) < 0 &&
+      tunnel_is_fatal_socket_errno(errno)) {
+    return -1;
+  }
+  return 0;
+}
+
 static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint) {
   /* Readiness guard: run loop is only valid after negotiation state is established. */
   if (!g_state.ready) {
@@ -397,8 +417,14 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
   uint8_t vpn_dns_pending_response[65536];
   size_t vpn_dns_pending_response_len = 0u;
   time_t last_outbound_to_peer = time(NULL);
+  tunnel_liveness_t liveness;
+  tunnel_liveness_init(&liveness, monotonic_ms());
 
-  /* Data-plane loop: handle endpoint egress, ESP ingress, and optional DNS bridge traffic. */
+  int exit_code = TUNNEL_EXIT_OK;
+  int send_teardown = 1;
+  const char *close_reason = "tunnel stopped";
+
+  /* Data-plane loop: handle endpoint egress, ESP ingress, liveness probes, and DNS bridge traffic. */
   while (!atomic_load(&g_stop)) {
     if (vpn_dns_enabled_for_loop && vpn_dns_pending_response_len > 0u) {
       vpn_dns_try_write_pending_response(endpoint, vpn_dns_pending_response, &vpn_dns_pending_response_len);
@@ -414,16 +440,26 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
     if (pr < 0) {
       if (errno == EINTR)
         continue;
-      /* Poll failure is terminal: close session first, then unwind DNS bridge state. */
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "poll failed errno=%d, closing ESP fd", errno);
-      tunnel_close_active_session("poll error", 1);
-      if (vpn_dns_enabled_for_loop) {
-        atomic_store(&g_vpn_dns_bridge_active, 0);
-        atomic_store(&g_vpn_dns_tun_fd, -1);
-        packet_endpoint_destroy_proxy_queue(&g_vpn_dns_queue);
-      }
-      return TUNNEL_EXIT_POLL_ERROR;
+      exit_code = TUNNEL_EXIT_POLL_ERROR;
+      close_reason = "poll error";
+      send_teardown = 0;
+      break;
     }
+
+    if (pr > 0 && (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+      int so_err = 0;
+      socklen_t so_len = sizeof(so_err);
+      if (getsockopt(g_state.ike.esp_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) != 0)
+        so_err = errno;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "esp socket error revents=0x%x so_error=%d", fds[1].revents,
+                        so_err);
+      exit_code = TUNNEL_EXIT_NETWORK_LOST;
+      close_reason = "esp socket error";
+      send_teardown = 0;
+      break;
+    }
+
     if (pr == 0) {
       /* Idle tick: emit periodic counters and send NAT-T keepalive when due. */
       engine_dp_maybe_log_summary(time(NULL));
@@ -437,25 +473,31 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
             if (sent == (ssize_t)keepalive_len) {
               last_outbound_to_peer = now;
             } else {
+              int send_err = errno;
               tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "nat-t keepalive send failed sent=%zd want=%zu errno=%d",
-                                sent, keepalive_len, errno);
+                                sent, keepalive_len, send_err);
+              if (tunnel_is_fatal_socket_errno(send_err)) {
+                exit_code = TUNNEL_EXIT_NETWORK_LOST;
+                close_reason = "nat-t keepalive network lost";
+                send_teardown = 0;
+                break;
+              }
             }
           }
         }
       }
-      continue;
     }
 
-    if (vpn_dns_enabled_for_loop && (fds[2].revents & POLLIN)) {
+    if (pr > 0 && vpn_dns_enabled_for_loop && (fds[2].revents & POLLIN)) {
       vpn_dns_drain_responses(endpoint, &vpn_dns_endpoint, vpn_dns_pending_response, &vpn_dns_pending_response_len,
                               vpn_dns_response_buf, sizeof(vpn_dns_response_buf));
     }
 
-    if (vpn_dns_enabled_for_loop && (fds[0].revents & POLLOUT) && vpn_dns_pending_response_len > 0u) {
+    if (pr > 0 && vpn_dns_enabled_for_loop && (fds[0].revents & POLLOUT) && vpn_dns_pending_response_len > 0u) {
       vpn_dns_try_write_pending_response(endpoint, vpn_dns_pending_response, &vpn_dns_pending_response_len);
     }
 
-    if (fds[0].revents & POLLIN) {
+    if (pr > 0 && (fds[0].revents & POLLIN)) {
       /* Endpoint->peer egress path, with optional DNS query interception before PPP encapsulation. */
       ssize_t n = packet_endpoint_read(endpoint, tun_buf, sizeof(tun_buf));
       if (n > 0) {
@@ -465,8 +507,15 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
         }
         if (ppp_encapsulate_and_send(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer,
                                      g_state.ike.peer_len, &g_state.l2tp, &g_state.ppp, tun_buf, (size_t)n) < 0) {
+          int send_err = errno;
           engine_dp_note_encap_fail();
-          tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "egress failed");
+          tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "egress failed errno=%d", send_err);
+          if (tunnel_is_fatal_socket_errno(send_err)) {
+            exit_code = TUNNEL_EXIT_NETWORK_LOST;
+            close_reason = "egress network lost";
+            send_teardown = 0;
+            break;
+          }
         } else {
           engine_dp_note_encap_ok();
           last_outbound_to_peer = time(NULL);
@@ -474,10 +523,28 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
       }
     }
 
-    if (fds[1].revents & POLLIN) {
+    if (pr > 0 && (fds[1].revents & POLLIN)) {
       /* Peer->endpoint ingress path: ESP receive, decrypt, then L2TP/PPP dispatch. */
       ssize_t n = recv(g_state.ike.esp_fd, esp_buf, sizeof(esp_buf), 0);
-      if (n > 0) {
+      if (n == 0) {
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp socket closed (EOF)");
+        exit_code = TUNNEL_EXIT_NETWORK_LOST;
+        close_reason = "esp socket eof";
+        send_teardown = 0;
+        break;
+      }
+      if (n < 0) {
+        int recv_err = errno;
+        if (recv_err != EINTR && recv_err != EAGAIN && recv_err != EWOULDBLOCK) {
+          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "esp recv failed errno=%d", recv_err);
+          if (tunnel_is_fatal_socket_errno(recv_err)) {
+            exit_code = TUNNEL_EXIT_NETWORK_LOST;
+            close_reason = "esp recv network lost";
+            send_teardown = 0;
+            break;
+          }
+        }
+      } else {
         engine_dp_note_esp_rx();
         if (g_state.esp.udp_encap && esp_is_nat_keepalive_probe(esp_buf, (size_t)n)) {
           engine_dp_maybe_log_summary(time(NULL));
@@ -487,12 +554,22 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
         size_t plain_len = sizeof(plain);
         if (esp_try_decrypt(&g_state.esp, esp_buf, (size_t)n, plain, &plain_len) == 0 && plain_len > 0) {
           engine_dp_note_esp_plain_ok();
+          tunnel_liveness_on_inbound(&liveness, monotonic_ms());
           int dispatch_rc =
               l2tp_dispatch_incoming(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer,
                                      g_state.ike.peer_len, &g_state.l2tp, plain, plain_len, endpoint, &g_state.ppp);
           if (dispatch_rc == L2TP_DISPATCH_REMOTE_CLOSED) {
-            /* Remote requested teardown; break to shared cleanup path below. */
             tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "peer requested L2TP tunnel teardown");
+            exit_code = TUNNEL_EXIT_OK;
+            close_reason = "peer teardown";
+            send_teardown = 1;
+            break;
+          }
+          if (dispatch_rc < 0 && tunnel_is_fatal_socket_errno(errno)) {
+            tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp reply send failed errno=%d", errno);
+            exit_code = TUNNEL_EXIT_NETWORK_LOST;
+            close_reason = "l2tp reply network lost";
+            send_teardown = 0;
             break;
           }
         } else {
@@ -508,18 +585,40 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
         }
       }
     }
+
+    tunnel_liveness_action_t action = tunnel_liveness_check(&liveness, monotonic_ms());
+    if (action == TUNNEL_LIVENESS_SEND_PROBE) {
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "peer inbound silent >= 15s; sending liveness probe #%d",
+                        liveness.probes_sent);
+      if (send_dead_peer_probes(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer,
+                                g_state.ike.peer_len, &g_state.l2tp, &g_state.ppp, liveness.next_probe_id) < 0) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "liveness probe send failed errno=%d", errno);
+        exit_code = TUNNEL_EXIT_NETWORK_LOST;
+        close_reason = "probe send network lost";
+        send_teardown = 0;
+        break;
+      }
+      last_outbound_to_peer = time(NULL);
+    } else if (action == TUNNEL_LIVENESS_DEAD) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "dead peer detected: no authenticated reply for 30s");
+      exit_code = TUNNEL_EXIT_PEER_UNREACHABLE;
+      close_reason = "dead peer timeout";
+      send_teardown = 0;
+      break;
+    }
+
     engine_dp_maybe_log_summary(time(NULL));
   }
 
-  /* Unified shutdown path for stop flag and peer-triggered close. */
-  tunnel_close_active_session("tunnel stopped", 1);
+  /* Unified shutdown path for stop flag, peer teardown, and network/liveness failures. */
+  tunnel_close_active_session(close_reason, send_teardown);
   if (vpn_dns_enabled_for_loop) {
     atomic_store(&g_vpn_dns_bridge_active, 0);
     atomic_store(&g_vpn_dns_tun_fd, -1);
     packet_endpoint_destroy_proxy_queue(&g_vpn_dns_queue);
   }
   tunnel_log("tunnel stopped");
-  return TUNNEL_EXIT_OK;
+  return exit_code;
 }
 
 int tunnel_run_loop(int tun_fd) {

@@ -702,9 +702,11 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
                       (unsigned)L2TP_PORT, (unsigned)L2TP_PORT, plain_len, off);
   }
   if (sent < 0) {
+    int saved_errno = errno;
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
-                      "esp_encrypt_send: sendto failed errno=%d plain_len=%zu pkt_len=%zu udp_encap=%d", errno,
+                      "esp_encrypt_send: sendto failed errno=%d plain_len=%zu pkt_len=%zu udp_encap=%d", saved_errno,
                       plain_len, off, k->udp_encap);
+    errno = saved_errno;
   }
   return (int)sent;
 }

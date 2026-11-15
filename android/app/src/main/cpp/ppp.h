@@ -22,4 +22,8 @@ int ppp_dispatch_ppp_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *p
                            l2tp_session_t *l2tp, ppp_session_t *ppp, const uint8_t *frame, size_t len,
                            packet_endpoint_t *endpoint);
 
+/** Send an RFC 1661 LCP Echo-Request probe over L2TP/ESP; returns >= 0 or -1 with errno preserved. */
+int ppp_send_lcp_echo_request(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                              l2tp_session_t *l2tp, ppp_session_t *ppp, uint8_t id);
+
 #endif

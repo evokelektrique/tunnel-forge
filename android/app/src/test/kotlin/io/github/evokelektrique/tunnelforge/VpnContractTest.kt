@@ -56,6 +56,16 @@ class VpnContractTest {
     }
 
     @Test
+    fun tunnelStatesIncludeRecoveryStates() {
+        assertEquals("connecting", VpnContract.TUNNEL_CONNECTING)
+        assertEquals("connected", VpnContract.TUNNEL_CONNECTED)
+        assertEquals("waitingForNetwork", VpnContract.TUNNEL_WAITING_FOR_NETWORK)
+        assertEquals("reconnecting", VpnContract.TUNNEL_RECONNECTING)
+        assertEquals("failed", VpnContract.TUNNEL_FAILED)
+        assertEquals("stopped", VpnContract.TUNNEL_STOPPED)
+    }
+
+    @Test
     fun engineLogChannel() {
         assertEquals("lastTerminal", VpnContract.ARG_LAST_TERMINAL)
         assertEquals("onEngineLogBatch", VpnContract.ON_ENGINE_LOG_BATCH)

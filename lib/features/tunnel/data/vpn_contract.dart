@@ -100,6 +100,8 @@ abstract final class VpnContract {
 abstract final class VpnTunnelState {
   static const String connecting = 'connecting';
   static const String connected = 'connected';
+  static const String waitingForNetwork = 'waitingForNetwork';
+  static const String reconnecting = 'reconnecting';
   static const String failed = 'failed';
   static const String stopped = 'stopped';
 }

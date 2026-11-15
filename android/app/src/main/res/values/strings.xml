@@ -6,6 +6,9 @@
     <string name="vpn_notification_connecting">Connecting...</string>
     <string name="vpn_notification_connected">VPN active</string>
     <string name="vpn_notification_connected_profile">Connected: %1$s</string>
+    <string name="vpn_notification_waiting_network">Waiting for network (blocking internet)</string>
+    <string name="vpn_notification_reconnecting">Reconnecting...</string>
+    <string name="proxy_notification_waiting_network">Waiting for network</string>
     <string name="vpn_notification_action_disconnect">Disconnect</string>
     <string name="vpn_notification_channel_name">VPN</string>
 </resources>

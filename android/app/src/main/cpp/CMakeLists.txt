@@ -50,6 +50,7 @@ add_library(
   gvisor_bridge.c
   ipv4_dataplane.c
   nat_t_keepalive.c
+  tunnel_liveness.c
   util.c
   util_endian.c
   modp2048_data.c

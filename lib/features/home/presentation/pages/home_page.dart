@@ -108,6 +108,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed || !mounted) return;
+    context.read<TunnelBloc>().add(const TunnelRuntimeSyncRequested());
     context.read<SettingsBloc>().add(
       const SettingsBatteryOptimizationRefreshRequested(),
     );
@@ -562,6 +563,14 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     }
     if (tunnelState.stopRequested) return t.canceling;
     if (tunnelState.busy && tunnelState.tunnelUp) return t.disconnecting;
+    if (tunnelState.recoveryPhase == TunnelRecoveryPhase.waitingForNetwork) {
+      return connectionMode == ConnectionMode.vpnTunnel
+          ? t.waitingForNetworkBlocking
+          : t.waitingForNetwork;
+    }
+    if (tunnelState.recoveryPhase == TunnelRecoveryPhase.reconnecting) {
+      return t.reconnectingTapCancel;
+    }
     if (tunnelState.awaitingTunnel && !tunnelState.tunnelUp) {
       return t.connectingTapCancel;
     }
@@ -637,6 +646,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
               previous.tunnelUp != current.tunnelUp ||
               previous.busy != current.busy ||
               previous.awaitingTunnel != current.awaitingTunnel ||
+              previous.recoveryPhase != current.recoveryPhase ||
               previous.stopRequested != current.stopRequested,
           listener: (context, state) => _handleTunnelStateChange(state),
         ),

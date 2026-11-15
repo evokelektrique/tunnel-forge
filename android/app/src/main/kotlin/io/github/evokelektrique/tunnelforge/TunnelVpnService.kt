@@ -22,7 +22,10 @@ import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.Socket
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /** Foreground [VpnService]: TUN, notification, native tunnel thread. */
 @Keep
@@ -41,7 +44,24 @@ class TunnelVpnService : VpnService() {
 
     private val running = AtomicBoolean(false)
     private val connectedEmitted = AtomicBoolean(false)
+    private val supervisorLock = ReentrantLock()
+    private val supervisorSignal = supervisorLock.newCondition()
+    @Volatile
+    private var sessionStopRequested = false
+    @Volatile
+    private var networkInterruptEvent: NetworkTransitionEvent? = null
+    @Volatile
+    private var networkMonitor: ActiveNetworkMonitor? = null
+    @Volatile
+    private var currentTunnelState: String = VpnContract.TUNNEL_CONNECTING
+    @Volatile
+    private var currentTunnelDetail: String = ""
+    @Volatile
+    private var sessionHasConnected = false
+    @Volatile
+    private var sessionReconnectAttempt = 0
     private var tunInterface: ParcelFileDescriptor? = null
+    private var blockingTunInterface: ParcelFileDescriptor? = null
     private var setupThread: Thread? = null
     private var engineThread: Thread? = null
     private var vpnDnsPacketBridge: VpnDnsPacketBridge? = null
@@ -335,6 +355,7 @@ class TunnelVpnService : VpnService() {
             hasTunInterface = tunInterface != null,
             hasDnsServer = vpnDnsPacketBridge != null,
             hasLocalProxyRuntime = localProxyRuntime != null,
+            hasBlockingTunInterface = blockingTunInterface != null,
         )
 
     private fun currentAttemptId(): String =
@@ -370,6 +391,17 @@ class TunnelVpnService : VpnService() {
             }
         }
         running.set(false)
+        sessionStopRequested = true
+        networkMonitor?.stop()
+        networkMonitor = null
+        supervisorLock.withLock {
+            supervisorSignal.signalAll()
+        }
+        try {
+            blockingTunInterface?.close()
+        } catch (_: Exception) {
+        }
+        blockingTunInterface = null
         activeProxyConfig = null
         activeServer = ""
         activeProfileName = null
@@ -394,6 +426,126 @@ class TunnelVpnService : VpnService() {
         }
     }
 
+    private enum class AttemptResultKind {
+        CLEAN_STOP,
+        RECOVERABLE_DISCONNECT,
+        FATAL_FAILURE,
+    }
+
+    private data class AttemptResult(
+        val kind: AttemptResultKind,
+        val detail: String = "",
+        val failure: Map<String, Any>? = null,
+    )
+
+    private fun closePfdQuietly(pfd: ParcelFileDescriptor?) {
+        if (pfd == null) return
+        try {
+            pfd.close()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun activateBlockingTun(attemptId: String) {
+        if (blockingTunInterface != null) return
+        if (VpnService.prepare(this) != null) return
+        try {
+            val pfd = Builder()
+                .setSession(getString(R.string.vpn_session_name))
+                .setMtu(DEFAULT_TUN_MTU)
+                .addAddress(TUN_LOCAL_IPV4, 32)
+                .addRoute("0.0.0.0", 0)
+                .addAddress(BLOCKING_TUN_IPV6, 128)
+                .addRoute("::", 0)
+                .addDisallowedApplication(packageName)
+                .establish()
+            blockingTunInterface = pfd
+            if (pfd != null) {
+                VpnTunnelEvents.emitEngineLog(
+                    Log.INFO,
+                    TAG,
+                    "${prefixAttempt(attemptId)}Blocking kill-switch TUN active",
+                )
+            }
+        } catch (e: Exception) {
+            VpnTunnelEvents.emitEngineLog(
+                Log.WARN,
+                TAG,
+                "${prefixAttempt(attemptId)}Could not establish blocking TUN: ${e.message ?: e.javaClass.simpleName}",
+            )
+        }
+    }
+
+    private fun closeLiveDataplane() {
+        try {
+            vpnDnsPacketBridge?.close()
+        } catch (_: Exception) {
+        }
+        vpnDnsPacketBridge = null
+        VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
+        stopLocalProxyRuntime()
+        val oldTun = tunInterface
+        tunInterface = null
+        closePfdQuietly(oldTun)
+    }
+
+    private fun handleNetworkTransition(
+        attemptId: String,
+        nativeOwner: NativeTunnelOwner,
+        event: NetworkTransitionEvent,
+    ) {
+        if (sessionStopRequested || !shouldHandleAttempt(attemptId, "network:$event")) return
+        when (event) {
+            NetworkTransitionEvent.GAINED_USABLE_NETWORK -> {
+                VpnTunnelEvents.emitEngineLog(
+                    Log.INFO,
+                    TAG,
+                    "${prefixAttempt(attemptId)}Physical network available; waking reconnect loop",
+                )
+                supervisorLock.withLock {
+                    supervisorSignal.signalAll()
+                }
+            }
+            NetworkTransitionEvent.ALL_NETWORKS_LOST,
+            NetworkTransitionEvent.ACTIVE_NETWORK_SWITCHED,
+            -> {
+                VpnTunnelEvents.emitEngineLog(
+                    Log.INFO,
+                    TAG,
+                    "${prefixAttempt(attemptId)}Network transition=$event; interrupting active tunnel engine",
+                )
+                networkInterruptEvent = event
+                NativeTunnelSessions.shared.stopOwner(nativeOwner, reason = "network transition $event")
+                supervisorLock.withLock {
+                    supervisorSignal.signalAll()
+                }
+            }
+            NetworkTransitionEvent.NONE -> Unit
+        }
+    }
+
+    private fun waitForRecoveryCondition(
+        attemptId: String,
+        timeoutMs: Long?,
+        waitForNetwork: Boolean,
+        monitor: ActiveNetworkMonitor,
+    ) {
+        val deadlineMs = timeoutMs?.let { android.os.SystemClock.elapsedRealtime() + it }
+        supervisorLock.withLock {
+            while (!sessionStopRequested && shouldHandleAttempt(attemptId, "wait-recovery")) {
+                if (waitForNetwork) {
+                    if (monitor.hasUsableNetwork()) return
+                    supervisorSignal.await(2_000L, TimeUnit.MILLISECONDS)
+                } else {
+                    if (!monitor.hasUsableNetwork()) return
+                    val remaining = (deadlineMs ?: return) - android.os.SystemClock.elapsedRealtime()
+                    if (remaining <= 0L) return
+                    supervisorSignal.await(remaining.coerceAtMost(2_000L), TimeUnit.MILLISECONDS)
+                }
+            }
+        }
+    }
+
     private fun startTunnel(
         attemptId: String,
         server: String,
@@ -412,15 +564,21 @@ class TunnelVpnService : VpnService() {
         val currentSetupThread = Thread.currentThread()
         val nativeOwner = nativeOwner(attemptId)
         var nativeOwnerAcquired = false
-        var nativeLoopStarted = false
+        var monitor: ActiveNetworkMonitor? = null
         try {
             cancelPendingStopSelf()
             if (running.getAndSet(true)) {
                 AppLog.w(TAG, "${prefixAttempt(attemptId)}Tunnel already running")
                 return
             }
+            sessionStopRequested = false
+            networkInterruptEvent = null
+            sessionHasConnected = false
+            sessionReconnectAttempt = 0
             connectedEmitted.set(false)
             activeProxyConfig = proxyConfig
+            currentTunnelState = VpnContract.TUNNEL_CONNECTING
+            currentTunnelDetail = "Negotiating IKE/L2TP/PPP..."
 
             val requestedInclusivePkgs =
                 requestedInclusivePackages(
@@ -461,7 +619,7 @@ class TunnelVpnService : VpnService() {
                     selfPackageName = packageName,
                 )
 
-            emitAttemptState(attemptId, VpnContract.TUNNEL_CONNECTING, "Negotiating IKE/L2TP/PPP...")
+            emitAttemptState(attemptId, VpnContract.TUNNEL_CONNECTING, currentTunnelDetail)
             VpnTunnelEvents.emitEngineLog(
                 Log.INFO,
                 TAG,
@@ -478,269 +636,140 @@ class TunnelVpnService : VpnService() {
                 stopServiceForAttempt(attemptId)
                 return
             }
-            VpnBridge.nativeSetSocketProtectionEnabled(true)
-            // Phase 1: negotiate IKE+L2TP+PPP on the real network (no VPN tunnel yet).
-            val negotiatedClientIp = IntArray(4)
-            val negotiatedPrimaryDns = IntArray(4)
-            val negotiatedSecondaryDns = IntArray(4)
-            val negResult =
-                VpnBridge.nativeNegotiate(
-                    server,
-                    user,
-                    password,
-                    psk,
-                    tunMtu,
-                    negotiatedClientIp,
-                    negotiatedPrimaryDns,
-                    negotiatedSecondaryDns,
-                )
-            VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeNegotiate finished with exit code=$negResult")
-            if (negResult == DEFAULT_NATIVE_EXIT_STOPPED) {
-                VpnTunnelEvents.emitEngineLog(
-                    Log.INFO,
-                    TAG,
-                    "${prefixAttempt(attemptId)}Negotiation canceled before tunnel establishment",
-                )
-                return
-            }
-            if (negResult != 0) {
-                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, tunnelExitDetail(negResult), VpnBridge.failure(negResult))
-                running.set(false)
-                VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}Tunnel failed during negotiation code=$negResult")
-                stopServiceForAttempt(attemptId)
-                return
-            }
-            if (!shouldHandleAttempt(attemptId, "post-negotiate")) {
-                return
-            }
 
-            // Phase 2: establish TUN interface now that negotiation succeeded.
-            VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}Starting TUN establish()")
-            val tunIpv4 =
-                "${negotiatedClientIp[0]}.${negotiatedClientIp[1]}.${negotiatedClientIp[2]}.${negotiatedClientIp[3]}"
-            val useIpcpAddress =
-                negotiatedClientIp.all { it in 0..255 } &&
-                    negotiatedClientIp.any { it != 0 }
-            val addressForTun = if (useIpcpAddress) tunIpv4 else TUN_LOCAL_IPV4
-            VpnTunnelEvents.emitEngineLog(
-                Log.DEBUG,
-                TAG,
-                "${prefixAttempt(attemptId)}TUN addAddress=$addressForTun (IPCP=$tunIpv4 useIpcp=$useIpcpAddress)",
-            )
-            val automaticDnsServers = DnsConfigSupport.negotiatedServers(negotiatedPrimaryDns, negotiatedSecondaryDns)
-            val manualDnsServers =
-                if (dnsAutomatic) {
-                    emptyList()
-                } else {
-                    DnsConfigSupport.resolveUpstreamServers(dnsServers)
+            monitor =
+                ActiveNetworkMonitor(this) { event ->
+                    handleNetworkTransition(attemptId, nativeOwner, event)
+                }.also {
+                    networkMonitor = it
+                    it.start()
                 }
-            if ((dnsAutomatic && automaticDnsServers.isEmpty()) ||
-                (!dnsAutomatic && manualDnsServers.isEmpty())
-            ) {
-                emitAttemptState(
-                    attemptId,
-                    VpnContract.TUNNEL_FAILED,
-                    if (dnsAutomatic) {
-                        "PPP negotiation did not provide any DNS servers."
-                    } else {
-                        "Manual DNS requires at least one DNS server."
-                    },
-                )
-                VpnTunnelEvents.emitEngineLog(
-                    Log.ERROR,
-                    TAG,
-                    "${prefixAttempt(attemptId)}No DNS servers available after negotiation dnsMode=${if (dnsAutomatic) "automatic" else "manual"}",
-                )
-                running.set(false)
-                stopServiceForAttempt(attemptId)
-                return
-            }
-            if (!shouldHandleAttempt(attemptId, "pre-tun-establish")) {
-                return
-            }
-            if (!dnsAutomatic) {
-                val dnsLogger = { level: Int, message: String ->
-                    VpnTunnelEvents.emitEngineLog(level, TAG, "${prefixAttempt(attemptId)}$message")
-                }
-                vpnDnsPacketBridge =
-                    VpnDnsPacketBridge(
-                        virtualDnsIpv4 = MANUAL_DNS_VIRTUAL_IPV4,
-                        exchangeClient =
-                            DirectDnsExchangeClient(
-                                servers = manualDnsServers,
-                                logger = dnsLogger,
-                                socketProtector = serviceDnsSocketProtector(),
-                            ),
-                        logger = dnsLogger,
-                    ).also { it.start() }
-                val interceptRc = VpnBridge.nativeSetVpnDnsInterceptIpv4(MANUAL_DNS_VIRTUAL_IPV4)
-                if (interceptRc != 0) {
-                    try {
-                        vpnDnsPacketBridge?.close()
-                    } catch (_: Exception) {
-                    }
-                    vpnDnsPacketBridge = null
-                    val message = "Manual DNS intercept setup failed."
-                    emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, message)
-                    VpnTunnelEvents.emitEngineLog(
-                        Log.ERROR,
-                        TAG,
-                        "${prefixAttempt(attemptId)}manual DNS intercept setup failed rc=$interceptRc",
+
+            var immediateSwitchReconnect = false
+            while (!sessionStopRequested && shouldHandleAttempt(attemptId, "supervisor")) {
+                monitor.resetTunnelConnected()
+                connectedEmitted.set(false)
+
+                if (!monitor.hasUsableNetwork()) {
+                    activateBlockingTun(attemptId)
+                    closeLiveDataplane()
+                    currentTunnelState = VpnContract.TUNNEL_WAITING_FOR_NETWORK
+                    currentTunnelDetail = getString(R.string.vpn_notification_waiting_network)
+                    emitAttemptState(attemptId, VpnContract.TUNNEL_WAITING_FOR_NETWORK, currentTunnelDetail)
+                    updateForegroundNotification(currentTunnelDetail)
+                    waitForRecoveryCondition(
+                        attemptId = attemptId,
+                        timeoutMs = null,
+                        waitForNetwork = true,
+                        monitor = monitor,
                     )
-                    running.set(false)
-                    stopServiceForAttempt(attemptId)
-                    return
+                    immediateSwitchReconnect = true
+                    sessionReconnectAttempt = 0
+                    continue
                 }
-                VpnTunnelEvents.emitEngineLog(
-                    Log.INFO,
-                    TAG,
-                    "${prefixAttempt(attemptId)}Manual DNS upstream sockets are protected and routed outside the VPN to avoid DNS routing loops.",
-                )
-            } else {
-                VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
-            }
-            val builder = Builder()
-                .setSession(getString(R.string.vpn_session_name))
-                .setMtu(tunMtu)
-                .addAddress(addressForTun, 32)
-                .addRoute("0.0.0.0", 0)
-            for (dnsServer in tunDnsServersForBuilder(dnsAutomatic, automaticDnsServers)) {
-                builder.addDnsServer(dnsServer)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                builder.allowFamily(OsConstants.AF_INET)
-                VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}TUN allowFamily(AF_INET) IPv4-only")
-            }
-            applyExcludeRouteForVpnServer(builder, server)
-            if (splitTunnelEnabled &&
-                splitTunnelMode == VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE
-            ) {
-                VpnTunnelEvents.emitEngineLog(
-                    Log.DEBUG,
-                    TAG,
-                    "${prefixAttempt(attemptId)}TUN split-tunnel inclusive packages=${effectiveInclusivePkgs.size} includesSelf=${effectiveInclusivePkgs.contains(packageName)}",
-                )
-                for (pkg in effectiveInclusivePkgs) {
-                    try {
-                        builder.addAllowedApplication(pkg)
-                    } catch (e: PackageManager.NameNotFoundException) {
-                        throw IllegalArgumentException("Package not installed: $pkg")
-                    }
-                }
-            } else if (splitTunnelEnabled &&
-                splitTunnelMode == VpnContract.SPLIT_TUNNEL_MODE_EXCLUSIVE
-            ) {
-                VpnTunnelEvents.emitEngineLog(
-                    Log.DEBUG,
-                    TAG,
-                    "${prefixAttempt(attemptId)}TUN split-tunnel exclusive packages=${effectiveExclusivePkgs.size}",
-                )
-                for (pkg in effectiveExclusivePkgs) {
-                    try {
-                        builder.addDisallowedApplication(pkg)
-                    } catch (e: PackageManager.NameNotFoundException) {
-                        throw IllegalArgumentException("Package not installed: $pkg")
-                    }
-                }
-            } else {
-                VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}TUN full-device routing")
-            }
-            tunInterface = builder.establish()
-            val pfd = tunInterface ?: throw IllegalStateException("TUN establish() returned null")
-            if (!shouldHandleAttempt(attemptId, "post-tun-establish")) {
-                try {
-                    pfd.close()
-                } catch (_: Exception) {
-                }
-                tunInterface = null
-                return
-            }
-            val tunFd = pfd.fd
-            VpnTunnelEvents.emitEngineLog(
-                Log.INFO,
-                TAG,
-                "${prefixAttempt(attemptId)}TUN established",
-            )
-            VpnTunnelEvents.emitEngineLog(
-                Log.INFO,
-                TAG,
-                "${prefixAttempt(attemptId)}TUN established; waiting for tunnel loop readiness",
-            )
 
-            // Phase 3: run the ESP/L2TP poll loop on a background thread.
-            val loopThread =
-                Thread(
-                    {
-                        val currentEngineThread = Thread.currentThread()
-                        try {
-                            VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeStartLoop(tunFd=$tunFd) thread running")
-                            val code = VpnBridge.nativeStartLoop(tunFd)
-                            VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeStartLoop exited with code=$code")
-                            if (code != 0) {
-                                val detail = tunnelExitDetail(code)
-                                recordDisconnectReason(attemptId, "native_exit_error", Log.ERROR, "code=$code $detail")
-                                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, detail, VpnBridge.failure(code))
-                            } else if (hasRecordedDisconnectReason()) {
-                                // Teardown reason and TUNNEL_STOPPED state were already emitted by the caller.
-                            } else {
-                                recordDisconnectReason(
-                                    attemptId = attemptId,
-                                    reason = "peer_or_native_closed",
-                                    level = Log.WARN,
-                                    detail = "native loop exited with code=0 without app stop",
-                                )
-                                emitAttemptState(attemptId, VpnContract.TUNNEL_STOPPED, "Disconnected by peer or tunnel closed")
-                            }
-                        } catch (t: Throwable) {
-                            if (shouldHandleAttempt(attemptId, "native-loop-crash")) {
-                                AppLog.e(TAG, "${prefixAttempt(attemptId)}nativeStartLoop failed", t)
-                                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, t.message ?: "nativeStartLoop crashed")
-                            } else {
-                                VpnTunnelEvents.emitEngineLog(
-                                    Log.DEBUG,
-                                    TAG,
-                                    "${prefixAttempt(attemptId)}Ignoring stale nativeStartLoop crash ${t.javaClass.simpleName}",
-                                )
-                            }
-                        } finally {
-                            mainHandler.post {
-                                finishTunnelUiOnMain(attemptId, currentEngineThread)
-                            }
+                if (sessionHasConnected) {
+                    activateBlockingTun(attemptId)
+                    closeLiveDataplane()
+                    currentTunnelState = VpnContract.TUNNEL_RECONNECTING
+                    currentTunnelDetail = getString(R.string.vpn_notification_reconnecting)
+                    emitAttemptState(attemptId, VpnContract.TUNNEL_RECONNECTING, currentTunnelDetail)
+                    updateForegroundNotification(currentTunnelDetail)
+                    val delayMs =
+                        if (immediateSwitchReconnect) {
+                            0L
+                        } else {
+                            TunnelReconnectPolicy.backoffMsForAttempt(sessionReconnectAttempt)
                         }
-                    },
-                    "tunnel-engine",
-                )
-            synchronized(sessionLock) {
-                if (activeAttemptId != attemptId) {
-                    try {
-                        pfd.close()
-                    } catch (_: Exception) {
+                    immediateSwitchReconnect = false
+                    if (delayMs > 0L) {
+                        VpnTunnelEvents.emitEngineLog(
+                            Log.INFO,
+                            TAG,
+                            "${prefixAttempt(attemptId)}Reconnecting in ${delayMs}ms (attempt=${sessionReconnectAttempt + 1})",
+                        )
+                        waitForRecoveryCondition(
+                            attemptId = attemptId,
+                            timeoutMs = delayMs,
+                            waitForNetwork = false,
+                            monitor = monitor,
+                        )
                     }
-                    tunInterface = null
-                    return
+                    if (sessionStopRequested || !shouldHandleAttempt(attemptId, "post-backoff")) {
+                        break
+                    }
+                    if (!monitor.hasUsableNetwork()) {
+                        continue
+                    }
+                } else {
+                    immediateSwitchReconnect = false
                 }
-                engineThread = loopThread
+
+                if (VpnService.prepare(this) != null) {
+                    recordDisconnectReason(attemptId, "vpn_permission_revoked", Log.WARN)
+                    emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, "VPN permission is no longer granted.")
+                    break
+                }
+
+                networkInterruptEvent = null
+                val result =
+                    runTunnelAttempt(
+                        attemptId = attemptId,
+                        worker = currentSetupThread,
+                        server = server,
+                        user = user,
+                        password = password,
+                        psk = psk,
+                        dnsAutomatic = dnsAutomatic,
+                        dnsServers = dnsServers,
+                        tunMtu = tunMtu,
+                        splitTunnelEnabled = splitTunnelEnabled,
+                        splitTunnelMode = splitTunnelMode,
+                        effectiveInclusivePkgs = effectiveInclusivePkgs,
+                        effectiveExclusivePkgs = effectiveExclusivePkgs,
+                        monitor = monitor,
+                    )
+                when (result.kind) {
+                    AttemptResultKind.CLEAN_STOP -> {
+                        if (!sessionStopRequested && !hasRecordedDisconnectReason()) {
+                            recordDisconnectReason(
+                                attemptId = attemptId,
+                                reason = "peer_or_native_closed",
+                                level = Log.WARN,
+                                detail = result.detail,
+                            )
+                            emitAttemptState(attemptId, VpnContract.TUNNEL_STOPPED, result.detail)
+                        }
+                        break
+                    }
+                    AttemptResultKind.FATAL_FAILURE -> {
+                        recordDisconnectReason(attemptId, "native_exit_error", Log.ERROR, result.detail)
+                        emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, result.detail, result.failure)
+                        break
+                    }
+                    AttemptResultKind.RECOVERABLE_DISCONNECT -> {
+                        sessionHasConnected = true
+                        immediateSwitchReconnect =
+                            networkInterruptEvent == NetworkTransitionEvent.ACTIVE_NETWORK_SWITCHED
+                        if (!immediateSwitchReconnect && monitor.hasUsableNetwork()) {
+                            sessionReconnectAttempt++
+                        } else if (!monitor.hasUsableNetwork()) {
+                            sessionReconnectAttempt = 0
+                        }
+                        activateBlockingTun(attemptId)
+                        closeLiveDataplane()
+                    }
+                }
             }
-            nativeLoopStarted = true
-            loopThread.start()
         } catch (e: Throwable) {
             if (shouldHandleAttempt(attemptId, "startTunnel-exception")) {
                 AppLog.e(TAG, "${prefixAttempt(attemptId)}startTunnel", e)
-                VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}startTunnel exception=${e.javaClass.simpleName}:${e.message}")
+                VpnTunnelEvents.emitEngineLog(
+                    Log.ERROR,
+                    TAG,
+                    "${prefixAttempt(attemptId)}startTunnel exception=${e.javaClass.simpleName}:${e.message}",
+                )
                 emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, e.message ?: "startTunnel failed")
-                running.set(false)
-                try {
-                    vpnDnsPacketBridge?.close()
-                } catch (_: Exception) {
-                }
-                vpnDnsPacketBridge = null
-                VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
-                try {
-                    tunInterface?.close()
-                } catch (_: Exception) {
-                }
-                tunInterface = null
-                stopServiceForAttempt(attemptId)
             } else {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
@@ -749,12 +778,222 @@ class TunnelVpnService : VpnService() {
                 )
             }
         } finally {
-            if (nativeOwnerAcquired && !nativeLoopStarted) {
-                NativeTunnelSessions.shared.stopOwner(nativeOwner, reason = "vpn startup ended before loop")
-                NativeTunnelSessions.shared.release(nativeOwner, reason = "vpn startup ended before loop")
+            monitor?.stop()
+            if (networkMonitor === monitor) {
+                networkMonitor = null
+            }
+            if (nativeOwnerAcquired) {
+                NativeTunnelSessions.shared.stopOwner(nativeOwner, reason = "vpn supervisor exit")
+                NativeTunnelSessions.shared.release(nativeOwner, reason = "vpn supervisor exit")
             }
             clearSetupThreadIfCurrent(currentSetupThread)
+            mainHandler.post {
+                finishTunnelUiOnMain(attemptId, currentSetupThread)
+            }
         }
+    }
+
+    private fun runTunnelAttempt(
+        attemptId: String,
+        worker: Thread,
+        server: String,
+        user: String,
+        password: String,
+        psk: String,
+        dnsAutomatic: Boolean,
+        dnsServers: List<DnsServerConfig>,
+        tunMtu: Int,
+        splitTunnelEnabled: Boolean,
+        splitTunnelMode: String,
+        effectiveInclusivePkgs: List<String>,
+        effectiveExclusivePkgs: List<String>,
+        monitor: ActiveNetworkMonitor,
+    ): AttemptResult {
+        VpnBridge.nativeSetSocketProtectionEnabled(true)
+        val negotiatedClientIp = IntArray(4)
+        val negotiatedPrimaryDns = IntArray(4)
+        val negotiatedSecondaryDns = IntArray(4)
+        val negResult =
+            VpnBridge.nativeNegotiate(
+                server,
+                user,
+                password,
+                psk,
+                tunMtu,
+                negotiatedClientIp,
+                negotiatedPrimaryDns,
+                negotiatedSecondaryDns,
+            )
+        VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeNegotiate finished with exit code=$negResult")
+        if (sessionStopRequested || !shouldHandleAttempt(attemptId, "post-negotiate")) {
+            return AttemptResult(AttemptResultKind.CLEAN_STOP, "Stopped by app")
+        }
+        val negInterrupt = networkInterruptEvent
+        if (negResult == VpnBridge.EXIT_STOPPED && negInterrupt == null) {
+            return AttemptResult(AttemptResultKind.CLEAN_STOP, "Canceled before tunnel establishment")
+        }
+        if (negResult != 0 || negInterrupt != null) {
+            val code = if (negResult != 0) negResult else VpnBridge.EXIT_NETWORK_LOST
+            val failure = VpnBridge.failure(code)
+            val detail = tunnelExitDetail(code)
+            val usableNow = monitor.hasUsableNetwork()
+            if (negInterrupt == null &&
+                TunnelReconnectPolicy.shouldFailOnInitialAttempt(
+                    hasEverConnected = sessionHasConnected,
+                    hasUsableNetwork = usableNow,
+                    exitCode = code,
+                    failure = failure,
+                )
+            ) {
+                return AttemptResult(AttemptResultKind.FATAL_FAILURE, detail, failure)
+            }
+            VpnTunnelEvents.emitEngineLog(
+                Log.WARN,
+                TAG,
+                "${prefixAttempt(attemptId)}Recoverable negotiation exit code=$code interrupt=$negInterrupt",
+            )
+            return AttemptResult(AttemptResultKind.RECOVERABLE_DISCONNECT, detail, failure)
+        }
+
+        val tunIpv4 =
+            "${negotiatedClientIp[0]}.${negotiatedClientIp[1]}.${negotiatedClientIp[2]}.${negotiatedClientIp[3]}"
+        val useIpcpAddress =
+            negotiatedClientIp.all { it in 0..255 } &&
+                negotiatedClientIp.any { it != 0 }
+        val addressForTun = if (useIpcpAddress) tunIpv4 else TUN_LOCAL_IPV4
+        VpnTunnelEvents.emitEngineLog(
+            Log.DEBUG,
+            TAG,
+            "${prefixAttempt(attemptId)}TUN addAddress=$addressForTun (IPCP=$tunIpv4 useIpcp=$useIpcpAddress)",
+        )
+        val automaticDnsServers = DnsConfigSupport.negotiatedServers(negotiatedPrimaryDns, negotiatedSecondaryDns)
+        val manualDnsServers =
+            if (dnsAutomatic) {
+                emptyList()
+            } else {
+                DnsConfigSupport.resolveUpstreamServers(dnsServers)
+            }
+        if ((dnsAutomatic && automaticDnsServers.isEmpty()) ||
+            (!dnsAutomatic && manualDnsServers.isEmpty())
+        ) {
+            val msg =
+                if (dnsAutomatic) {
+                    "PPP negotiation did not provide any DNS servers."
+                } else {
+                    "Manual DNS requires at least one DNS server."
+                }
+            return AttemptResult(AttemptResultKind.FATAL_FAILURE, msg)
+        }
+        if (!dnsAutomatic) {
+            val dnsLogger = { level: Int, message: String ->
+                VpnTunnelEvents.emitEngineLog(level, TAG, "${prefixAttempt(attemptId)}$message")
+            }
+            vpnDnsPacketBridge =
+                VpnDnsPacketBridge(
+                    virtualDnsIpv4 = MANUAL_DNS_VIRTUAL_IPV4,
+                    exchangeClient =
+                        DirectDnsExchangeClient(
+                            servers = manualDnsServers,
+                            logger = dnsLogger,
+                            socketProtector = serviceDnsSocketProtector(),
+                        ),
+                    logger = dnsLogger,
+                ).also { it.start() }
+            val interceptRc = VpnBridge.nativeSetVpnDnsInterceptIpv4(MANUAL_DNS_VIRTUAL_IPV4)
+            if (interceptRc != 0) {
+                closeLiveDataplane()
+                return AttemptResult(AttemptResultKind.FATAL_FAILURE, "Manual DNS intercept setup failed.")
+            }
+        } else {
+            VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
+        }
+
+        val builder = Builder()
+            .setSession(getString(R.string.vpn_session_name))
+            .setMtu(tunMtu)
+            .addAddress(addressForTun, 32)
+            .addRoute("0.0.0.0", 0)
+        for (dnsServer in tunDnsServersForBuilder(dnsAutomatic, automaticDnsServers)) {
+            builder.addDnsServer(dnsServer)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.allowFamily(OsConstants.AF_INET)
+        }
+        applyExcludeRouteForVpnServer(builder, server)
+        if (splitTunnelEnabled && splitTunnelMode == VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE) {
+            for (pkg in effectiveInclusivePkgs) {
+                try {
+                    builder.addAllowedApplication(pkg)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    throw IllegalArgumentException("Package not installed: $pkg")
+                }
+            }
+        } else if (splitTunnelEnabled && splitTunnelMode == VpnContract.SPLIT_TUNNEL_MODE_EXCLUSIVE) {
+            for (pkg in effectiveExclusivePkgs) {
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    throw IllegalArgumentException("Package not installed: $pkg")
+                }
+            }
+        }
+        val livePfd = builder.establish() ?: throw IllegalStateException("TUN establish() returned null")
+        val oldLive = tunInterface
+        val oldBlocking = blockingTunInterface
+        tunInterface = livePfd
+        blockingTunInterface = null
+        closePfdQuietly(oldBlocking)
+        closePfdQuietly(oldLive)
+
+        if (sessionStopRequested || !shouldHandleAttempt(attemptId, "post-tun-establish")) {
+            return AttemptResult(AttemptResultKind.CLEAN_STOP, "Stopped by app")
+        }
+
+        val tunFd = livePfd.fd
+        VpnTunnelEvents.emitEngineLog(Log.INFO, TAG, "${prefixAttempt(attemptId)}TUN established; waiting for tunnel loop readiness")
+        synchronized(sessionLock) {
+            engineThread = worker
+        }
+        val code =
+            try {
+                VpnBridge.nativeStartLoop(tunFd)
+            } finally {
+                clearEngineThreadIfCurrent(worker)
+            }
+        VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeStartLoop exited with code=$code")
+
+        if (sessionStopRequested || hasRecordedDisconnectReason()) {
+            return AttemptResult(AttemptResultKind.CLEAN_STOP, "Stopped by app")
+        }
+
+        val interrupt = networkInterruptEvent
+        if (interrupt != null ||
+            code == VpnBridge.EXIT_NETWORK_LOST ||
+            code == VpnBridge.EXIT_PEER_UNREACHABLE
+        ) {
+            val effectiveCode =
+                if (code == VpnBridge.EXIT_NETWORK_LOST || code == VpnBridge.EXIT_PEER_UNREACHABLE) {
+                    code
+                } else {
+                    VpnBridge.EXIT_NETWORK_LOST
+                }
+            return AttemptResult(
+                kind = AttemptResultKind.RECOVERABLE_DISCONNECT,
+                detail = tunnelExitDetail(effectiveCode),
+                failure = VpnBridge.failure(effectiveCode),
+            )
+        }
+
+        if (code != 0) {
+            val failure = VpnBridge.failure(code)
+            val detail = tunnelExitDetail(code)
+            if (!TunnelReconnectPolicy.isTerminalFailure(code, failure)) {
+                return AttemptResult(AttemptResultKind.RECOVERABLE_DISCONNECT, detail, failure)
+            }
+            return AttemptResult(AttemptResultKind.FATAL_FAILURE, detail, failure)
+        }
+
+        return AttemptResult(AttemptResultKind.CLEAN_STOP, "Disconnected by peer or tunnel closed")
     }
 
     private fun hasRecordedDisconnectReason(): Boolean =
@@ -790,6 +1029,12 @@ class TunnelVpnService : VpnService() {
      * (otherwise [onDestroy] would return early and leak the VPN fd).
      */
     private fun stopTunnelInternal(stopReason: String = "vpn service stop") {
+        sessionStopRequested = true
+        networkMonitor?.stop()
+        networkMonitor = null
+        supervisorLock.withLock {
+            supervisorSignal.signalAll()
+        }
         val capturedSetupThread = setupThread
         val capturedAttemptId = synchronized(sessionLock) { activeAttemptId }
         val owner = capturedAttemptId.takeIf { it.isNotEmpty() }?.let(::nativeOwner)
@@ -817,18 +1062,10 @@ class TunnelVpnService : VpnService() {
                 engineThread = null
             }
         }
-        try {
-            tunInterface?.close()
-        } catch (_: Exception) {
-        }
-        tunInterface = null
-        try {
-            vpnDnsPacketBridge?.close()
-        } catch (_: Exception) {
-        }
-        vpnDnsPacketBridge = null
-        VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
-        stopLocalProxyRuntime()
+        closeLiveDataplane()
+        val oldBlocking = blockingTunInterface
+        blockingTunInterface = null
+        closePfdQuietly(oldBlocking)
         synchronized(sessionLock) {
             activeAttemptId = ""
         }
@@ -850,18 +1087,13 @@ class TunnelVpnService : VpnService() {
         }
         clearEngineThreadIfCurrent(worker)
         running.set(false)
-        try {
-            tunInterface?.close()
-        } catch (_: Exception) {
-        }
-        tunInterface = null
-        try {
-            vpnDnsPacketBridge?.close()
-        } catch (_: Exception) {
-        }
-        vpnDnsPacketBridge = null
-        VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
-        stopLocalProxyRuntime()
+        sessionStopRequested = true
+        networkMonitor?.stop()
+        networkMonitor = null
+        closeLiveDataplane()
+        val oldBlocking = blockingTunInterface
+        blockingTunInterface = null
+        closePfdQuietly(oldBlocking)
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (e: Exception) {
@@ -885,7 +1117,7 @@ class TunnelVpnService : VpnService() {
             AppLog.w(TAG, "Ignoring native tunnel ready from stale worker")
             return
         }
-        if (!running.get()) {
+        if (!running.get() || sessionStopRequested) {
             AppLog.w(TAG, "Ignoring native tunnel ready after shutdown")
             return
         }
@@ -908,6 +1140,11 @@ class TunnelVpnService : VpnService() {
         if (!connectedEmitted.compareAndSet(false, true)) {
             return
         }
+        sessionHasConnected = true
+        sessionReconnectAttempt = 0
+        currentTunnelState = VpnContract.TUNNEL_CONNECTED
+        currentTunnelDetail = detail
+        networkMonitor?.markTunnelConnected()
         emitAttemptState(attemptId, VpnContract.TUNNEL_CONNECTED, detail)
         updateForegroundNotification(connectedNotificationText())
     }
@@ -1087,6 +1324,8 @@ class TunnelVpnService : VpnService() {
             10 -> "Invalid tunnel arguments from the app."
             11 -> "Proxy transport is not implemented yet."
             12 -> "Tunnel stopped"
+            13 -> "Network connection lost."
+            14 -> "VPN server stopped responding."
             else -> "Tunnel engine exited with code $code"
         }
 
@@ -1135,6 +1374,7 @@ class TunnelVpnService : VpnService() {
         private const val MAX_TUN_MTU = 1500
 
         private const val TUN_LOCAL_IPV4 = "10.0.0.2"
+        private const val BLOCKING_TUN_IPV6 = "fd00:7466::2"
         internal const val MANUAL_DNS_VIRTUAL_IPV4 = "198.18.0.1"
         internal const val DEFAULT_NATIVE_EXIT_STOPPED = 12
 
@@ -1298,7 +1538,16 @@ class TunnelVpnService : VpnService() {
                 synchronized(svc.sessionLock) {
                     svc.activeAttemptId
                 }
-            val connected = svc.connectedEmitted.get()
+            val state = svc.currentTunnelState
+            val connected = state == VpnContract.TUNNEL_CONNECTED
+            val detail =
+                when (state) {
+                    VpnContract.TUNNEL_CONNECTED -> svc.connectedNotificationText()
+                    VpnContract.TUNNEL_WAITING_FOR_NETWORK,
+                    VpnContract.TUNNEL_RECONNECTING,
+                    -> svc.currentTunnelDetail
+                    else -> "Restoring active VPN tunnel session..."
+                }
             val proxyConfig = svc.activeProxyConfig
             val proxyExposure =
                 svc.localProxyRuntime?.exposureInfo()
@@ -1311,8 +1560,8 @@ class TunnelVpnService : VpnService() {
                         )
                     }
             return RuntimeStateSnapshot.tunnel(
-                state = if (connected) VpnContract.TUNNEL_CONNECTED else VpnContract.TUNNEL_CONNECTING,
-                detail = if (connected) svc.connectedNotificationText() else "Restoring active VPN tunnel session...",
+                state = state,
+                detail = detail,
                 attemptId = attemptId,
                 connectionMode = VpnContract.MODE_VPN_TUNNEL,
                 proxyExposure = proxyExposure,
@@ -1335,7 +1584,15 @@ internal object TunnelVpnServiceStopPolicy {
         hasTunInterface: Boolean,
         hasDnsServer: Boolean,
         hasLocalProxyRuntime: Boolean,
-    ): Boolean = running || hasSetupThread || hasEngineThread || hasTunInterface || hasDnsServer || hasLocalProxyRuntime
+        hasBlockingTunInterface: Boolean = false,
+    ): Boolean =
+        running ||
+            hasSetupThread ||
+            hasEngineThread ||
+            hasTunInterface ||
+            hasDnsServer ||
+            hasLocalProxyRuntime ||
+            hasBlockingTunInterface
 }
 
 internal object VpnStopAttemptPolicy {
