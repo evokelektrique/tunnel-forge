@@ -499,10 +499,8 @@ void main() {
   blocTest<TunnelBloc, TunnelState>(
     'transitions connected through waitingForNetwork and reconnecting back to connected',
     build: () => TunnelBloc(_FakeTunnelRepository(), _FakeLogsRepository()),
-    seed: () => const TunnelState(
-      tunnelUp: true,
-      activeAttemptId: 'attempt-recover',
-    ),
+    seed: () =>
+        const TunnelState(tunnelUp: true, activeAttemptId: 'attempt-recover'),
     act: (bloc) {
       bloc.add(
         const TunnelHostStateReceived(

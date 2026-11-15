@@ -121,18 +121,12 @@ class TunnelFailure extends Equatable {
       'Proxy transport unavailable',
       'This version of the app doesn\'t support the requested proxy transport. Use VPN mode or a version that supports it.',
     ),
-    '13': (
-      'Connection lost',
-      'The underlying network connection was lost.',
-    ),
+    '13': ('Connection lost', 'The underlying network connection was lost.'),
     '14': (
       'Server unreachable',
       'The VPN server stopped responding to keepalive probes.',
     ),
-    '15': (
-      'Disconnected by server',
-      'The VPN server closed the connection.',
-    ),
+    '15': ('Disconnected by server', 'The VPN server closed the connection.'),
   };
 
   bool get _hasGeneralError =>

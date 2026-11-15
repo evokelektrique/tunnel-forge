@@ -60,7 +60,10 @@ void main() {
     const cdn = TunnelFailure(namespace: 'l2tp-cdn', code: '4');
     expect(stop.label, 'Control connection not authorized');
     expect(cdn.label, 'Server resources temporarily unavailable');
-    expect(const TunnelFailure(namespace: 'l2tp-cdn', code: '1').label, 'Carrier lost');
+    expect(
+      const TunnelFailure(namespace: 'l2tp-cdn', code: '1').label,
+      'Carrier lost',
+    );
     expect(
       const TunnelFailure(namespace: 'engine', code: '15').label,
       'Disconnected by server',
