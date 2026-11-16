@@ -312,4 +312,91 @@ void main() {
     expect(loaded.first.favorite, isTrue);
     expect(loaded.first.displayName, 'Profile p2 Edited');
   });
+
+  testWidgets(
+    'holding favorite star or actions menu does not start hold-to-select',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(480, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final store = await seedProfiles(['p1', 'p2']);
+      await pumpApp(tester, store);
+
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+
+      final tile = find.ancestor(
+        of: find.text('Profile p1'),
+        matching: find.byType(ListTile),
+      );
+      final holdFill = find.descendant(
+        of: find.ancestor(of: tile, matching: find.byType(Stack)).first,
+        matching: find.byType(FractionallySizedBox),
+      );
+
+      // Short press on favorite star shows no hold fill and toggles favorite on release.
+      final starButton = find.byKey(const Key('favorite_button_p1'));
+      var gesture = await tester.startGesture(tester.getCenter(starButton));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(holdFill, findsNothing);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+      expect((await store.loadProfiles()).first.favorite, isTrue);
+
+      // Holding favorite star for >1s shows no hold fill and stays out of multi-select.
+      gesture = await tester.startGesture(tester.getCenter(starButton));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(holdFill, findsNothing);
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(holdFill, findsNothing);
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+
+      // Holding three-dots menu for >1s shows no hold fill and stays out of multi-select.
+      final actionsButton = find.descendant(
+        of: tile,
+        matching: find.byTooltip('Profile actions'),
+      );
+      gesture = await tester.startGesture(tester.getCenter(actionsButton));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(holdFill, findsNothing);
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(holdFill, findsNothing);
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+
+      // Short press on three-dots menu shows no hold fill and opens menu on release.
+      gesture = await tester.startGesture(tester.getCenter(actionsButton));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(holdFill, findsNothing);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsNothing);
+      expect(find.text('Edit profile'), findsOneWidget);
+
+      // Dismiss popup menu before verifying tile-body hold still enters multi-select.
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
+
+      gesture = await tester.startGesture(
+        tester.getCenter(find.text('Profile p1')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(holdFill, findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 500));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('multi_select_delete')), findsOneWidget);
+    },
+  );
 }

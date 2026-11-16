@@ -1006,6 +1006,7 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
   Timer? _holdTimer;
   int? _activePointer;
   Offset? _downPosition;
+  final Set<int> _ignoredPointers = <int>{};
   bool _suppressNextTap = false;
 
   @override
@@ -1053,8 +1054,13 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
     }
   }
 
+  void _handleTrailingPointerDown(PointerDownEvent event) {
+    _ignoredPointers.add(event.pointer);
+  }
+
   void _handlePointerDown(PointerDownEvent event) {
     _suppressNextTap = false;
+    if (_ignoredPointers.contains(event.pointer)) return;
     if (!widget.enabled || widget.multiSelect || _activePointer != null) return;
     _activePointer = event.pointer;
     _downPosition = event.position;
@@ -1071,6 +1077,7 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
   }
 
   void _handlePointerEnd(PointerEvent event) {
+    _ignoredPointers.remove(event.pointer);
     if (event.pointer == _activePointer) {
       _cancelHold();
     }
@@ -1139,7 +1146,13 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
               overflow: TextOverflow.ellipsis,
               style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
-            trailing: widget.trailing,
+            trailing: widget.trailing == null
+                ? null
+                : Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: _handleTrailingPointerDown,
+                    child: widget.trailing,
+                  ),
             onTap: widget.enabled ? _handleTap : null,
           ),
         ],
