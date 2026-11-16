@@ -128,6 +128,32 @@ class TunnelFailure extends Equatable {
     ),
     '15': ('Disconnected by server', 'The VPN server closed the connection.'),
   };
+  static const _android = <String, (String, String)>{
+    '1': (
+      'VPN revoked',
+      'Android stopped the VPN because another VPN started, system VPN was turned off, or Always-on VPN revoked access.',
+    ),
+    '2': (
+      'Stopped by Android system',
+      'Android terminated the background tunnel service. Allow unrestricted battery usage for TunnelForge if this happens while idle.',
+    ),
+    '3': (
+      'App removed from recents',
+      'The tunnel service stopped after the app was dismissed from recent apps.',
+    ),
+    '4': (
+      'VPN permission revoked',
+      'VPN permission is no longer granted. Grant VPN permission again to reconnect.',
+    ),
+    '5': (
+      'Local proxy startup failed',
+      'The local HTTP/SOCKS proxy listeners could not start after tunnel negotiation.',
+    ),
+    '6': (
+      'Tunnel disconnected unexpectedly',
+      'The tunnel closed without a user disconnect request. Export the logs if this keeps happening.',
+    ),
+  };
 
   bool get _hasGeneralError =>
       (namespace == 'l2tp-stopccn' || namespace == 'l2tp-cdn') &&
@@ -142,7 +168,7 @@ class TunnelFailure extends Equatable {
       'l2tp-stopccn' => _stop[code] ?? 'Unknown control connection result',
       'l2tp-cdn' => _cdn[code] ?? 'Unknown session result',
       'engine' => _engine[code]?.$1 ?? 'Unknown tunnel engine error',
-      'android' => 'Android platform error',
+      'android' => _android[code]?.$1 ?? 'Android platform error',
       _ => 'Connection error',
     };
     return _hasGeneralError
@@ -160,6 +186,9 @@ class TunnelFailure extends Equatable {
           'The tunnel stopped with an error the app doesn\'t recognize. Export the logs to help find the cause.',
     'l2tp-stopccn' || 'l2tp-cdn' =>
       'The L2TP server closed the ${namespace == 'l2tp-stopccn' ? 'control connection' : 'session'}. ${_hasGeneralError && generalError == 4 || code == '6' && namespace == 'l2tp-stopccn' || code == '4' && namespace == 'l2tp-cdn' ? 'Wait a moment, then try again.' : 'Check the server logs, access rules and supported protocol settings.'}',
+    'android' =>
+      _android[code]?.$2 ??
+          'Check the error details for more information. If it keeps happening, export the logs to help find the cause.',
     _ =>
       'Check the error details for more information. If it keeps happening, export the logs to help find the cause.',
   };

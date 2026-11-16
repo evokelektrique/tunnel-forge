@@ -45,6 +45,14 @@ class ProxyTunnelService : Service() {
     private var currentTunnelState: String = VpnContract.TUNNEL_CONNECTING
     @Volatile
     private var currentTunnelDetail: String = ""
+    @Volatile
+    private var activeServer: String = ""
+    @Volatile
+    private var activeProfileName: String? = null
+    @Volatile
+    private var sessionHasConnected = false
+    @Volatile
+    private var reconnectingAlertShown = false
     private val terminalEventEmitted = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -56,7 +64,23 @@ class ProxyTunnelService : Service() {
 
     override fun onDestroy() {
         instance = null
-        shutdownActiveSession(reason = "service destroy")
+        val wasStopRequested = stopRequested
+        val attemptId = currentAttemptId()
+        val profileLabel = currentProfileLabel()
+        val wasConnected = sessionHasConnected
+        val hadActiveSession = shutdownActiveSession(reason = "service destroy")
+        if (hadActiveSession && !wasStopRequested) {
+            val failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_SYSTEM_DESTROYED)
+            val detail = "Disconnected: stopped by Android system"
+            postDisconnectAlertIfEligible(
+                detail = detail,
+                failure = failure,
+                profileLabel = profileLabel,
+                wasConnected = wasConnected,
+                userStopRequested = false,
+            )
+            emitTerminalState(VpnContract.TUNNEL_FAILED, detail, attemptId, failure)
+        }
         super.onDestroy()
     }
 
@@ -75,6 +99,7 @@ class ProxyTunnelService : Service() {
                     return START_NOT_STICKY
                 }
                 val hadActiveSession = shutdownActiveSession(reason = "app stop")
+                TunnelDisconnectNotification.cancelAll(this)
                 if (ProxyTunnelServiceStopPolicy.shouldEmitStoppedOnActionStop(hadActiveSession)) {
                     emitTerminalState(VpnContract.TUNNEL_STOPPED, "Stopped by app", stoppedAttemptId)
                 }
@@ -85,7 +110,7 @@ class ProxyTunnelService : Service() {
 
             ACTION_START -> {
                 startForegroundWithType(buildNotification("Starting local proxy..."))
-                TunnelDisconnectNotification.cancel(this)
+                TunnelDisconnectNotification.cancelAll(this)
                 val attemptId = intent.getStringExtra(EXTRA_ATTEMPT_ID) ?: ""
                 val server = intent.getStringExtra(EXTRA_SERVER)
                 val user = intent.getStringExtra(EXTRA_USER) ?: ""
@@ -126,6 +151,10 @@ class ProxyTunnelService : Service() {
                 shutdownActiveSession(reason = "restart")
                 connectedEmitted = false
                 stopRequested = false
+                sessionHasConnected = false
+                reconnectingAlertShown = false
+                activeServer = server.trim()
+                activeProfileName = profileName.ifEmpty { null }
                 terminalEventEmitted.set(false)
                 activeProxyConfig = proxyConfig
                 RuntimeEnvironmentInfo.emit(this, TAG, prefixAttempt(attemptId), mode = VpnContract.MODE_PROXY_ONLY)
@@ -168,7 +197,37 @@ class ProxyTunnelService : Service() {
         val kind: ProxyAttemptOutcomeKind,
         val detail: String = "",
         val failure: Map<String, Any>? = null,
+        val exitCode: Int = 0,
     )
+
+    private fun currentProfileLabel(): String =
+        activeProfileName?.takeIf { it.isNotEmpty() } ?: activeServer
+
+    private fun postDisconnectAlertIfEligible(
+        exitCode: Int = 0,
+        detail: String,
+        failure: Map<String, Any>? = null,
+        profileLabel: String = currentProfileLabel(),
+        wasConnected: Boolean = sessionHasConnected,
+        userStopRequested: Boolean = stopRequested,
+    ) {
+        if (!TunnelDisconnectNotification.shouldPostDisconnectAlert(
+                userStopRequested = userStopRequested,
+                hasEverConnected = wasConnected,
+                isAppForeground = AppForegroundTracker.isForeground(),
+            )
+        ) {
+            return
+        }
+        TunnelDisconnectNotification.show(
+            context = this,
+            detail = detail,
+            failure = failure,
+            profileLabel = profileLabel,
+            exitCode = exitCode,
+            wasConnected = wasConnected,
+        )
+    }
 
     private fun handleNetworkTransition(
         attemptId: String,
@@ -248,6 +307,7 @@ class ProxyTunnelService : Service() {
         currentTunnelDetail = "Negotiating tunnel for local proxy (${label.ifEmpty { "profile" }})..."
         emitAttemptState(attemptId, VpnContract.TUNNEL_CONNECTING, currentTunnelDetail)
         VpnTunnelEvents.emitEngineLog(Log.INFO, TAG, "${prefixAttempt(attemptId)}Starting proxy negotiation")
+        var hasEverConnected = false
         try {
             nativeOwnerAcquired =
                 NativeTunnelSessions.shared.acquire(
@@ -255,7 +315,9 @@ class ProxyTunnelService : Service() {
                     reason = "proxy negotiation start",
                 )
             if (!nativeOwnerAcquired) {
-                emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, "Tunnel engine is still stopping; try again.")
+                val detail = "Tunnel engine is still stopping; try again."
+                postDisconnectAlertIfEligible(detail = detail, profileLabel = label, wasConnected = false)
+                emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, detail)
                 return
             }
 
@@ -267,7 +329,6 @@ class ProxyTunnelService : Service() {
                     it.start()
                 }
 
-            var hasEverConnected = false
             var reconnectAttempt = 0
             var immediateSwitchReconnect = false
 
@@ -344,25 +405,43 @@ class ProxyTunnelService : Service() {
                         monitor = monitor,
                         onReady = {
                             hasEverConnected = true
+                            sessionHasConnected = true
                             reconnectAttempt = 0
+                            reconnectingAlertShown = false
+                            TunnelDisconnectNotification.cancelReconnectAlert(this)
                         },
                     )
                 when (outcome.kind) {
-                    ProxyAttemptOutcomeKind.CLEAN_STOP -> break
-                    ProxyAttemptOutcomeKind.FATAL_FAILURE -> {
+                    ProxyAttemptOutcomeKind.CLEAN_STOP -> {
                         if (!stopRequested) {
-                            TunnelDisconnectNotification.show(
-                                context = this,
-                                detail = outcome.detail,
-                                failure = outcome.failure,
+                            val failure = outcome.failure ?: VpnAndroidFailure.map(VpnAndroidFailure.CODE_UNEXPECTED_STOP)
+                            val detail = outcome.detail.ifBlank { "Local proxy disconnected unexpectedly." }
+                            postDisconnectAlertIfEligible(
+                                exitCode = outcome.exitCode,
+                                detail = detail,
+                                failure = failure,
                                 profileLabel = label,
+                                wasConnected = hasEverConnected,
                             )
+                            emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, detail, failure)
                         }
+                        break
+                    }
+                    ProxyAttemptOutcomeKind.FATAL_FAILURE -> {
+                        TunnelDisconnectNotification.cancelReconnectAlert(this)
+                        postDisconnectAlertIfEligible(
+                            exitCode = outcome.exitCode,
+                            detail = outcome.detail,
+                            failure = outcome.failure,
+                            profileLabel = label,
+                            wasConnected = hasEverConnected,
+                        )
                         emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, outcome.detail, outcome.failure)
                         break
                     }
                     ProxyAttemptOutcomeKind.RECOVERABLE_DISCONNECT -> {
                         hasEverConnected = true
+                        sessionHasConnected = true
                         immediateSwitchReconnect =
                             networkInterruptEvent == NetworkTransitionEvent.ACTIVE_NETWORK_SWITCHED
                         if (!immediateSwitchReconnect && monitor.hasUsableNetwork()) {
@@ -370,14 +449,41 @@ class ProxyTunnelService : Service() {
                         } else if (!monitor.hasUsableNetwork()) {
                             reconnectAttempt = 0
                         }
+                        if (TunnelReconnectPolicy.shouldPostStalledReconnectAlert(
+                                onlineFailureCount = reconnectAttempt,
+                                alreadyNotified = reconnectingAlertShown,
+                            )
+                        ) {
+                            reconnectingAlertShown = true
+                            TunnelDisconnectNotification.showStalledReconnect(
+                                context = this,
+                                profileLabel = label,
+                            )
+                        }
                     }
                 }
+            }
+        } catch (t: Throwable) {
+            if (!stopRequested && shouldHandleAttempt(attemptId, "proxy-exception")) {
+                AppLog.e(TAG, "${prefixAttempt(attemptId)}runProxyNegotiation failed", t)
+                val detail = t.message ?: "proxy negotiation failed"
+                TunnelDisconnectNotification.cancelReconnectAlert(this)
+                postDisconnectAlertIfEligible(
+                    detail = detail,
+                    profileLabel = label,
+                    wasConnected = hasEverConnected,
+                )
+                emitAttemptTerminalState(attemptId, VpnContract.TUNNEL_FAILED, detail)
             }
         } finally {
             monitor?.stop()
             if (networkMonitor === monitor) {
                 networkMonitor = null
             }
+            activeServer = ""
+            activeProfileName = null
+            sessionHasConnected = false
+            reconnectingAlertShown = false
             VpnTunnelEvents.emitProxyExposureChanged(
                 ProxyExposureInfo.inactive(
                     httpPort = proxyConfig.httpPort,
@@ -474,9 +580,9 @@ class ProxyTunnelService : Service() {
                         failure = failure,
                     )
                 ) {
-                    return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.FATAL_FAILURE, detail, failure)
+                    return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.FATAL_FAILURE, detail, failure, exitCode = code)
                 }
-                return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.RECOVERABLE_DISCONNECT, detail, failure)
+                return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.RECOVERABLE_DISCONNECT, detail, failure, exitCode = code)
             }
 
             val effectiveDnsServers =
@@ -706,6 +812,7 @@ class ProxyTunnelService : Service() {
                     kind = ProxyAttemptOutcomeKind.RECOVERABLE_DISCONNECT,
                     detail = tunnelExitDetail(code),
                     failure = VpnBridge.failure(code),
+                    exitCode = code,
                 )
             }
             if (loopCrashed) {
@@ -719,6 +826,7 @@ class ProxyTunnelService : Service() {
                     ProxyAttemptOutcomeKind.RECOVERABLE_DISCONNECT,
                     loopTerminalDetail ?: tunnelExitDetail(loopExitCode),
                     loopFailure,
+                    exitCode = loopExitCode,
                 )
             }
             val terminalDetail = loopTerminalDetail
@@ -727,6 +835,7 @@ class ProxyTunnelService : Service() {
                     ProxyAttemptOutcomeKind.FATAL_FAILURE,
                     terminalDetail,
                     loopFailure,
+                    exitCode = loopExitCode,
                 )
             }
             return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.CLEAN_STOP)
@@ -1018,7 +1127,7 @@ class ProxyTunnelService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("TunnelForge proxy")
+            .setContentTitle(getString(R.string.proxy_notification_title))
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentIntent(pending)

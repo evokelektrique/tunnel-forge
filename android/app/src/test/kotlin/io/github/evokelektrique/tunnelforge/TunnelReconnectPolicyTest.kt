@@ -151,7 +151,7 @@ class TunnelReconnectPolicyTest {
     }
 
     @Test
-    fun disconnectNotificationFormatsPeerTeardownAndGenericErrors() {
+    fun disconnectNotificationFormatsSpecificReasonsAndAlertGates() {
         assertTrue(
             TunnelDisconnectNotification.isPeerTeardownFailure(
                 VpnBridge.EXIT_PEER_CLOSED,
@@ -159,7 +159,7 @@ class TunnelReconnectPolicyTest {
             ),
         )
         assertEquals(
-            "Work: VPN server closed the connection.",
+            "Work: Carrier lost.",
             TunnelDisconnectNotification.formatDisconnectMessage(
                 detail = "Disconnected by peer",
                 failure = mapOf("namespace" to "l2tp-cdn", "code" to 1, "generalError" to 0),
@@ -167,11 +167,74 @@ class TunnelReconnectPolicyTest {
             ),
         )
         assertEquals(
-            "PPP negotiation failed.",
+            "Work: VPN server is shutting down.",
+            TunnelDisconnectNotification.formatDisconnectMessage(
+                detail = "Disconnected by peer",
+                failure = mapOf("namespace" to "l2tp-stopccn", "code" to 6, "generalError" to 0),
+                profileLabel = "Work",
+            ),
+        )
+        assertEquals(
+            "Work: Server reported a general error: Unsupported mandatory attribute.",
+            TunnelDisconnectNotification.formatDisconnectMessage(
+                detail = "Disconnected by peer",
+                failure = mapOf("namespace" to "l2tp-stopccn", "code" to 2, "generalError" to 8),
+                profileLabel = "Work",
+            ),
+        )
+        assertEquals(
+            "Authentication failed.",
             TunnelDisconnectNotification.formatDisconnectMessage(
                 detail = "PPP negotiation failed.",
                 failure = mapOf("namespace" to "mschap", "code" to 691, "generalError" to 0),
             ),
         )
+        assertEquals(
+            "Work: VPN was revoked by Android.",
+            TunnelDisconnectNotification.formatDisconnectMessage(
+                detail = "Disconnected: VPN revoked by Android",
+                failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_VPN_REVOKED),
+                profileLabel = "Work",
+            ),
+        )
+        assertEquals(
+            "Work: Connection lost. Reconnecting in background...",
+            TunnelDisconnectNotification.formatStalledReconnectMessage(profileLabel = "Work"),
+        )
+
+        // Foreground gating: skip alert on initial connect failure in foreground; allow in background or after connect.
+        assertFalse(
+            TunnelDisconnectNotification.shouldPostDisconnectAlert(
+                userStopRequested = false,
+                hasEverConnected = false,
+                isAppForeground = true,
+            ),
+        )
+        assertTrue(
+            TunnelDisconnectNotification.shouldPostDisconnectAlert(
+                userStopRequested = false,
+                hasEverConnected = false,
+                isAppForeground = false,
+            ),
+        )
+        assertTrue(
+            TunnelDisconnectNotification.shouldPostDisconnectAlert(
+                userStopRequested = false,
+                hasEverConnected = true,
+                isAppForeground = true,
+            ),
+        )
+        assertFalse(
+            TunnelDisconnectNotification.shouldPostDisconnectAlert(
+                userStopRequested = true,
+                hasEverConnected = true,
+                isAppForeground = false,
+            ),
+        )
+
+        // Stalled-reconnect alert threshold & one-shot suppression.
+        assertFalse(TunnelReconnectPolicy.shouldPostStalledReconnectAlert(onlineFailureCount = 2, alreadyNotified = false))
+        assertTrue(TunnelReconnectPolicy.shouldPostStalledReconnectAlert(onlineFailureCount = 3, alreadyNotified = false))
+        assertFalse(TunnelReconnectPolicy.shouldPostStalledReconnectAlert(onlineFailureCount = 3, alreadyNotified = true))
     }
 }

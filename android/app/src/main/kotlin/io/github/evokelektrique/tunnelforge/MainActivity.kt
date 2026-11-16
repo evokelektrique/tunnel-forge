@@ -460,12 +460,15 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onPause() {
+        AppForegroundTracker.setForeground(false)
         mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
         super.onPause()
     }
 
     override fun onPostResume() {
         super.onPostResume()
+        AppForegroundTracker.setForeground(true)
+        TunnelDisconnectNotification.cancelAll(this)
         dispatchBatteryOptimizationStatusOnReturn()
     }
 
@@ -477,6 +480,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        AppForegroundTracker.setForeground(false)
         vpnPermissionResult = null
         notificationPermissionResult = null
         batteryOptimizationPermissionResult = null

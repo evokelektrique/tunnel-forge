@@ -13,5 +13,9 @@
     <string name="vpn_notification_channel_name">VPN</string>
     <string name="vpn_notification_alert_channel_name">Connection alerts</string>
     <string name="vpn_notification_disconnected_title">TunnelForge disconnected</string>
+    <string name="vpn_notification_connect_failed_title">TunnelForge connection failed</string>
     <string name="vpn_notification_disconnected_server">VPN server closed the connection.</string>
+    <string name="vpn_notification_reconnecting_alert_title">TunnelForge connection dropped</string>
+    <string name="vpn_notification_reconnecting_alert_body">Connection lost. Reconnecting in background...</string>
+    <string name="proxy_notification_title">TunnelForge proxy</string>
 </resources>

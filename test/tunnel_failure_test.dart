@@ -101,4 +101,24 @@ void main() {
       contains('doesn\'t necessarily mean the shared secret is wrong'),
     );
   });
+
+  test(
+    'android disconnect codes resolve to specific labels and explanations',
+    () {
+      const revoked = TunnelFailure(namespace: 'android', code: '1');
+      const systemStopped = TunnelFailure(namespace: 'android', code: '2');
+      const taskRemoved = TunnelFailure(namespace: 'android', code: '3');
+      const platformString = TunnelFailure(
+        namespace: 'android',
+        code: 'vpn_err',
+      );
+
+      expect(revoked.label, 'VPN revoked');
+      expect(revoked.explanation, contains('another VPN started'));
+      expect(systemStopped.label, 'Stopped by Android system');
+      expect(taskRemoved.label, 'App removed from recents');
+      expect(platformString.label, 'Android platform error');
+      expect(platformString.explanation, contains('Check the error details'));
+    },
+  );
 }

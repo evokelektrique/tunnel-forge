@@ -60,6 +60,8 @@ class TunnelVpnService : VpnService() {
     private var sessionHasConnected = false
     @Volatile
     private var sessionReconnectAttempt = 0
+    @Volatile
+    private var reconnectingAlertShown = false
     private var tunInterface: ParcelFileDescriptor? = null
     private var blockingTunInterface: ParcelFileDescriptor? = null
     private var setupThread: Thread? = null
@@ -118,6 +120,16 @@ class TunnelVpnService : VpnService() {
         val batteryAttemptId = attemptId.ifEmpty { lastSessionAttemptId }
         if (hasActiveSession()) {
             val (reason, uiDetail) = VpnDisconnectReasonPolicy.systemDestroyReason(taskRemovedDuringSession)
+            val failureCode =
+                if (taskRemovedDuringSession) {
+                    VpnAndroidFailure.CODE_TASK_REMOVED
+                } else {
+                    VpnAndroidFailure.CODE_SYSTEM_DESTROYED
+                }
+            val failure = VpnAndroidFailure.map(failureCode)
+            val profileLabel = currentProfileLabel()
+            val wasConnected = sessionHasConnected
+            val wasStopRequested = sessionStopRequested
             recordDisconnectReason(
                 attemptId = attemptId,
                 reason = reason,
@@ -130,8 +142,15 @@ class TunnelVpnService : VpnService() {
                 attemptPrefix = prefixAttempt(batteryAttemptId),
                 stage = "vpn_destroy",
             )
+            postDisconnectAlertIfEligible(
+                detail = uiDetail,
+                failure = failure,
+                profileLabel = profileLabel,
+                wasConnected = wasConnected,
+                userStopRequested = wasStopRequested,
+            )
             stopTunnelInternal(stopReason = reason)
-            VpnTunnelEvents.emit(VpnContract.TUNNEL_STOPPED, uiDetail, attemptId)
+            VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, uiDetail, attemptId, failure)
         } else if (batteryAttemptId.isNotEmpty()) {
             BatteryOptimizationDiagnostics.emitForVpnEvent(
                 context = this,
@@ -151,17 +170,30 @@ class TunnelVpnService : VpnService() {
         cancelPendingStopSelf()
         val attemptId = currentAttemptId()
         if (hasActiveSession()) {
+            val failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_VPN_REVOKED)
+            val uiDetail = "Disconnected: VPN revoked by Android"
+            val profileLabel = currentProfileLabel()
+            val wasConnected = sessionHasConnected
+            val wasStopRequested = sessionStopRequested
             recordDisconnectReason(
                 attemptId = attemptId,
                 reason = "revoked_by_android",
                 level = Log.WARN,
                 detail = "another VPN started, system VPN turned off, or Always-on VPN revoked",
             )
+            postDisconnectAlertIfEligible(
+                detail = uiDetail,
+                failure = failure,
+                profileLabel = profileLabel,
+                wasConnected = wasConnected,
+                userStopRequested = wasStopRequested,
+            )
             stopTunnelInternal(stopReason = "revoked by Android")
             VpnTunnelEvents.emit(
-                VpnContract.TUNNEL_STOPPED,
-                "Disconnected: VPN revoked by Android",
+                VpnContract.TUNNEL_FAILED,
+                uiDetail,
                 attemptId,
+                failure,
             )
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -209,6 +241,7 @@ class TunnelVpnService : VpnService() {
                     stopTunnelInternal(stopReason = "stopped by app")
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_STOPPED, "Stopped by app", stoppedAttemptId)
                 }
+                TunnelDisconnectNotification.cancelAll(this)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
@@ -216,7 +249,7 @@ class TunnelVpnService : VpnService() {
             ACTION_START -> {
                 // Required immediately after Context.startForegroundService(); must run before any early return.
                 startForegroundWithType(buildNotification(getString(R.string.vpn_notification_connecting)))
-                TunnelDisconnectNotification.cancel(this)
+                TunnelDisconnectNotification.cancelAll(this)
                 val attemptId = intent.getStringExtra(EXTRA_ATTEMPT_ID) ?: ""
                 val server = intent.getStringExtra(EXTRA_SERVER)
                 if (server.isNullOrEmpty()) {
@@ -437,7 +470,37 @@ class TunnelVpnService : VpnService() {
         val kind: AttemptResultKind,
         val detail: String = "",
         val failure: Map<String, Any>? = null,
+        val exitCode: Int = 0,
     )
+
+    private fun currentProfileLabel(): String =
+        activeProfileName?.takeIf { it.isNotEmpty() } ?: activeServer
+
+    private fun postDisconnectAlertIfEligible(
+        exitCode: Int = 0,
+        detail: String,
+        failure: Map<String, Any>? = null,
+        profileLabel: String = currentProfileLabel(),
+        wasConnected: Boolean = sessionHasConnected,
+        userStopRequested: Boolean = sessionStopRequested,
+    ) {
+        if (!TunnelDisconnectNotification.shouldPostDisconnectAlert(
+                userStopRequested = userStopRequested,
+                hasEverConnected = wasConnected,
+                isAppForeground = AppForegroundTracker.isForeground(),
+            )
+        ) {
+            return
+        }
+        TunnelDisconnectNotification.show(
+            context = this,
+            detail = detail,
+            failure = failure,
+            profileLabel = profileLabel,
+            exitCode = exitCode,
+            wasConnected = wasConnected,
+        )
+    }
 
     private fun closePfdQuietly(pfd: ParcelFileDescriptor?) {
         if (pfd == null) return
@@ -576,6 +639,7 @@ class TunnelVpnService : VpnService() {
             networkInterruptEvent = null
             sessionHasConnected = false
             sessionReconnectAttempt = 0
+            reconnectingAlertShown = false
             connectedEmitted.set(false)
             activeProxyConfig = proxyConfig
             currentTunnelState = VpnContract.TUNNEL_CONNECTING
@@ -707,8 +771,12 @@ class TunnelVpnService : VpnService() {
                 }
 
                 if (VpnService.prepare(this) != null) {
+                    val failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_VPN_PERMISSION_REVOKED)
+                    val detail = "VPN permission is no longer granted."
                     recordDisconnectReason(attemptId, "vpn_permission_revoked", Log.WARN)
-                    emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, "VPN permission is no longer granted.")
+                    TunnelDisconnectNotification.cancelReconnectAlert(this)
+                    postDisconnectAlertIfEligible(detail = detail, failure = failure)
+                    emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, detail, failure)
                     break
                 }
 
@@ -733,11 +801,11 @@ class TunnelVpnService : VpnService() {
                 when (result.kind) {
                     AttemptResultKind.CLEAN_STOP -> {
                         if (!sessionStopRequested && !hasRecordedDisconnectReason()) {
-                            TunnelDisconnectNotification.show(
-                                context = this,
+                            val failure = result.failure ?: VpnAndroidFailure.map(VpnAndroidFailure.CODE_UNEXPECTED_STOP)
+                            postDisconnectAlertIfEligible(
+                                exitCode = result.exitCode,
                                 detail = result.detail,
-                                failure = result.failure,
-                                profileLabel = activeProfileName?.takeIf { it.isNotEmpty() } ?: activeServer,
+                                failure = failure,
                             )
                             recordDisconnectReason(
                                 attemptId = attemptId,
@@ -745,21 +813,19 @@ class TunnelVpnService : VpnService() {
                                 level = Log.WARN,
                                 detail = result.detail,
                             )
-                            emitAttemptState(attemptId, VpnContract.TUNNEL_STOPPED, result.detail)
+                            emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, result.detail, failure)
                         }
                         break
                     }
                     AttemptResultKind.FATAL_FAILURE -> {
-                        if (!sessionStopRequested) {
-                            TunnelDisconnectNotification.show(
-                                context = this,
-                                detail = result.detail,
-                                failure = result.failure,
-                                profileLabel = activeProfileName?.takeIf { it.isNotEmpty() } ?: activeServer,
-                            )
-                        }
+                        TunnelDisconnectNotification.cancelReconnectAlert(this)
+                        postDisconnectAlertIfEligible(
+                            exitCode = result.exitCode,
+                            detail = result.detail,
+                            failure = result.failure,
+                        )
                         val reason =
-                            if (TunnelDisconnectNotification.isPeerTeardownFailure(0, result.failure)) {
+                            if (TunnelDisconnectNotification.isPeerTeardownFailure(result.exitCode, result.failure)) {
                                 "peer_closed"
                             } else {
                                 "native_exit_error"
@@ -777,6 +843,17 @@ class TunnelVpnService : VpnService() {
                         } else if (!monitor.hasUsableNetwork()) {
                             sessionReconnectAttempt = 0
                         }
+                        if (TunnelReconnectPolicy.shouldPostStalledReconnectAlert(
+                                onlineFailureCount = sessionReconnectAttempt,
+                                alreadyNotified = reconnectingAlertShown,
+                            )
+                        ) {
+                            reconnectingAlertShown = true
+                            TunnelDisconnectNotification.showStalledReconnect(
+                                context = this,
+                                profileLabel = currentProfileLabel(),
+                            )
+                        }
                         activateBlockingTun(attemptId)
                         closeLiveDataplane()
                     }
@@ -790,7 +867,10 @@ class TunnelVpnService : VpnService() {
                     TAG,
                     "${prefixAttempt(attemptId)}startTunnel exception=${e.javaClass.simpleName}:${e.message}",
                 )
-                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, e.message ?: "startTunnel failed")
+                val detail = e.message ?: "startTunnel failed"
+                TunnelDisconnectNotification.cancelReconnectAlert(this)
+                postDisconnectAlertIfEligible(detail = detail)
+                emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, detail)
             } else {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
@@ -866,14 +946,14 @@ class TunnelVpnService : VpnService() {
                     failure = failure,
                 )
             ) {
-                return AttemptResult(AttemptResultKind.FATAL_FAILURE, detail, failure)
+                return AttemptResult(AttemptResultKind.FATAL_FAILURE, detail, failure, exitCode = code)
             }
             VpnTunnelEvents.emitEngineLog(
                 Log.WARN,
                 TAG,
                 "${prefixAttempt(attemptId)}Recoverable negotiation exit code=$code interrupt=$negInterrupt",
             )
-            return AttemptResult(AttemptResultKind.RECOVERABLE_DISCONNECT, detail, failure)
+            return AttemptResult(AttemptResultKind.RECOVERABLE_DISCONNECT, detail, failure, exitCode = code)
         }
 
         val tunIpv4 =
@@ -1010,9 +1090,9 @@ class TunnelVpnService : VpnService() {
             val failure = VpnBridge.failure(code)
             val detail = tunnelExitDetail(code)
             if (!TunnelReconnectPolicy.isTerminalFailure(code, failure)) {
-                return AttemptResult(AttemptResultKind.RECOVERABLE_DISCONNECT, detail, failure)
+                return AttemptResult(AttemptResultKind.RECOVERABLE_DISCONNECT, detail, failure, exitCode = code)
             }
-            return AttemptResult(AttemptResultKind.FATAL_FAILURE, detail, failure)
+            return AttemptResult(AttemptResultKind.FATAL_FAILURE, detail, failure, exitCode = code)
         }
 
         return AttemptResult(AttemptResultKind.CLEAN_STOP, "Disconnected by peer or tunnel closed")
@@ -1153,8 +1233,12 @@ class TunnelVpnService : VpnService() {
                 TAG,
                 "${prefixAttempt(attemptId)}Local proxy startup failed error=${e.message ?: e.javaClass.simpleName}",
             )
-            recordDisconnectReason(attemptId, "local_proxy_startup_failed", Log.ERROR, e.message ?: e.javaClass.simpleName)
-            emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, e.message ?: "Local proxy startup failed")
+            val failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_LOCAL_PROXY_FAILED)
+            val failDetail = e.message ?: "Local proxy startup failed"
+            recordDisconnectReason(attemptId, "local_proxy_startup_failed", Log.ERROR, failDetail)
+            TunnelDisconnectNotification.cancelReconnectAlert(this)
+            postDisconnectAlertIfEligible(detail = failDetail, failure = failure)
+            emitAttemptState(attemptId, VpnContract.TUNNEL_FAILED, failDetail, failure)
             stopTunnelInternal(stopReason = "local proxy startup failed")
             stopServiceForAttempt(attemptId)
             return
@@ -1164,6 +1248,8 @@ class TunnelVpnService : VpnService() {
         }
         sessionHasConnected = true
         sessionReconnectAttempt = 0
+        reconnectingAlertShown = false
+        TunnelDisconnectNotification.cancelReconnectAlert(this)
         currentTunnelState = VpnContract.TUNNEL_CONNECTED
         currentTunnelDetail = detail
         networkMonitor?.markTunnelConnected()

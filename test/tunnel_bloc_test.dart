@@ -473,6 +473,89 @@ void main() {
   );
 
   blocTest<TunnelBloc, TunnelState>(
+    'reports revoked android lastTerminal on startup so return to app shows error',
+    build: () {
+      const failure = TunnelFailure(namespace: 'android', code: '1');
+      final logs = _FakeLogsRepository();
+      return TunnelBloc(
+        _FakeTunnelRepository(
+          runtimeState: const TunnelRuntimeState(
+            state: VpnTunnelState.stopped,
+            detail: 'Idle',
+            connectionMode: ConnectionMode.vpnTunnel,
+            lastTerminal: TunnelHostUpdate(
+              state: VpnTunnelState.failed,
+              detail: 'Disconnected: VPN revoked by Android',
+              attemptId: 'attempt-revoked',
+              failure: failure,
+            ),
+          ),
+        ),
+        logs,
+      );
+    },
+    act: (bloc) => bloc.add(const TunnelStarted()),
+    expect: () => const [
+      TunnelState(
+        message: HomeMessage(
+          id: 1,
+          text: 'Disconnected: VPN revoked by Android',
+          error: true,
+          failure: TunnelFailure(namespace: 'android', code: '1'),
+        ),
+      ),
+    ],
+  );
+
+  blocTest<TunnelBloc, TunnelState>(
+    'reports live android system-kill failure while connected',
+    build: () => TunnelBloc(_FakeTunnelRepository(), _FakeLogsRepository()),
+    seed: () => const TunnelState(
+      tunnelUp: true,
+      activeAttemptId: 'attempt-kill',
+      connectionMode: ConnectionMode.proxyOnly,
+    ),
+    act: (bloc) {
+      bloc.add(
+        const TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.failed,
+            detail: 'Disconnected: stopped by Android system',
+            attemptId: 'attempt-kill',
+            failure: TunnelFailure(namespace: 'android', code: '2'),
+          ),
+        ),
+      );
+    },
+    expect: () => const [
+      TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: false,
+        recoveryPhase: TunnelRecoveryPhase.none,
+        stopRequested: false,
+        timedOutThisAttempt: false,
+        connectionMode: ConnectionMode.proxyOnly,
+        activeAttemptId: null,
+      ),
+      TunnelState(
+        tunnelUp: false,
+        awaitingTunnel: false,
+        recoveryPhase: TunnelRecoveryPhase.none,
+        stopRequested: false,
+        timedOutThisAttempt: false,
+        connectionMode: ConnectionMode.proxyOnly,
+        activeAttemptId: null,
+        message: HomeMessage(
+          id: 1,
+          text: 'Disconnected: stopped by Android system',
+          error: true,
+          failure: TunnelFailure(namespace: 'android', code: '2'),
+        ),
+      ),
+    ],
+  );
+
+  blocTest<TunnelBloc, TunnelState>(
     'logs stopped lastTerminal without error toast on startup',
     build: () {
       final logs = _FakeLogsRepository();
