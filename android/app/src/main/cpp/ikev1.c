@@ -1052,6 +1052,82 @@ static int parse_qm_esp_transform(const uint8_t *transform, size_t transform_len
   return off == transform_len ? 0 : -1;
 }
 
+/* Parse MM2 ISAKMP SA payload and extract Phase 1 cipher, DH group, and raw SA body. */
+static int extract_mm2_p1_selection(const uint8_t *in, size_t inlen, uint8_t *sa2_body, size_t sa2_cap,
+                                    size_t *sa2_body_len, int *p1_aes, unsigned *dh_group) {
+  if (in == NULL || sa2_body == NULL || sa2_body_len == NULL || p1_aes == NULL || dh_group == NULL || inlen < 28)
+    return -1;
+  *sa2_body_len = 0;
+  *p1_aes = 0;
+  *dh_group = 0;
+
+  const uint8_t *mp = in + 28;
+  size_t left = inlen - 28;
+  uint8_t np = in[16];
+  while (np && left >= 4) {
+    size_t pl = util_read_be16(mp + 2);
+    if (pl < 4 || pl > left)
+      return -1;
+    if (np == IKE_PT_SA) {
+      if (pl < 28 || pl - 4 > sa2_cap)
+        return -1;
+      memcpy(sa2_body, mp + 4, pl - 4);
+      *sa2_body_len = pl - 4;
+      const uint8_t *proposal = mp + 12;
+      size_t spi_size = proposal[6];
+      if (proposal[5] != 1 || spi_size > 16 || proposal[7] != 1)
+        return -1;
+      size_t proposal_len = util_read_be16(proposal + 2);
+      if (proposal_len != pl - 12 || proposal_len < 16u + spi_size)
+        return -1;
+      const uint8_t *tr = proposal + 8 + spi_size;
+      size_t tl = util_read_be16(tr + 2);
+      /* Some peers (e.g. Yamaha RTX) leave Next Payload = Transform (3) on a single MM2 transform. */
+      if (tl != proposal_len - 8u - spi_size || (tr[0] != IKE_PT_NONE && tr[0] != IKE_PT_T) || tr[5] != 1)
+        return -1;
+      unsigned cipher = 0, hash = 0, auth = 0, group = 0, bits = 0;
+      for (size_t off = 8; off < tl;) {
+        if (tl - off < 4)
+          return -1;
+        unsigned type = util_read_be16(tr + off), val = util_read_be16(tr + off + 2);
+        if (!(type & 0x8000u)) {
+          if (val > tl - off - 4)
+            return -1;
+          off += 4 + val;
+          continue;
+        }
+        switch (type & 0x7fffu) {
+        case 1:
+          cipher = val;
+          break;
+        case 2:
+          hash = val;
+          break;
+        case 3:
+          auth = val;
+          break;
+        case 4:
+          group = val;
+          break;
+        case 14:
+          bits = val;
+          break;
+        }
+        off += 4;
+      }
+      if ((cipher != 7 && cipher != 5) || hash != 2 || auth != 1 || (group != 14 && group != 2) ||
+          (cipher == 7 && bits != 128))
+        return -1;
+      *p1_aes = cipher == 7;
+      *dh_group = group;
+    }
+    np = mp[0];
+    mp += pl;
+    left -= pl;
+  }
+  return *dh_group ? 0 : -1;
+}
+
 /* QM2 SA may contain multiple Proposal substructures; some servers echo the initiator SPI
  * before the responder SPI. Outbound ESP must use our spi_i; inbound keymat uses peer SPI. */
 static int extract_qm2_esp_selection(const uint8_t *sa_hdr, size_t sa_pl_len, uint32_t our_esp_spi,
@@ -1356,70 +1432,11 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
 
   ike->p1_aes = 0;
   unsigned dh_group = 0;
-  {
-    const uint8_t *mp = in + 28;
-    size_t left = (size_t)inlen - 28;
-    uint8_t np = in[16];
-    while (np && left >= 4) {
-      size_t pl = util_read_be16(mp + 2);
-      if (pl < 4 || pl > left)
-        goto fail_fd;
-      if (np == IKE_PT_SA) {
-        if (pl < 28 || pl - 4 > sizeof(sa2_body))
-          goto fail_fd;
-        memcpy(sa2_body, mp + 4, pl - 4);
-        sa2_body_len = pl - 4;
-        const uint8_t *proposal = mp + 12;
-        if (proposal[5] != 1 || proposal[6] != 0 || proposal[7] != 1)
-          goto fail_fd;
-        size_t proposal_len = util_read_be16(proposal + 2);
-        if (proposal_len != pl - 12 || proposal_len < 16)
-          goto fail_fd;
-        const uint8_t *tr = proposal + 8;
-        size_t tl = util_read_be16(tr + 2);
-        if (tl != proposal_len - 8 || tr[0] != 0 || tr[5] != 1)
-          goto fail_fd;
-        unsigned cipher = 0, hash = 0, auth = 0, bits = 0;
-        for (size_t off = 8; off < tl;) {
-          if (tl - off < 4)
-            goto fail_fd;
-          unsigned type = util_read_be16(tr + off), val = util_read_be16(tr + off + 2);
-          if (!(type & 0x8000)) {
-            if (val > tl - off - 4)
-              goto fail_fd;
-            off += 4 + val;
-            continue;
-          }
-          switch (type & 0x7fff) {
-          case 1:
-            cipher = val;
-            break;
-          case 2:
-            hash = val;
-            break;
-          case 3:
-            auth = val;
-            break;
-          case 4:
-            dh_group = val;
-            break;
-          case 14:
-            bits = val;
-            break;
-          }
-          off += 4;
-        }
-        if ((cipher != 7 && cipher != 5) || hash != 2 || auth != 1 || (dh_group != 14 && dh_group != 2) ||
-            (cipher == 7 && bits != 128))
-          goto fail_fd;
-        ike->p1_aes = cipher == 7;
-      }
-      np = mp[0];
-      mp += pl;
-      left -= pl;
-    }
-    if (!dh_group)
-      goto fail_fd;
+  if (extract_mm2_p1_selection(in, (size_t)inlen, sa2_body, sizeof(sa2_body), &sa2_body_len, &ike->p1_aes, &dh_group) !=
+      0) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM2: unsupported or malformed SA payload");
+    mbedtls_dhm_free(&dhm);
+    goto fail_fd;
   }
   if (sa2_body_len == 0) {
     /* Fallback: should not happen; use MM1 SA body */
