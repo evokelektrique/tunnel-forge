@@ -83,7 +83,7 @@ body:
       label: Per-app routing
       default: 0
       options:
-        - Off
+        - "Off"
         - Inclusive
         - Exclusive
     validations:
