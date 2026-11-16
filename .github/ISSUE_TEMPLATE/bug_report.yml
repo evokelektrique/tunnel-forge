@@ -92,7 +92,7 @@ body:
     id: dns_mtu
     attributes:
       label: Custom DNS and MTU
-      placeholder: e.g. DNS: TLS 1.1.1.1 | MTU: 1400
+      placeholder: "e.g. DNS: TLS 1.1.1.1 | MTU: 1400"
 
   - type: input
     id: server_type
