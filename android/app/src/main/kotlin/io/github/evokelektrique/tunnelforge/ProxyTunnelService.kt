@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -539,7 +540,7 @@ class ProxyTunnelService : Service() {
         var localPacketBridge: ProxyPacketBridge? = null
         var localGvisorStarted = false
         var effectiveProxyConfig = proxyConfig
-        var loopExitCode = 0
+        val loopExitCode = AtomicInteger(0)
         var loopFailure: Map<String, Any>? = null
         var loopTerminalDetail: String? = null
         var loopCrashed = false
@@ -620,7 +621,7 @@ class ProxyTunnelService : Service() {
                             VpnTunnelEvents.emitEngineLog(level, TAG, message)
                         },
                         startLoop = {
-                            VpnBridge.nativeStartProxyLoop().also { code -> loopExitCode = code }
+                            VpnBridge.nativeStartProxyLoop().also { code -> loopExitCode.set(code) }
                         },
                         detailForCode = { code ->
                             loopFailure = VpnBridge.failure(code)
@@ -796,15 +797,16 @@ class ProxyTunnelService : Service() {
             if (stopRequested) {
                 return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.CLEAN_STOP)
             }
+            val exitCode = loopExitCode.get()
             val interrupt = networkInterruptEvent
-            if (loopExitCode != VpnBridge.EXIT_PEER_CLOSED &&
+            if (exitCode != VpnBridge.EXIT_PEER_CLOSED &&
                 (interrupt != null ||
-                    loopExitCode == VpnBridge.EXIT_NETWORK_LOST ||
-                    loopExitCode == VpnBridge.EXIT_PEER_UNREACHABLE)
+                    exitCode == VpnBridge.EXIT_NETWORK_LOST ||
+                    exitCode == VpnBridge.EXIT_PEER_UNREACHABLE)
             ) {
                 val code =
-                    if (loopExitCode == VpnBridge.EXIT_NETWORK_LOST || loopExitCode == VpnBridge.EXIT_PEER_UNREACHABLE) {
-                        loopExitCode
+                    if (exitCode == VpnBridge.EXIT_NETWORK_LOST || exitCode == VpnBridge.EXIT_PEER_UNREACHABLE) {
+                        exitCode
                     } else {
                         VpnBridge.EXIT_NETWORK_LOST
                     }
@@ -821,12 +823,12 @@ class ProxyTunnelService : Service() {
                     loopTerminalDetail ?: "nativeStartProxyLoop crashed",
                 )
             }
-            if (loopExitCode != 0 && !TunnelReconnectPolicy.isTerminalFailure(loopExitCode, loopFailure)) {
+            if (exitCode != 0 && !TunnelReconnectPolicy.isTerminalFailure(exitCode, loopFailure)) {
                 return ProxyAttemptOutcome(
                     ProxyAttemptOutcomeKind.RECOVERABLE_DISCONNECT,
-                    loopTerminalDetail ?: tunnelExitDetail(loopExitCode),
+                    loopTerminalDetail ?: tunnelExitDetail(exitCode),
                     loopFailure,
-                    exitCode = loopExitCode,
+                    exitCode = exitCode,
                 )
             }
             val terminalDetail = loopTerminalDetail
@@ -835,7 +837,7 @@ class ProxyTunnelService : Service() {
                     ProxyAttemptOutcomeKind.FATAL_FAILURE,
                     terminalDetail,
                     loopFailure,
-                    exitCode = loopExitCode,
+                    exitCode = exitCode,
                 )
             }
             return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.CLEAN_STOP)
