@@ -188,20 +188,20 @@ void main() {
   );
 
   testWidgets(
-    'multi-select hides star and dots, shows drag handles, and reorders favorites and non-favorites separately',
+    'multi-select hides star, dots, and drag handles, and reorders sections via body hold',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(480, 1200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final store = await seedProfiles(['p1', 'p2', 'p3', 'p4']);
       await store.toggleProfileFavorite('p3');
-      // Now: [p3*, p1, p2, p4] -> 1 favorite (dimmed handle), 3 non-favorites.
+      // Now: [p3*, p1, p2, p4] -> 1 favorite (non-reorderable), 3 non-favorites.
       await pumpApp(tester, store);
 
       await tester.tap(find.byKey(const Key('profile_picker_tile')));
       await tester.pumpAndSettle();
 
-      final gesture = await tester.startGesture(
+      var gesture = await tester.startGesture(
         tester.getCenter(find.text('Profile p3')),
       );
       await tester.pump(const Duration(seconds: 1));
@@ -210,23 +210,24 @@ void main() {
 
       expect(find.byKey(const Key('favorite_button_p3')), findsNothing);
       expect(find.byTooltip('Profile actions'), findsNothing);
-      expect(find.byKey(const Key('drag_handle_p3')), findsOneWidget);
-      expect(find.byKey(const Key('drag_handle_p1')), findsOneWidget);
+      expect(find.byIcon(Icons.drag_handle), findsNothing);
+      expect(find.byKey(const Key('drag_handle_p3')), findsNothing);
+      expect(find.byKey(const Key('drag_handle_p1')), findsNothing);
 
-      // Single-item favorites section renders dimmed drag handle.
-      final loneHandleIcon = tester.widget<Icon>(
-        find.descendant(
-          of: find.byKey(const Key('drag_handle_p3')),
-          matching: find.byType(Icon),
-        ),
+      // Single-item favorites section ignores hold-to-drag.
+      gesture = await tester.startGesture(
+        tester.getCenter(find.text('Profile p3')),
       );
-      final multiHandleIcon = tester.widget<Icon>(
-        find.descendant(
-          of: find.byKey(const Key('drag_handle_p1')),
-          matching: find.byType(Icon),
-        ),
-      );
-      expect(loneHandleIcon.color!.a, lessThan(multiHandleIcon.color!.a));
+      await tester.pump(const Duration(milliseconds: 550));
+      await gesture.moveBy(const Offset(0, 80));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect((await store.loadProfiles()).map((p) => p.id), [
+        'p3',
+        'p1',
+        'p2',
+        'p4',
+      ]);
 
       // Exit multi-select, star p1 so favorites has 2 items: [p3*, p1*, p2, p4].
       await tester.tap(find.byKey(const Key('multi_select_close')));
@@ -234,22 +235,47 @@ void main() {
       await tester.tap(find.byKey(const Key('favorite_button_p1')));
       await tester.pumpAndSettle();
 
-      final gesture2 = await tester.startGesture(
+      gesture = await tester.startGesture(
         tester.getCenter(find.text('Profile p3')),
       );
       await tester.pump(const Duration(seconds: 1));
-      await gesture2.up();
+      await gesture.up();
       await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
 
-      // Drag p3 below p1 within favorites.
+      // Quick swipe without holding does not reorder p3.
       final favStep =
-          tester.getCenter(find.byKey(const Key('drag_handle_p1'))).dy -
-          tester.getCenter(find.byKey(const Key('drag_handle_p3'))).dy;
+          tester.getCenter(find.text('Profile p1')).dy -
+          tester.getCenter(find.text('Profile p3')).dy;
       await tester.timedDrag(
-        find.byKey(const Key('drag_handle_p3')),
+        find.text('Profile p3'),
         Offset(0, favStep + 20),
-        const Duration(milliseconds: 300),
+        const Duration(milliseconds: 200),
       );
+      await tester.pumpAndSettle();
+      expect((await store.loadProfiles()).map((p) => p.id), [
+        'p3',
+        'p1',
+        'p2',
+        'p4',
+      ]);
+
+      Future<void> dragInSteps(TestGesture activeGesture, Offset delta) async {
+        const steps = 6;
+        final step = delta / steps.toDouble();
+        for (var i = 0; i < steps; i++) {
+          await activeGesture.moveBy(step);
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+      }
+
+      // Hold p3 body for 550 ms and drag below p1 within favorites.
+      gesture = await tester.startGesture(
+        tester.getCenter(find.text('Profile p3')),
+      );
+      await tester.pump(const Duration(milliseconds: 550));
+      await dragInSteps(gesture, Offset(0, favStep + 20));
+      await gesture.up();
       await tester.pumpAndSettle();
 
       expect((await store.loadProfiles()).map((p) => p.id), [
@@ -258,16 +284,18 @@ void main() {
         'p2',
         'p4',
       ]);
+      expect(find.text('1 selected'), findsOneWidget);
 
-      // Drag p4 above p2 within non-favorites.
+      // Hold unchecked p4 body for 550 ms and drag above p2 within non-favorites.
       final otherStep =
-          tester.getCenter(find.byKey(const Key('drag_handle_p2'))).dy -
-          tester.getCenter(find.byKey(const Key('drag_handle_p4'))).dy;
-      await tester.timedDrag(
-        find.byKey(const Key('drag_handle_p4')),
-        Offset(0, otherStep - 20),
-        const Duration(milliseconds: 300),
+          tester.getCenter(find.byKey(const ValueKey<String>('p2'))).dy -
+          tester.getCenter(find.byKey(const ValueKey<String>('p4'))).dy;
+      gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey<String>('p4'))),
       );
+      await tester.pump(const Duration(milliseconds: 550));
+      await dragInSteps(gesture, Offset(0, otherStep - 20));
+      await gesture.up();
       await tester.pumpAndSettle();
 
       expect((await store.loadProfiles()).map((p) => p.id), [
@@ -276,6 +304,91 @@ void main() {
         'p4',
         'p2',
       ]);
+      expect(find.text('1 selected'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'continuous 1-second hold enters multi-select and drags without lifting',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(480, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final store = await seedProfiles(['p1', 'p2', 'p3', 'p4']);
+      await store.toggleProfileFavorite('p3');
+      await store.toggleProfileFavorite('p1');
+      // Order: [p3*, p1*, p2, p4].
+      await pumpApp(tester, store);
+
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+
+      final favStep =
+          tester.getCenter(find.text('Profile p1')).dy -
+          tester.getCenter(find.text('Profile p3')).dy;
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('Profile p3')),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('1 selected'), findsOneWidget);
+
+      // Keep holding and move past touch slop to drag p3 below p1 immediately.
+      const steps = 6;
+      final step = Offset(0, favStep + 20) / steps.toDouble();
+      for (var i = 0; i < steps; i++) {
+        await gesture.moveBy(step);
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect((await store.loadProfiles()).map((p) => p.id), [
+        'p1',
+        'p3',
+        'p2',
+        'p4',
+      ]);
+      expect(find.text('1 selected'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'quick vertical swipe on profile body scrolls list in multi-select mode',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(480, 640));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final store = await seedProfiles([
+        for (var i = 1; i <= 15; i++) 'p$i',
+      ]);
+      await pumpApp(tester, store);
+
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('Profile p1')),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      final sheetScrollable = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byType(CustomScrollView).last,
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(sheetScrollable.position.pixels, 0.0);
+      await tester.drag(
+        find.byKey(const ValueKey<String>('p2')),
+        const Offset(0, -300),
+      );
+      await tester.pumpAndSettle();
+
+      expect(sheetScrollable.position.pixels, greaterThan(100));
+      expect((await store.loadProfiles()).map((p) => p.id).first, 'p1');
     },
   );
 

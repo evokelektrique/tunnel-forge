@@ -2,7 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/gestures.dart' show kTouchSlop;
+import 'package:flutter/gestures.dart'
+    show
+        GestureDisposition,
+        GestureMultiDragStartCallback,
+        MultiDragGestureRecognizer,
+        MultiDragPointerState,
+        computeHitSlop,
+        kTouchSlop;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -674,13 +681,11 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     final cs = theme.colorScheme;
     final t = AppLocalizations.of(context);
     final canReorder = section.length > 1;
-    final handleColor = canReorder
-        ? cs.onSurfaceVariant
-        : cs.onSurface.withValues(alpha: 0.38);
 
     return SliverReorderableList(
       itemCount: section.length,
       proxyDecorator: _reorderProxyDecorator,
+      onReorderStart: (_) => unawaited(HapticFeedback.mediumImpact()),
       onReorderItem: (oldIndex, newIndex) => _profilesBloc.add(
         ProfilesGroupReordered(
           favoritesSection: favoritesSection,
@@ -700,117 +705,109 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
                   ? cs.onSurface.withValues(alpha: 0.38)
                   : cs.onSurfaceVariant);
 
-        return _HoldToSelectTile(
+        return ReorderableDelayedDragStartListener(
           key: ValueKey<String>(profile.id),
-          enabled: !state.loading,
-          multiSelect: isMultiSelect,
-          checked: isChecked,
-          active: isActive,
-          title: profile.displayName,
-          subtitle: profile.server,
-          onHoldTriggered: () => _enterMultiSelect(profile.id),
-          onTap: () {
-            if (isMultiSelect) {
-              _toggleSelection(profile.id, state.profiles);
-            } else {
-              _selectProfile(profile.id);
-            }
-          },
-          trailing: isMultiSelect
-              ? ReorderableDragStartListener(
-                  key: ValueKey<String>('drag_handle_${profile.id}'),
-                  index: i,
-                  enabled: canReorder && !state.loading,
-                  child: Semantics(
-                    label: t.reorderProfile,
-                    child: SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: Center(
-                        child: Icon(Icons.drag_handle, color: handleColor),
+          index: i,
+          enabled: isMultiSelect && canReorder && !state.loading,
+          child: _HoldToSelectTile(
+            index: i,
+            canReorder: canReorder,
+            enabled: !state.loading,
+            multiSelect: isMultiSelect,
+            checked: isChecked,
+            active: isActive,
+            title: profile.displayName,
+            subtitle: profile.server,
+            onHoldTriggered: () => _enterMultiSelect(profile.id),
+            onTap: () {
+              if (isMultiSelect) {
+                _toggleSelection(profile.id, state.profiles);
+              } else {
+                _selectProfile(profile.id);
+              }
+            },
+            trailing: isMultiSelect
+                ? null
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        key: ValueKey<String>('favorite_button_${profile.id}'),
+                        tooltip: profile.favorite
+                            ? t.removeFromFavorites
+                            : t.addToFavorites,
+                        constraints: _kCompactButtonConstraints,
+                        padding: _kCompactButtonPadding,
+                        icon: Icon(
+                          profile.favorite
+                              ? Icons.star_rounded
+                              : Icons.star_border_rounded,
+                          color: starColor,
+                        ),
+                        onPressed: state.loading
+                            ? null
+                            : () => _profilesBloc.add(
+                                ProfilesFavoriteToggled(profile.id),
+                              ),
                       ),
-                    ),
-                  ),
-                )
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      key: ValueKey<String>('favorite_button_${profile.id}'),
-                      tooltip: profile.favorite
-                          ? t.removeFromFavorites
-                          : t.addToFavorites,
-                      constraints: _kCompactButtonConstraints,
-                      padding: _kCompactButtonPadding,
-                      icon: Icon(
-                        profile.favorite
-                            ? Icons.star_rounded
-                            : Icons.star_border_rounded,
-                        color: starColor,
-                      ),
-                      onPressed: state.loading
-                          ? null
-                          : () => _profilesBloc.add(
-                              ProfilesFavoriteToggled(profile.id),
+                      PopupMenuButton<_ProfileTileAction>(
+                        tooltip: t.profileActions,
+                        enabled: !state.loading,
+                        onSelected: (action) async {
+                          switch (action) {
+                            case _ProfileTileAction.edit:
+                              _openEditor(profileId: profile.id);
+                              break;
+                            case _ProfileTileAction.copyShareLink:
+                              _profilesBloc.add(
+                                ProfilesCopyShareLinkRequested(profile.id),
+                              );
+                              break;
+                            case _ProfileTileAction.exportFile:
+                              _profilesBloc.add(
+                                ProfilesExportFileRequested(profile.id),
+                              );
+                              break;
+                            case _ProfileTileAction.delete:
+                              await _confirmDeleteProfiles([profile.id]);
+                              break;
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem<_ProfileTileAction>(
+                            value: _ProfileTileAction.edit,
+                            child: _PopupMenuIconLabel(
+                              icon: Icons.edit_outlined,
+                              label: t.editProfile,
                             ),
-                    ),
-                    PopupMenuButton<_ProfileTileAction>(
-                      tooltip: t.profileActions,
-                      enabled: !state.loading,
-                      onSelected: (action) async {
-                        switch (action) {
-                          case _ProfileTileAction.edit:
-                            _openEditor(profileId: profile.id);
-                            break;
-                          case _ProfileTileAction.copyShareLink:
-                            _profilesBloc.add(
-                              ProfilesCopyShareLinkRequested(profile.id),
-                            );
-                            break;
-                          case _ProfileTileAction.exportFile:
-                            _profilesBloc.add(
-                              ProfilesExportFileRequested(profile.id),
-                            );
-                            break;
-                          case _ProfileTileAction.delete:
-                            await _confirmDeleteProfiles([profile.id]);
-                            break;
-                        }
-                      },
-                      itemBuilder: (context) => [
-                        PopupMenuItem<_ProfileTileAction>(
-                          value: _ProfileTileAction.edit,
-                          child: _PopupMenuIconLabel(
-                            icon: Icons.edit_outlined,
-                            label: t.editProfile,
                           ),
-                        ),
-                        PopupMenuItem<_ProfileTileAction>(
-                          value: _ProfileTileAction.copyShareLink,
-                          child: _PopupMenuIconLabel(
-                            icon: Icons.link_outlined,
-                            label: t.copyShareLink,
+                          PopupMenuItem<_ProfileTileAction>(
+                            value: _ProfileTileAction.copyShareLink,
+                            child: _PopupMenuIconLabel(
+                              icon: Icons.link_outlined,
+                              label: t.copyShareLink,
+                            ),
                           ),
-                        ),
-                        PopupMenuItem<_ProfileTileAction>(
-                          value: _ProfileTileAction.exportFile,
-                          child: _PopupMenuIconLabel(
-                            icon: Icons.file_download_outlined,
-                            label: t.exportTfp,
+                          PopupMenuItem<_ProfileTileAction>(
+                            value: _ProfileTileAction.exportFile,
+                            child: _PopupMenuIconLabel(
+                              icon: Icons.file_download_outlined,
+                              label: t.exportTfp,
+                            ),
                           ),
-                        ),
-                        PopupMenuItem<_ProfileTileAction>(
-                          value: _ProfileTileAction.delete,
-                          child: _PopupMenuIconLabel(
-                            icon: Icons.delete_outline,
-                            label: t.deleteProfile,
-                            color: cs.error,
+                          PopupMenuItem<_ProfileTileAction>(
+                            value: _ProfileTileAction.delete,
+                            child: _PopupMenuIconLabel(
+                              icon: Icons.delete_outline,
+                              label: t.deleteProfile,
+                              color: cs.error,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+                        ],
+                      ),
+                    ],
+                  ),
+          ),
         );
       },
     );
@@ -972,7 +969,8 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
 
 class _HoldToSelectTile extends StatefulWidget {
   const _HoldToSelectTile({
-    super.key,
+    required this.index,
+    required this.canReorder,
     required this.enabled,
     required this.multiSelect,
     required this.checked,
@@ -986,6 +984,8 @@ class _HoldToSelectTile extends StatefulWidget {
 
   static const Duration holdDuration = Duration(seconds: 1);
 
+  final int index;
+  final bool canReorder;
   final bool enabled;
   final bool multiSelect;
   final bool checked;
@@ -1006,6 +1006,7 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
   Timer? _holdTimer;
   int? _activePointer;
   Offset? _downPosition;
+  bool _usingRecognizer = false;
   final Set<int> _ignoredPointers = <int>{};
   bool _suppressNextTap = false;
 
@@ -1021,7 +1022,9 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
   @override
   void didUpdateWidget(covariant _HoldToSelectTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.enabled || widget.multiSelect) {
+    if (!widget.enabled) {
+      _cancelHold();
+    } else if (widget.multiSelect && !_usingRecognizer) {
       _cancelHold();
     }
   }
@@ -1044,11 +1047,27 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
     widget.onHoldTriggered();
   }
 
+  void _completeHoldFromRecognizer() {
+    if (!mounted || !widget.enabled || widget.multiSelect) return;
+    _activePointer = null;
+    _downPosition = null;
+    _usingRecognizer = false;
+    _holdController.reset();
+    unawaited(HapticFeedback.mediumImpact());
+    widget.onHoldTriggered();
+  }
+
+  void _cancelHoldFromRecognizer() {
+    if (!mounted) return;
+    _cancelHold();
+  }
+
   void _cancelHold() {
     _holdTimer?.cancel();
     _holdTimer = null;
     _activePointer = null;
     _downPosition = null;
+    _usingRecognizer = false;
     if (_holdController.isAnimating || _holdController.value > 0) {
       _holdController.reset();
     }
@@ -1064,13 +1083,36 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
     if (!widget.enabled || widget.multiSelect || _activePointer != null) return;
     _activePointer = event.pointer;
     _downPosition = event.position;
+    final reorderableList = widget.canReorder
+        ? SliverReorderableList.maybeOf(context)
+        : null;
     _holdTimer?.cancel();
+    if (reorderableList != null) {
+      _usingRecognizer = true;
+      _holdController.forward(from: 0);
+      reorderableList.startItemDragReorder(
+        index: widget.index,
+        event: event,
+        recognizer: _HoldThenMoveDragRecognizer(
+          delay: _HoldToSelectTile.holdDuration,
+          onHoldTriggered: _completeHoldFromRecognizer,
+          onHoldCancelled: _cancelHoldFromRecognizer,
+          debugOwner: this,
+        )..gestureSettings = MediaQuery.maybeGestureSettingsOf(context),
+      );
+      return;
+    }
+    _usingRecognizer = false;
     _holdTimer = Timer(_HoldToSelectTile.holdDuration, _completeHold);
     _holdController.forward(from: 0);
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
-    if (event.pointer != _activePointer || _downPosition == null) return;
+    if (_usingRecognizer ||
+        event.pointer != _activePointer ||
+        _downPosition == null) {
+      return;
+    }
     if ((event.position - _downPosition!).distance > kTouchSlop) {
       _cancelHold();
     }
@@ -1079,7 +1121,13 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
   void _handlePointerEnd(PointerEvent event) {
     _ignoredPointers.remove(event.pointer);
     if (event.pointer == _activePointer) {
-      _cancelHold();
+      if (_usingRecognizer) {
+        _activePointer = null;
+        _downPosition = null;
+        _usingRecognizer = false;
+      } else {
+        _cancelHold();
+      }
     }
   }
 
@@ -1158,6 +1206,118 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
         ],
       ),
     );
+  }
+}
+
+/// Recognizes a 1 s hold to enter multi-select and starts dragging only after
+/// the pointer moves past touch slop so lifting immediately causes no bounce.
+class _HoldThenMoveDragRecognizer extends MultiDragGestureRecognizer {
+  _HoldThenMoveDragRecognizer({
+    required this.delay,
+    required this.onHoldTriggered,
+    required this.onHoldCancelled,
+    super.debugOwner,
+  });
+
+  final Duration delay;
+  final VoidCallback onHoldTriggered;
+  final VoidCallback onHoldCancelled;
+
+  @override
+  MultiDragPointerState createNewPointerState(PointerDownEvent event) {
+    return _HoldThenMovePointerState(
+      event.position,
+      event.kind,
+      gestureSettings,
+      delay: delay,
+      onHoldTriggered: onHoldTriggered,
+      onHoldCancelled: onHoldCancelled,
+    );
+  }
+
+  @override
+  String get debugDescription => 'hold then move multidrag';
+}
+
+class _HoldThenMovePointerState extends MultiDragPointerState {
+  _HoldThenMovePointerState(
+    super.initialPosition,
+    super.kind,
+    super.gestureSettings, {
+    required Duration delay,
+    required this.onHoldTriggered,
+    required this.onHoldCancelled,
+  }) {
+    _timer = Timer(delay, _delayPassed);
+  }
+
+  final VoidCallback onHoldTriggered;
+  final VoidCallback onHoldCancelled;
+
+  Timer? _timer;
+  GestureMultiDragStartCallback? _starter;
+  bool _holdCompleted = false;
+  bool _notifiedCancel = false;
+  Offset _deltaAtHoldComplete = Offset.zero;
+
+  void _delayPassed() {
+    _timer = null;
+    _holdCompleted = true;
+    _deltaAtHoldComplete = pendingDelta ?? Offset.zero;
+    resolve(GestureDisposition.accepted);
+    onHoldTriggered();
+  }
+
+  void _cancelHoldBeforeCompletion() {
+    _timer?.cancel();
+    _timer = null;
+    if (!_holdCompleted && !_notifiedCancel) {
+      _notifiedCancel = true;
+      onHoldCancelled();
+    }
+  }
+
+  @override
+  void accepted(GestureMultiDragStartCallback starter) {
+    _starter = starter;
+  }
+
+  @override
+  void checkForResolutionAfterMove() {
+    final delta = pendingDelta;
+    if (delta == null) return;
+    final slop = computeHitSlop(kind, gestureSettings);
+
+    if (!_holdCompleted) {
+      if (_timer != null && delta.distance > slop) {
+        resolve(GestureDisposition.rejected);
+        _cancelHoldBeforeCompletion();
+      }
+      return;
+    }
+
+    if (_starter != null) {
+      final postHoldDelta = delta - _deltaAtHoldComplete;
+      if (delta.distance > slop || postHoldDelta.distance > slop) {
+        final starter = _starter!;
+        _starter = null;
+        starter(initialPosition);
+      }
+    }
+  }
+
+  @override
+  void rejected() {
+    _starter = null;
+    _cancelHoldBeforeCompletion();
+    super.rejected();
+  }
+
+  @override
+  void dispose() {
+    _starter = null;
+    _cancelHoldBeforeCompletion();
+    super.dispose();
   }
 }
 

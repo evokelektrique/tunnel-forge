@@ -526,8 +526,6 @@ extension AppStrings on AppLocalizations {
       AppText.pick('Add to favorites', 'افزودن به برگزیده‌ها');
   String get removeFromFavorites =>
       AppText.pick('Remove from favorites', 'حذف از برگزیده‌ها');
-  String get reorderProfile =>
-      AppText.pick('Reorder profile', 'جابه‌جایی پروفایل');
   String favoriteLimitReached(int max) => AppText.pick(
     'You can favorite up to $max profiles',
     'حداکثر $max پروفایل را می‌توانید برگزیده کنید',
