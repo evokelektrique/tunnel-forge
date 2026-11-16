@@ -32,25 +32,34 @@ typedef VpnBatteryOptimizationStatusCallback =
 class VpnClient {
   VpnClient({
     MethodChannel? channel,
+    MethodChannel? quickSettingsChannel,
     VpnTunnelHostCallback? onTunnelState,
     VpnEngineLogCallback? onEngineLog,
     VpnProxyExposureCallback? onProxyExposureChanged,
     VpnBatteryOptimizationStatusCallback? onBatteryOptimizationStatusChanged,
+    VoidCallback? onQuickSettingsConnect,
   }) : _channel = channel ?? MethodChannel(VpnContract.channel),
+       _quickSettingsChannel =
+           quickSettingsChannel ??
+           const MethodChannel(QuickSettingsContract.channel),
        _onTunnelState = onTunnelState,
        _onEngineLog = onEngineLog,
        _onProxyExposureChanged = onProxyExposureChanged,
        _onBatteryOptimizationStatusChanged =
-           onBatteryOptimizationStatusChanged {
+           onBatteryOptimizationStatusChanged,
+       _onQuickSettingsConnect = onQuickSettingsConnect {
     _channel.setMethodCallHandler(_handleHostCall);
+    _quickSettingsChannel.setMethodCallHandler(_handleQuickSettingsCall);
   }
 
   final MethodChannel _channel;
+  final MethodChannel _quickSettingsChannel;
   final VpnTunnelHostCallback? _onTunnelState;
   final VpnEngineLogCallback? _onEngineLog;
   final VpnProxyExposureCallback? _onProxyExposureChanged;
   final VpnBatteryOptimizationStatusCallback?
   _onBatteryOptimizationStatusChanged;
+  final VoidCallback? _onQuickSettingsConnect;
 
   Future<dynamic> _handleHostCall(MethodCall call) async {
     if (call.method == VpnContract.onTunnelState) {
@@ -101,6 +110,12 @@ class VpnClient {
     }
   }
 
+  Future<dynamic> _handleQuickSettingsCall(MethodCall call) async {
+    if (call.method == QuickSettingsContract.onConnect) {
+      _onQuickSettingsConnect?.call();
+    }
+  }
+
   TunnelHostUpdate? _parseTunnelHostUpdate(Object? raw) {
     if (raw is! Map) return null;
     final state = raw[VpnContract.argTunnelState]?.toString() ?? '';
@@ -143,6 +158,7 @@ class VpnClient {
   /// Clears the inbound method handler; call when the owning widget is disposed.
   void dispose() {
     _channel.setMethodCallHandler(null);
+    _quickSettingsChannel.setMethodCallHandler(null);
   }
 
   Future<bool> prepareVpn() async {
@@ -249,19 +265,18 @@ class VpnClient {
     }
   }
 
-  Future<void> connect({
-    String attemptId = '',
+  Map<String, Object?> _buildTunnelConfigPayload({
     required String server,
     String? profileName,
-    ConnectionMode connectionMode = ConnectionMode.vpnTunnel,
-    String user = '',
-    String password = '',
-    String psk = '',
-    bool dnsAutomatic = true,
-    List<DnsServerConfig> dnsServers = const [],
-    int mtu = Profile.defaultVpnMtu,
-    SplitTunnelSettings splitTunnelSettings = const SplitTunnelSettings(),
-    ProxySettings proxySettings = const ProxySettings(),
+    required ConnectionMode connectionMode,
+    required String user,
+    required String password,
+    required String psk,
+    required bool dnsAutomatic,
+    required List<DnsServerConfig> dnsServers,
+    required int mtu,
+    required SplitTunnelSettings splitTunnelSettings,
+    required ProxySettings proxySettings,
   }) {
     final mtuClamped = Profile.normalizeMtu(mtu);
     // Flutter keeps DNS slot ordering explicit so Android can preserve DNS 1
@@ -276,8 +291,7 @@ class VpnClient {
           },
         )
         .toList(growable: false);
-    return _channel.invokeMethod<void>(VpnContract.connect, <String, Object?>{
-      if (attemptId.isNotEmpty) VpnContract.argAttemptId: attemptId,
+    return <String, Object?>{
       VpnContract.argServer: server,
       if (profileName != null && profileName.isNotEmpty)
         VpnContract.argProfileName: profileName,
@@ -305,7 +319,87 @@ class VpnClient {
         fallback: ProxySettings.defaultSocksPort,
       ),
       VpnContract.argProxyAllowLan: proxySettings.allowLanConnections,
+    };
+  }
+
+  Future<void> connect({
+    String attemptId = '',
+    required String server,
+    String? profileName,
+    ConnectionMode connectionMode = ConnectionMode.vpnTunnel,
+    String user = '',
+    String password = '',
+    String psk = '',
+    bool dnsAutomatic = true,
+    List<DnsServerConfig> dnsServers = const [],
+    int mtu = Profile.defaultVpnMtu,
+    SplitTunnelSettings splitTunnelSettings = const SplitTunnelSettings(),
+    ProxySettings proxySettings = const ProxySettings(),
+  }) {
+    return _channel.invokeMethod<void>(VpnContract.connect, <String, Object?>{
+      if (attemptId.isNotEmpty) VpnContract.argAttemptId: attemptId,
+      ..._buildTunnelConfigPayload(
+        server: server,
+        profileName: profileName,
+        connectionMode: connectionMode,
+        user: user,
+        password: password,
+        psk: psk,
+        dnsAutomatic: dnsAutomatic,
+        dnsServers: dnsServers,
+        mtu: mtu,
+        splitTunnelSettings: splitTunnelSettings,
+        proxySettings: proxySettings,
+      ),
     });
+  }
+
+  /// Syncs the current profile and global settings to Android's Quick Settings store.
+  Future<void> syncQuickSettingsProfile(
+    QuickSettingsProfileConfig? config,
+  ) async {
+    try {
+      final payload = config == null
+          ? null
+          : <String, Object?>{
+              VpnContract.argProfileId: config.profileId,
+              VpnContract.argSecretsMissing: config.secretsMissing,
+              ..._buildTunnelConfigPayload(
+                server: config.server,
+                profileName: config.profileName,
+                connectionMode: config.connectionMode,
+                user: config.user,
+                password: config.password,
+                psk: config.psk,
+                dnsAutomatic: config.dnsAutomatic,
+                dnsServers: config.dnsServers,
+                mtu: config.mtu,
+                splitTunnelSettings: config.splitTunnelSettings,
+                proxySettings: config.proxySettings,
+              ),
+            };
+      await _quickSettingsChannel.invokeMethod<void>(
+        QuickSettingsContract.syncProfile,
+        payload,
+      );
+    } on PlatformException {
+      // Best-effort native mirror; in-app ProfileStore remains authoritative.
+    } on MissingPluginException {
+      // Unsupported in widget tests / non-Android hosts.
+    }
+  }
+
+  Future<bool> consumePendingQuickSettingsConnect() async {
+    try {
+      final raw = await _quickSettingsChannel.invokeMethod<Object>(
+        QuickSettingsContract.consumePendingConnect,
+      );
+      return raw == true;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
   }
 
   /// Launcher icon as PNG bytes, or null (Android; missing plugin returns null).

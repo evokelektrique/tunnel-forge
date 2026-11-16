@@ -75,9 +75,12 @@ abstract class TunnelRepository {
   Stream<EngineLogMessage> get engineLogs;
   Stream<ProxyExposure> get proxyExposures;
   Stream<BatteryOptimizationStatus> get batteryOptimizationStatuses;
+  Stream<void> get quickSettingsConnectRequests;
 
   Future<bool> prepareVpn();
   Future<TunnelRuntimeState> getRuntimeState();
+  Future<void> syncQuickSettingsProfile(QuickSettingsProfileConfig? config);
+  Future<bool> consumePendingQuickSettingsConnect();
   Future<void> connect(TunnelConnectRequest request);
   Future<void> disconnect({
     required ConnectionMode connectionMode,

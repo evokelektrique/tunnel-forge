@@ -169,7 +169,18 @@ class _FakeTunnelRepository implements TunnelRepository {
       batteryOptimizationStatusController.stream;
 
   @override
+  Stream<void> get quickSettingsConnectRequests => const Stream.empty();
+
+  @override
   Stream<TunnelHostUpdate> get tunnelStates => const Stream.empty();
+
+  @override
+  Future<void> syncQuickSettingsProfile(
+    QuickSettingsProfileConfig? config,
+  ) async {}
+
+  @override
+  Future<bool> consumePendingQuickSettingsConnect() async => false;
 
   @override
   Future<void> connect(TunnelConnectRequest request) async {}

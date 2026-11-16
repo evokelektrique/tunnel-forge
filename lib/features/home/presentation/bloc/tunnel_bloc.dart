@@ -33,6 +33,15 @@ final class TunnelConnectRequested extends TunnelEvent {
   List<Object?> get props => [request];
 }
 
+final class TunnelReconnectRequested extends TunnelEvent {
+  const TunnelReconnectRequested(this.request);
+
+  final TunnelConnectRequest request;
+
+  @override
+  List<Object?> get props => [request];
+}
+
 final class TunnelDisconnectRequested extends TunnelEvent {
   const TunnelDisconnectRequested();
 }
@@ -175,6 +184,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     on<TunnelStarted>(_onStarted);
     on<TunnelRuntimeSyncRequested>(_onRuntimeSyncRequested);
     on<TunnelConnectRequested>(_onConnectRequested);
+    on<TunnelReconnectRequested>(_onReconnectRequested);
     on<TunnelDisconnectRequested>(_onDisconnectRequested);
     on<TunnelHostStateReceived>(_onHostStateReceived);
     on<TunnelEngineLogReceived>(_onEngineLogReceived);
@@ -246,7 +256,32 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         (state.awaitingTunnel && !state.tunnelUp)) {
       return;
     }
-    final request = event.request;
+    await _startConnect(event.request, emit);
+  }
+
+  Future<void> _onReconnectRequested(
+    TunnelReconnectRequested event,
+    Emitter<TunnelState> emit,
+  ) async {
+    final runtimeBootstrap = _runtimeBootstrapFuture;
+    if (runtimeBootstrap != null) {
+      await runtimeBootstrap;
+    }
+    if (state.busy || state.stopRequested) {
+      return;
+    }
+    final hadActiveSession = state.tunnelUp || state.awaitingTunnel;
+    await _startConnect(
+      event.request,
+      emit,
+      replaceActiveSession: hadActiveSession,
+    );
+  }
+
+  bool _validateConnectRequest(
+    TunnelConnectRequest request,
+    Emitter<TunnelState> emit,
+  ) {
     final proxyMode = request.connectionMode == ConnectionMode.proxyOnly;
     final host = request.server.trim();
     if (!proxyMode && host.isEmpty) {
@@ -259,7 +294,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         error: true,
       );
       _logWarning('Connect blocked: empty server', tag: 'tunnel');
-      return;
+      return false;
     }
     if (proxyMode && request.activeProfileId == null) {
       _toast(
@@ -274,7 +309,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'Connect blocked: proxy mode requires a saved profile',
         tag: 'tunnel',
       );
-      return;
+      return false;
     }
     if (!ProxySettings.isAllowedPort(request.proxySettings.httpPort) ||
         !ProxySettings.isAllowedPort(request.proxySettings.socksPort)) {
@@ -290,7 +325,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'Connect blocked: invalid proxy ports http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort}',
         tag: 'tunnel',
       );
-      return;
+      return false;
     }
     if (request.proxySettings.httpPort == request.proxySettings.socksPort) {
       _toast(
@@ -305,7 +340,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'Connect blocked: proxy ports collide http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort}',
         tag: 'tunnel',
       );
-      return;
+      return false;
     }
     final splitTunnelSettings = request.splitTunnelSettings;
     if (!proxyMode &&
@@ -324,13 +359,36 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'Connect blocked: inclusive split tunneling is enabled with an empty app list',
         tag: 'tunnel',
       );
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _startConnect(
+    TunnelConnectRequest request,
+    Emitter<TunnelState> emit, {
+    bool replaceActiveSession = false,
+  }) async {
+    if (!_validateConnectRequest(request, emit)) {
       return;
     }
+    final previousAttemptId = state.activeAttemptId ?? '';
+    final previousConnectionMode = state.connectionMode;
+    if (replaceActiveSession) {
+      _cancelAwaitTimer();
+      _cancelDisconnectTimer();
+    }
+    final proxyMode = request.connectionMode == ConnectionMode.proxyOnly;
+    final host = request.server.trim();
+    final splitTunnelSettings = request.splitTunnelSettings;
 
     final attemptId = _newAttemptId();
     emit(
       state.copyWith(
         busy: true,
+        tunnelUp: replaceActiveSession ? false : null,
+        awaitingTunnel: replaceActiveSession ? false : null,
+        recoveryPhase: replaceActiveSession ? TunnelRecoveryPhase.none : null,
         connectionMode: request.connectionMode,
         activeAttemptId: attemptId,
         connectStartedAt: DateTime.now(),
@@ -353,6 +411,16 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
             'VPN permission denied or cancelled attempt=$attemptId',
             tag: 'tunnel',
           );
+          if (replaceActiveSession) {
+            try {
+              await _tunnelRepository.disconnect(
+                connectionMode: previousConnectionMode,
+                attemptId: previousAttemptId,
+              );
+            } on PlatformException {
+              // Best-effort teardown when permission was revoked mid-session.
+            }
+          }
           _toast(
             emit,
             AppText.pick(
@@ -517,6 +585,13 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     final proxyMode = state.connectionMode == ConnectionMode.proxyOnly;
     if (update.attemptId.isNotEmpty) {
       if (currentAttemptId == null) {
+        if (!state.busy &&
+            !state.stopRequested &&
+            update.attemptId.startsWith('qs-') &&
+            !_isTerminalTunnelState(update.state)) {
+          add(const TunnelRuntimeSyncRequested());
+          return;
+        }
         _logWarning(
           'Ignoring stale Android event without active attempt: state=${update.state} attempt=${update.attemptId}',
           source: LogSource.kotlin,

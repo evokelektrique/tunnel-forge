@@ -35,7 +35,9 @@ object VpnContract {
     const val ARG_DNS_SERVER_HOST = "host"
     const val ARG_DNS_SERVER_PROTOCOL = "protocol"
     const val ARG_MTU = "mtu"
+    const val ARG_PROFILE_ID = "profileId"
     const val ARG_PROFILE_NAME = "profileName"
+    const val ARG_SECRETS_MISSING = "secretsMissing"
     const val ARG_CONNECTION_MODE = "connectionMode"
     const val ARG_PROXY_HTTP_PORT = "proxyHttpPort"
     const val ARG_PROXY_SOCKS_PORT = "proxySocksPort"
@@ -93,4 +95,13 @@ object VpnContract {
     const val TUNNEL_RECONNECTING = "reconnecting"
     const val TUNNEL_FAILED = "failed"
     const val TUNNEL_STOPPED = "stopped"
+}
+
+/** Method-channel contract for Android Quick Settings tile sync and launch. */
+object QuickSettingsContract {
+    const val METHOD_CHANNEL = "io.github.evokelektrique.tunnelforge/quickSettings"
+
+    const val SYNC_PROFILE = "syncQuickSettingsProfile"
+    const val CONSUME_PENDING_CONNECT = "consumePendingQuickSettingsConnect"
+    const val ON_CONNECT = "onQuickSettingsConnect"
 }

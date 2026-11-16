@@ -158,6 +158,15 @@ class DnsServerConfig {
     'host': host,
     'protocol': protocol.jsonValue,
   };
+
+  @override
+  bool operator ==(Object other) =>
+      other is DnsServerConfig &&
+      host == other.host &&
+      protocol == other.protocol;
+
+  @override
+  int get hashCode => Object.hash(host, protocol);
 }
 
 /// Global local-proxy settings shared across VPN and local-proxy modes.

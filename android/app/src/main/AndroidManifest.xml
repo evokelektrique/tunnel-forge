@@ -47,6 +47,9 @@
                 <data android:mimeType="application/vnd.tunnelforge.profile+json" />
                 <data android:scheme="content" android:pathPattern=".*\\.tfp" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
         </activity>
 
         <service
@@ -69,6 +72,17 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-initiated local proxy session." />
+        </service>
+
+        <service
+            android:name=".TunnelQuickSettingsTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_qs_tunnel"
+            android:label="@string/qs_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
         </service>
 
         <meta-data

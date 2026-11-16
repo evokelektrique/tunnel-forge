@@ -44,8 +44,11 @@ class MainActivity : FlutterActivity() {
     private var awaitingBatteryOptimizationReturn = false
     private var pendingConnectIntent: Intent? = null
     private var vpnChannel: MethodChannel? = null
+    private var quickSettingsChannel: MethodChannel? = null
     private var profileTransferChannel: MethodChannel? = null
     private var profileTransferConsumerReady = false
+    private var quickSettingsConnectConsumerReady = false
+    private var pendingQuickSettingsConnect = false
     private val pendingProfileTransfers = mutableListOf<Map<String, String?>>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val diagnosticsExecutor =
@@ -67,8 +70,34 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         BatteryOptimizationLogPolicy.shared.resetSession()
+        QuickSettingsTileController.init(this)
         val vpnChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VpnContract.METHOD_CHANNEL)
         this.vpnChannel = vpnChannel
+        quickSettingsConnectConsumerReady = false
+        quickSettingsChannel =
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                QuickSettingsContract.METHOD_CHANNEL,
+            ).also { channel ->
+                channel.setMethodCallHandler { call, result ->
+                    when (call.method) {
+                        QuickSettingsContract.SYNC_PROFILE -> {
+                            val args = call.arguments as? Map<*, *>
+                            val config = args?.let { TunnelLaunchConfig.fromMap(it, requireNonBlankServer = true) }
+                            QuickSettingsConfigStore.create(this).save(config)
+                            QuickSettingsTileController.requestUpdate(this)
+                            result.success(null)
+                        }
+                        QuickSettingsContract.CONSUME_PENDING_CONNECT -> {
+                            quickSettingsConnectConsumerReady = true
+                            val pending = pendingQuickSettingsConnect
+                            pendingQuickSettingsConnect = false
+                            result.success(pending)
+                        }
+                        else -> result.notImplemented()
+                    }
+                }
+            }
         val appInfoChannel =
             MethodChannel(
                 flutterEngine.dartExecutor.binaryMessenger,
@@ -172,6 +201,7 @@ class MainActivity : FlutterActivity() {
             }
         }
         handleProfileTransferIntent(intent)
+        handleQuickSettingsConnectIntent(intent)
         VpnTunnelEvents.attach(vpnChannel)
         vpnChannel.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -225,80 +255,30 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     val attemptId = args[VpnContract.ARG_ATTEMPT_ID] as? String ?: ""
-                    val server = args[VpnContract.ARG_SERVER] as? String
-                    if (server.isNullOrBlank()) {
+                    val rawServer = args[VpnContract.ARG_SERVER] as? String
+                    val config = TunnelLaunchConfig.fromMap(args, requireNonBlankServer = true)
+                    if (config == null || rawServer == null) {
                         AppLog.e(TAG, "vpn_call connect rejected bad_args (server required) attempt=$attemptId")
                         result.error("bad_args", "server required", null)
                         return@setMethodCallHandler
                     }
-                    val user = args[VpnContract.ARG_USER] as? String ?: ""
-                    val password = args[VpnContract.ARG_PASSWORD] as? String ?: ""
-                    val psk = args[VpnContract.ARG_PSK] as? String ?: ""
-                    val dnsAutomatic = args[VpnContract.ARG_DNS_AUTOMATIC] as? Boolean ?: true
-                    val dnsServers = parseDnsServers(args[VpnContract.ARG_DNS_SERVERS])
-                    val mtuRaw = args[VpnContract.ARG_MTU]
-                    val mtu = TunnelVpnService.sanitizeMtu(
-                        when (mtuRaw) {
-                            is Int -> mtuRaw
-                            is Long -> mtuRaw.toInt()
-                            is Number -> mtuRaw.toInt()
-                            else -> TunnelVpnService.DEFAULT_TUN_MTU
-                        },
-                    )
-                    val profileName = (args[VpnContract.ARG_PROFILE_NAME] as? String)?.trim().orEmpty()
-                    val connectionModeRaw = args[VpnContract.ARG_CONNECTION_MODE] as? String
-                    val connectionMode =
-                        if (connectionModeRaw == VpnContract.MODE_PROXY_ONLY) {
-                            VpnContract.MODE_PROXY_ONLY
-                        } else {
-                            VpnContract.MODE_VPN_TUNNEL
-                        }
-                    val splitTunnelEnabled =
-                        args[VpnContract.ARG_SPLIT_TUNNEL_ENABLED] as? Boolean ?: false
-                    val splitTunnelModeRaw = args[VpnContract.ARG_SPLIT_TUNNEL_MODE] as? String
-                    val splitTunnelMode =
-                        if (splitTunnelModeRaw == VpnContract.SPLIT_TUNNEL_MODE_EXCLUSIVE) {
-                            VpnContract.SPLIT_TUNNEL_MODE_EXCLUSIVE
-                        } else {
-                            VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE
-                        }
-                    val inclusivePackages = mutableListOf<String>()
-                    val inclusiveRaw = args[VpnContract.ARG_SPLIT_TUNNEL_INCLUSIVE_PACKAGES]
-                    if (inclusiveRaw is List<*>) {
-                        for (e in inclusiveRaw) {
-                            val s = e as? String
-                            if (!s.isNullOrBlank()) inclusivePackages.add(s.trim())
-                        }
-                    }
-                    val exclusivePackages = mutableListOf<String>()
-                    val exclusiveRaw = args[VpnContract.ARG_SPLIT_TUNNEL_EXCLUSIVE_PACKAGES]
-                    if (exclusiveRaw is List<*>) {
-                        for (e in exclusiveRaw) {
-                            val s = e as? String
-                            if (!s.isNullOrBlank()) exclusivePackages.add(s.trim())
-                        }
-                    }
-                    val proxyHttpPort = sanitizePort(args[VpnContract.ARG_PROXY_HTTP_PORT], ProxyTunnelService.DEFAULT_HTTP_PORT)
-                    val proxySocksPort = sanitizePort(args[VpnContract.ARG_PROXY_SOCKS_PORT], ProxyTunnelService.DEFAULT_SOCKS_PORT)
-                    val proxyAllowLan = args[VpnContract.ARG_PROXY_ALLOW_LAN] as? Boolean ?: false
-                    if (proxyHttpPort == proxySocksPort) {
+                    if (config.proxyHttpPort == config.proxySocksPort) {
                         AppLog.e(TAG, "vpn_call connect rejected bad_args (duplicate proxy ports) attempt=$attemptId")
                         result.error("bad_args", "HTTP and SOCKS5 ports must differ", null)
                         return@setMethodCallHandler
                     }
-                    val serverTrim = server.trim()
-                    val hasScheme = serverTrim.contains("://")
-                    val hasPort = serverTrim.count { it == ':' } == 1 && !serverTrim.contains("::")
-                    if (serverTrim != server) {
+                    val hasScheme = config.server.contains("://")
+                    val hasPort = config.server.count { it == ':' } == 1 && !config.server.contains("::")
+                    if (config.server != rawServer) {
                         AppLog.w(TAG, "vpn_call connect server had leading/trailing whitespace attempt=$attemptId")
                     }
                     if (hasScheme) {
-                        AppLog.w(TAG, "vpn_call connect server looks like URL; expected host only attempt=$attemptId server=$serverTrim")
+                        AppLog.w(TAG, "vpn_call connect server looks like URL; expected host only attempt=$attemptId server=${config.server}")
                     }
                     if (hasPort) {
-                        AppLog.w(TAG, "vpn_call connect server includes port; expected host only attempt=$attemptId server=$serverTrim")
+                        AppLog.w(TAG, "vpn_call connect server includes port; expected host only attempt=$attemptId server=${config.server}")
                     }
-                    if (connectionMode == VpnContract.MODE_VPN_TUNNEL) {
+                    if (config.connectionMode == VpnContract.MODE_VPN_TUNNEL) {
                         val prep = VpnService.prepare(this)
                         if (prep != null) {
                             AppLog.e(TAG, "vpn_call connect rejected vpn_permission attempt=$attemptId")
@@ -308,59 +288,10 @@ class MainActivity : FlutterActivity() {
                     }
                     AppLog.d(
                         TAG,
-                        "vpn_call connect start attempt=$attemptId server=$serverTrim userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$mtu mode=$connectionMode splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages.size} exclusiveApps=${exclusivePackages.size} http=$proxyHttpPort socks=$proxySocksPort lan=$proxyAllowLan",
+                        "vpn_call connect start attempt=$attemptId server=${config.server} userPresent=${config.user.isNotEmpty()} pskPresent=${config.psk.isNotEmpty()} dnsMode=${if (config.dnsAutomatic) "automatic" else "manual"} dns=${config.dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${config.mtu} mode=${config.connectionMode} splitTunnelEnabled=${config.splitTunnelEnabled} splitTunnelMode=${config.splitTunnelMode} inclusiveApps=${config.inclusivePackages.size} exclusiveApps=${config.exclusivePackages.size} http=${config.proxyHttpPort} socks=${config.proxySocksPort} lan=${config.proxyAllowLan}",
                     )
-                    val cleanupTargets = VpnConnectModeSwitchPolicy.cleanupTargetsForStart(connectionMode)
-                    if (cleanupTargets.stopVpn) {
-                        TunnelVpnService.stopActiveSessionForModeSwitch("starting $connectionMode")
-                    }
-                    if (cleanupTargets.stopProxy) {
-                        ProxyTunnelService.stopActiveSessionForModeSwitch("starting $connectionMode")
-                    }
-                    val intent =
-                        if (connectionMode == VpnContract.MODE_PROXY_ONLY) {
-                            Intent(this, ProxyTunnelService::class.java).apply {
-                                action = ProxyTunnelService.ACTION_START
-                                putExtra(ProxyTunnelService.EXTRA_ATTEMPT_ID, attemptId)
-                                putExtra(ProxyTunnelService.EXTRA_SERVER, serverTrim)
-                                putExtra(ProxyTunnelService.EXTRA_USER, user)
-                                putExtra(ProxyTunnelService.EXTRA_PASSWORD, password)
-                                putExtra(ProxyTunnelService.EXTRA_PSK, psk)
-                                putExtra(ProxyTunnelService.EXTRA_DNS_AUTOMATIC, dnsAutomatic)
-                                putDnsServerExtras(this, dnsServers)
-                                putExtra(ProxyTunnelService.EXTRA_MTU, mtu)
-                                putExtra(ProxyTunnelService.EXTRA_PROFILE_NAME, profileName)
-                                putExtra(ProxyTunnelService.EXTRA_PROXY_HTTP_PORT, proxyHttpPort)
-                                putExtra(ProxyTunnelService.EXTRA_PROXY_SOCKS_PORT, proxySocksPort)
-                                putExtra(ProxyTunnelService.EXTRA_PROXY_ALLOW_LAN, proxyAllowLan)
-                            }
-                        } else {
-                            Intent(this, TunnelVpnService::class.java).apply {
-                                action = TunnelVpnService.ACTION_START
-                                putExtra(TunnelVpnService.EXTRA_ATTEMPT_ID, attemptId)
-                                putExtra(TunnelVpnService.EXTRA_SERVER, serverTrim)
-                                putExtra(TunnelVpnService.EXTRA_USER, user)
-                                putExtra(TunnelVpnService.EXTRA_PASSWORD, password)
-                                putExtra(TunnelVpnService.EXTRA_PSK, psk)
-                                putExtra(TunnelVpnService.EXTRA_DNS_AUTOMATIC, dnsAutomatic)
-                                putDnsServerExtras(this, dnsServers)
-                                putExtra(TunnelVpnService.EXTRA_MTU, mtu)
-                                putExtra(TunnelVpnService.EXTRA_PROFILE_NAME, profileName)
-                                putExtra(TunnelVpnService.EXTRA_SPLIT_TUNNEL_ENABLED, splitTunnelEnabled)
-                                putExtra(TunnelVpnService.EXTRA_SPLIT_TUNNEL_MODE, splitTunnelMode)
-                                putExtra(TunnelVpnService.EXTRA_PROXY_HTTP_PORT, proxyHttpPort)
-                                putExtra(TunnelVpnService.EXTRA_PROXY_SOCKS_PORT, proxySocksPort)
-                                putExtra(TunnelVpnService.EXTRA_PROXY_ALLOW_LAN, proxyAllowLan)
-                                putStringArrayListExtra(
-                                    TunnelVpnService.EXTRA_SPLIT_TUNNEL_INCLUSIVE_PACKAGES,
-                                    ArrayList(inclusivePackages),
-                                )
-                                putStringArrayListExtra(
-                                    TunnelVpnService.EXTRA_SPLIT_TUNNEL_EXCLUSIVE_PACKAGES,
-                                    ArrayList(exclusivePackages),
-                                )
-                            }
-                        }
+                    TunnelServiceLauncher.prepareForStart(config.connectionMode)
+                    val intent = TunnelServiceLauncher.buildStartIntent(this, config, attemptId)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPostNotificationsPermission()) {
                         if (notificationPermissionResult != null) {
                             result.error("notification_permission_pending", "Notification permission request already in progress", null)
@@ -440,26 +371,7 @@ class MainActivity : FlutterActivity() {
                         TAG,
                         "vpn_call disconnect dispatched action=ACTION_STOP mode=${rawMode.orEmpty().ifEmpty { "all" }} attempt=$attemptId vpn=${targets.stopVpn} proxy=${targets.stopProxy}",
                     )
-                    if (targets.stopVpn) {
-                        startService(
-                            Intent(this, TunnelVpnService::class.java).apply {
-                                action = TunnelVpnService.ACTION_STOP
-                                if (attemptId.isNotEmpty()) {
-                                    putExtra(TunnelVpnService.EXTRA_ATTEMPT_ID, attemptId)
-                                }
-                            },
-                        )
-                    }
-                    if (targets.stopProxy) {
-                        startService(
-                            Intent(this, ProxyTunnelService::class.java).apply {
-                                action = ProxyTunnelService.ACTION_STOP
-                                if (attemptId.isNotEmpty()) {
-                                    putExtra(ProxyTunnelService.EXTRA_ATTEMPT_ID, attemptId)
-                                }
-                            },
-                        )
-                    }
+                    TunnelServiceLauncher.stop(this, rawMode, attemptId)
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -520,7 +432,10 @@ class MainActivity : FlutterActivity() {
         awaitingBatteryOptimizationReturn = false
         pendingConnectIntent = null
         profileTransferConsumerReady = false
+        quickSettingsConnectConsumerReady = false
+        pendingQuickSettingsConnect = false
         profileTransferChannel = null
+        quickSettingsChannel = null
         mainHandler.removeCallbacksAndMessages(PROFILE_IMPORT_CALLBACK_TOKEN)
         mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
         mainHandler.removeCallbacksAndMessages(BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN)
@@ -535,6 +450,7 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleProfileTransferIntent(intent)
+        handleQuickSettingsConnectIntent(intent)
     }
 
     @Deprecated("Deprecated in Java")
@@ -646,17 +562,9 @@ class MainActivity : FlutterActivity() {
         return bmp
     }
 
-    private fun startForegroundWorkerService(intent: Intent) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-    }
-
     private fun dispatchConnectIntent(intent: Intent, result: MethodChannel.Result, logPrefix: String) {
         try {
-            startForegroundWorkerService(intent)
+            TunnelServiceLauncher.startForegroundWorkerService(this, intent)
             AppLog.d(TAG, "$logPrefix dispatched")
             result.success(null)
         } catch (e: ForegroundServiceStartNotAllowedException) {
@@ -942,51 +850,20 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    private fun sanitizePort(raw: Any?, fallback: Int): Int {
-        val candidate =
-            when (raw) {
-                is Int -> raw
-                is Long -> raw.toInt()
-                is Number -> raw.toInt()
-                else -> fallback
-            }
-        return ProxyPortAllocator.sanitizePort(candidate, fallback)
-    }
-
-    private fun parseDnsServers(raw: Any?): List<DnsServerConfig> {
-        val out = mutableListOf<DnsServerConfig>()
-        if (raw is List<*>) {
-            for (entry in raw) {
-                val map = entry as? Map<*, *> ?: continue
-                val host = (map[VpnContract.ARG_DNS_SERVER_HOST] as? String)?.trim().orEmpty()
-                val protocol =
-                    DnsProtocol.fromWireValue(
-                        map[VpnContract.ARG_DNS_SERVER_PROTOCOL] as? String,
-                    )
-                out += DnsServerConfig(host = host, protocol = protocol)
-            }
-        }
-        return DnsConfigSupport.sanitize(out)
-    }
-
-    private fun putDnsServerExtras(intent: Intent, dnsServers: List<DnsServerConfig>) {
-        val dns1 = dnsServers.getOrNull(0)
-        val dns2 = dnsServers.getOrNull(1)
-        intent.putExtra(TunnelVpnService.EXTRA_DNS_SERVER_1_HOST, dns1?.host ?: "")
-        intent.putExtra(
-            TunnelVpnService.EXTRA_DNS_SERVER_1_PROTOCOL,
-            dns1?.protocol?.wireValue ?: DnsProtocol.dnsOverUdp.wireValue,
-        )
-        intent.putExtra(TunnelVpnService.EXTRA_DNS_SERVER_2_HOST, dns2?.host ?: "")
-        intent.putExtra(
-            TunnelVpnService.EXTRA_DNS_SERVER_2_PROTOCOL,
-            dns2?.protocol?.wireValue ?: DnsProtocol.dnsOverUdp.wireValue,
-        )
-    }
-
     private fun hasPostNotificationsPermission(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
         return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun handleQuickSettingsConnectIntent(intent: Intent?) {
+        if (intent?.action != ACTION_QUICK_SETTINGS_CONNECT) return
+        val channel = quickSettingsChannel
+        if (!quickSettingsConnectConsumerReady || channel == null) {
+            pendingQuickSettingsConnect = true
+            return
+        }
+        pendingQuickSettingsConnect = false
+        channel.invokeMethod(QuickSettingsContract.ON_CONNECT, null)
     }
 
     private fun handleProfileTransferIntent(intent: Intent?) {
@@ -1177,6 +1054,8 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        const val ACTION_QUICK_SETTINGS_CONNECT =
+            "io.github.evokelektrique.tunnelforge.action.QUICK_SETTINGS_CONNECT"
         private const val TAG = "MainActivity"
         private const val REQUEST_VPN_PERMISSION = 0x4E50
         private const val REQUEST_POST_NOTIFICATIONS = 0x4E51

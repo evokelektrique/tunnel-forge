@@ -40,7 +40,9 @@ abstract final class VpnContract {
   static const String argDnsServerHost = 'host';
   static const String argDnsServerProtocol = 'protocol';
   static const String argMtu = 'mtu';
+  static const String argProfileId = 'profileId';
   static const String argProfileName = 'profileName';
+  static const String argSecretsMissing = 'secretsMissing';
   static const String argConnectionMode = 'connectionMode';
   static const String argProxyHttpPort = 'proxyHttpPort';
   static const String argProxySocksPort = 'proxySocksPort';
@@ -96,6 +98,17 @@ abstract final class VpnContract {
       'proxyExposureLanRequested';
   static const String argProxyExposureLanActive = 'proxyExposureLanActive';
   static const String argProxyExposureWarning = 'proxyExposureWarning';
+}
+
+/// Method-channel API contract for Android Quick Settings tile sync and launch.
+abstract final class QuickSettingsContract {
+  static const String channel =
+      'io.github.evokelektrique.tunnelforge/quickSettings';
+
+  static const String syncProfile = 'syncQuickSettingsProfile';
+  static const String consumePendingConnect =
+      'consumePendingQuickSettingsConnect';
+  static const String onConnect = 'onQuickSettingsConnect';
 }
 
 /// Tunnel lifecycle strings sent with [VpnContract.onTunnelState] / [VpnContract.argTunnelState].

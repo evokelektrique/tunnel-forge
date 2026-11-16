@@ -731,6 +731,106 @@ void main() {
       ),
     ],
   );
+
+  test(
+    'TunnelReconnectRequested replaces an active tunnel with a new attemptId',
+    () async {
+      final repo = _CountingTunnelRepository();
+      final bloc = TunnelBloc(repo, _FakeLogsRepository());
+      addTearDown(bloc.close);
+
+      bloc.add(TunnelConnectRequested(_connectRequest()));
+      await Future<void>.delayed(Duration.zero);
+      final firstAttempt = bloc.state.activeAttemptId;
+      expect(firstAttempt, isNotNull);
+
+      bloc.add(
+        TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.connected,
+            detail: 'Connected',
+            attemptId: firstAttempt!,
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.tunnelUp, isTrue);
+
+      bloc.add(
+        TunnelReconnectRequested(
+          const TunnelConnectRequest(
+            activeProfileId: 'p2',
+            profileName: 'Second',
+            server: 'vpn2.example',
+            user: 'u2',
+            password: 'pw2',
+            psk: 'psk2',
+            dnsAutomatic: true,
+            dnsServers: [],
+            mtu: Profile.defaultVpnMtu,
+            connectionMode: ConnectionMode.vpnTunnel,
+            splitTunnelSettings: SplitTunnelSettings(),
+            proxySettings: ProxySettings(),
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(repo.connectCalls, 2);
+      expect(bloc.state.tunnelUp, isFalse);
+      expect(bloc.state.awaitingTunnel, isTrue);
+      expect(bloc.state.activeAttemptId, isNotNull);
+      expect(bloc.state.activeAttemptId, isNot(equals(firstAttempt)));
+
+      // Late stopped from old attempt must be ignored.
+      bloc.add(
+        TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.stopped,
+            detail: 'Restarted by app',
+            attemptId: firstAttempt,
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.awaitingTunnel, isTrue);
+    },
+  );
+
+  test(
+    'Quick Settings attempt while idle triggers runtime sync',
+    () async {
+      final repo = _MutableRuntimeTunnelRepository(
+        const TunnelRuntimeState.idle(),
+      );
+      final bloc = TunnelBloc(repo, _FakeLogsRepository());
+      addTearDown(bloc.close);
+
+      bloc.add(const TunnelStarted());
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.tunnelUp, isFalse);
+
+      repo.currentRuntimeState = const TunnelRuntimeState(
+        state: VpnTunnelState.connected,
+        detail: 'Connected',
+        connectionMode: ConnectionMode.vpnTunnel,
+        attemptId: 'qs-123',
+      );
+      bloc.add(
+        const TunnelHostStateReceived(
+          TunnelHostUpdate(
+            state: VpnTunnelState.connected,
+            detail: 'Connected',
+            attemptId: 'qs-123',
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(bloc.state.tunnelUp, isTrue);
+      expect(bloc.state.activeAttemptId, 'qs-123');
+    },
+  );
 }
 
 late _MutableRuntimeTunnelRepository _mutableRuntimeRepository;
@@ -770,6 +870,9 @@ class _FakeTunnelRepository implements TunnelRepository {
       const Stream.empty();
 
   @override
+  Stream<void> get quickSettingsConnectRequests => const Stream.empty();
+
+  @override
   Stream<TunnelHostUpdate> get tunnelStates => const Stream.empty();
 
   @override
@@ -777,6 +880,14 @@ class _FakeTunnelRepository implements TunnelRepository {
 
   @override
   Future<TunnelRuntimeState> getRuntimeState() async => runtimeState;
+
+  @override
+  Future<void> syncQuickSettingsProfile(
+    QuickSettingsProfileConfig? config,
+  ) async {}
+
+  @override
+  Future<bool> consumePendingQuickSettingsConnect() async => false;
 
   @override
   Future<BatteryOptimizationStatus> getBatteryOptimizationStatus() async {

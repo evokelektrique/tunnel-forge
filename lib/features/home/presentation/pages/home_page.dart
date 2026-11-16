@@ -88,17 +88,33 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   int _lastSettingsMessageId = 0;
   bool _lastTunnelUp = false;
   int _lastLogsEntryCount = 0;
+  bool _hasSyncedQuickSettings = false;
+  QuickSettingsProfileConfig? _lastSyncedQuickSettingsConfig;
+  bool _pendingQuickSettingsConnect = false;
+  StreamSubscription<void>? _quickSettingsConnectSub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _logsScroll.addListener(_syncLogsStickToBottom);
+    final tunnelRepository = widget.locator<TunnelRepository>();
+    _quickSettingsConnectSub = tunnelRepository.quickSettingsConnectRequests
+        .listen((_) => _handleQuickSettingsConnectSignal());
+    unawaited(_consumePendingQuickSettingsConnect());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncQuickSettings(
+        context.read<ProfilesBloc>().state,
+        context.read<SettingsBloc>().state,
+      );
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _quickSettingsConnectSub?.cancel();
     _logsScroll.removeListener(_syncLogsStickToBottom);
     _logsScroll.dispose();
     super.dispose();
@@ -116,6 +132,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   @override
   void didChangeViewFocus(ViewFocusEvent event) {
     if (event.state != ViewFocusState.focused || !mounted) return;
+    context.read<TunnelBloc>().add(const TunnelRuntimeSyncRequested());
     context.read<SettingsBloc>().add(
       const SettingsBatteryOptimizationRefreshRequested(),
     );
@@ -154,12 +171,85 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     showAppSnackBar(context, text, error: error);
   }
 
+  Future<void> _consumePendingQuickSettingsConnect() async {
+    final pending = await widget.locator<TunnelRepository>()
+        .consumePendingQuickSettingsConnect();
+    if (!mounted || !pending) return;
+    _handleQuickSettingsConnectSignal();
+  }
+
+  void _handleQuickSettingsConnectSignal() {
+    _pendingQuickSettingsConnect = true;
+    _triggerPendingQuickSettingsConnectIfReady();
+  }
+
+  void _triggerPendingQuickSettingsConnectIfReady() {
+    if (!mounted || !_pendingQuickSettingsConnect) return;
+    final profilesState = context.read<ProfilesBloc>().state;
+    final settingsState = context.read<SettingsBloc>().state;
+    if (profilesState.loading || settingsState.loading) return;
+    _pendingQuickSettingsConnect = false;
+    final tunnelState = context.read<TunnelBloc>().state;
+    if (tunnelState.busy ||
+        tunnelState.stopRequested ||
+        tunnelState.tunnelUp ||
+        tunnelState.awaitingTunnel) {
+      return;
+    }
+    _primaryAction(profilesState, settingsState, tunnelState);
+  }
+
+  void _syncQuickSettings(
+    ProfilesState profilesState,
+    SettingsState settingsState,
+  ) {
+    if (profilesState.loading || settingsState.loading) return;
+    final row = profilesState.activeProfileRow;
+    final QuickSettingsProfileConfig? nextConfig =
+        profilesState.hasActiveProfile && row != null
+        ? QuickSettingsProfileConfig(
+            profileId: row.profile.id,
+            profileName: row.profile.displayName,
+            server: row.profile.server,
+            user: row.profile.user,
+            password: row.password,
+            psk: row.psk,
+            secretsMissing: row.secretsMissing,
+            dnsAutomatic: row.profile.dnsAutomatic,
+            dnsServers: row.profile.dnsAutomatic
+                ? const <DnsServerConfig>[]
+                : Profile.orderedDnsServers(
+                    dns1Host: row.profile.dns1Host,
+                    dns1Protocol: row.profile.dns1Protocol,
+                    dns2Host: row.profile.dns2Host,
+                    dns2Protocol: row.profile.dns2Protocol,
+                  ),
+            mtu: row.profile.mtu,
+            connectionMode: settingsState.connectionMode,
+            splitTunnelSettings: settingsState.splitTunnelSettings,
+            proxySettings: settingsState.proxySettings,
+          )
+        : null;
+    if (_hasSyncedQuickSettings &&
+        _lastSyncedQuickSettingsConfig == nextConfig) {
+      _triggerPendingQuickSettingsConnectIfReady();
+      return;
+    }
+    _hasSyncedQuickSettings = true;
+    _lastSyncedQuickSettingsConfig = nextConfig;
+    unawaited(
+      widget.locator<TunnelRepository>().syncQuickSettingsProfile(nextConfig),
+    );
+    _triggerPendingQuickSettingsConnectIfReady();
+  }
+
   Future<void> _handleProfilesStateChange(ProfilesState state) async {
     final message = state.message;
     if (message != null && message.id != _lastProfilesMessageId) {
       _lastProfilesMessageId = message.id;
       _toast(message.text, error: message.error);
     }
+    _syncQuickSettings(state, context.read<SettingsBloc>().state);
   }
 
   ConnectivityPingRequest _connectivityPingRequest(
@@ -239,13 +329,69 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
 
   Future<void> _openProfilePicker() async {
     final profilesBloc = context.read<ProfilesBloc>();
+    final settingsBloc = context.read<SettingsBloc>();
+    final tunnelBloc = context.read<TunnelBloc>();
     final profilesState = profilesBloc.state;
     if (profilesState.loading || !mounted) return;
-    await ProfilePickerSheet.show(
+    final previousActiveId = profilesState.activeProfileId;
+    final selectedId = await ProfilePickerSheet.show(
       context,
       profilesBloc: profilesBloc,
       store: widget.locator<ProfileStore>(),
       logsRepository: widget.locator<LogsRepository>(),
+    );
+    if (!mounted || selectedId == null || selectedId == previousActiveId) {
+      return;
+    }
+    final tunnelState = tunnelBloc.state;
+    final isTunnelActive = tunnelState.tunnelUp || tunnelState.awaitingTunnel;
+    if (!isTunnelActive || tunnelState.busy || tunnelState.stopRequested) {
+      return;
+    }
+    await _reconnectToProfile(
+      selectedId,
+      profilesBloc: profilesBloc,
+      settingsBloc: settingsBloc,
+      tunnelBloc: tunnelBloc,
+    );
+  }
+
+  Future<void> _reconnectToProfile(
+    String selectedId, {
+    required ProfilesBloc profilesBloc,
+    required SettingsBloc settingsBloc,
+    required TunnelBloc tunnelBloc,
+  }) async {
+    var resolved = profilesBloc.state;
+    if (resolved.loading ||
+        resolved.activeProfileId != selectedId ||
+        resolved.activeProfileRow?.profile.id != selectedId) {
+      try {
+        resolved = await profilesBloc.stream
+            .firstWhere(
+              (state) =>
+                  !state.loading &&
+                  state.activeProfileId == selectedId &&
+                  state.activeProfileRow?.profile.id == selectedId,
+            )
+            .timeout(const Duration(seconds: 5));
+      } on TimeoutException {
+        return;
+      }
+    }
+    if (!mounted) return;
+    final row = resolved.activeProfileRow;
+    if (row == null) return;
+    if (row.secretsMissing) {
+      unawaited(_handleMissingSecrets(row.profile));
+      return;
+    }
+    final settingsState = settingsBloc.state;
+    if (settingsState.connectionMode == ConnectionMode.vpnTunnel) {
+      settingsBloc.add(const SettingsBatteryOptimizationVpnConnectAttempted());
+    }
+    tunnelBloc.add(
+      TunnelReconnectRequested(_buildConnectRequest(row, settingsState)),
     );
   }
 
@@ -389,6 +535,36 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     }
   }
 
+  TunnelConnectRequest _buildConnectRequest(
+    ProfileSecretRow row,
+    SettingsState settingsState,
+  ) {
+    final profile = row.profile;
+    final trimmedName = profile.displayName.trim();
+    final dnsServers = profile.dnsAutomatic
+        ? const <DnsServerConfig>[]
+        : Profile.orderedDnsServers(
+            dns1Host: profile.dns1Host,
+            dns1Protocol: profile.dns1Protocol,
+            dns2Host: profile.dns2Host,
+            dns2Protocol: profile.dns2Protocol,
+          );
+    return TunnelConnectRequest(
+      activeProfileId: profile.id,
+      profileName: trimmedName.isEmpty ? null : trimmedName,
+      server: profile.server,
+      user: profile.user,
+      password: row.password,
+      psk: row.psk,
+      dnsAutomatic: profile.dnsAutomatic,
+      dnsServers: dnsServers,
+      mtu: profile.mtu,
+      connectionMode: settingsState.connectionMode,
+      splitTunnelSettings: settingsState.splitTunnelSettings,
+      proxySettings: settingsState.proxySettings,
+    );
+  }
+
   void _primaryAction(
     ProfilesState profilesState,
     SettingsState settingsState,
@@ -411,38 +587,13 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       unawaited(_handleMissingSecrets(row.profile));
       return;
     }
-    final profile = row.profile;
     if (settingsState.connectionMode == ConnectionMode.vpnTunnel) {
       context.read<SettingsBloc>().add(
         const SettingsBatteryOptimizationVpnConnectAttempted(),
       );
     }
-    final trimmedName = profile.displayName.trim();
-    final dnsServers = profile.dnsAutomatic
-        ? const <DnsServerConfig>[]
-        : Profile.orderedDnsServers(
-            dns1Host: profile.dns1Host,
-            dns1Protocol: profile.dns1Protocol,
-            dns2Host: profile.dns2Host,
-            dns2Protocol: profile.dns2Protocol,
-          );
     context.read<TunnelBloc>().add(
-      TunnelConnectRequested(
-        TunnelConnectRequest(
-          activeProfileId: profile.id,
-          profileName: trimmedName.isEmpty ? null : trimmedName,
-          server: profile.server,
-          user: profile.user,
-          password: row.password,
-          psk: row.psk,
-          dnsAutomatic: profile.dnsAutomatic,
-          dnsServers: dnsServers,
-          mtu: profile.mtu,
-          connectionMode: settingsState.connectionMode,
-          splitTunnelSettings: settingsState.splitTunnelSettings,
-          proxySettings: settingsState.proxySettings,
-        ),
-      ),
+      TunnelConnectRequested(_buildConnectRequest(row, settingsState)),
     );
   }
 
@@ -621,7 +772,10 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       listeners: [
         BlocListener<ProfilesBloc, ProfilesState>(
           listenWhen: (previous, current) =>
-              previous.message != current.message,
+              previous.message != current.message ||
+              previous.loading != current.loading ||
+              previous.activeProfileId != current.activeProfileId ||
+              previous.activeProfileRow != current.activeProfileRow,
           listener: (context, state) => _handleProfilesStateChange(state),
         ),
         BlocListener<TunnelBloc, TunnelState>(
@@ -641,13 +795,18 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
         ),
         BlocListener<SettingsBloc, SettingsState>(
           listenWhen: (previous, current) =>
-              previous.message != current.message,
+              previous.message != current.message ||
+              previous.loading != current.loading ||
+              previous.connectionMode != current.connectionMode ||
+              previous.splitTunnelSettings != current.splitTunnelSettings ||
+              previous.proxySettings != current.proxySettings,
           listener: (context, state) {
             final message = state.message;
             if (message != null && message.id != _lastSettingsMessageId) {
               _lastSettingsMessageId = message.id;
               _toast(message.text, error: message.error);
             }
+            _syncQuickSettings(context.read<ProfilesBloc>().state, state);
           },
         ),
       ],

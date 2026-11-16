@@ -96,6 +96,7 @@ object VpnTunnelEvents {
             TAG,
             "tunnel_state state=$state attempt=${attemptId ?: ""} detail=${detail ?: ""}",
         )
+        QuickSettingsTileController.requestUpdate()
         invokeOnMain(
             VpnContract.ON_TUNNEL_STATE,
             mapOf(

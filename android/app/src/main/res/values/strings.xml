@@ -18,4 +18,10 @@
     <string name="vpn_notification_reconnecting_alert_title">TunnelForge connection dropped</string>
     <string name="vpn_notification_reconnecting_alert_body">Connection lost. Reconnecting in background...</string>
     <string name="proxy_notification_title">TunnelForge proxy</string>
+    <string name="qs_tile_label">TunnelForge</string>
+    <string name="qs_tile_no_profile">No profile selected</string>
+    <string name="qs_tile_connected">Connected</string>
+    <string name="qs_tile_connecting">Connecting…</string>
+    <string name="qs_tile_waiting_network">Waiting for network</string>
+    <string name="qs_tile_reconnecting">Reconnecting…</string>
 </resources>

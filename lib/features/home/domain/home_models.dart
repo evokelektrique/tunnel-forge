@@ -134,6 +134,55 @@ class TunnelConnectRequest extends Equatable {
   ];
 }
 
+class QuickSettingsProfileConfig extends Equatable {
+  const QuickSettingsProfileConfig({
+    required this.profileId,
+    required this.profileName,
+    required this.server,
+    required this.user,
+    required this.password,
+    required this.psk,
+    required this.secretsMissing,
+    required this.dnsAutomatic,
+    required this.dnsServers,
+    required this.mtu,
+    required this.connectionMode,
+    required this.splitTunnelSettings,
+    required this.proxySettings,
+  });
+
+  final String profileId;
+  final String profileName;
+  final String server;
+  final String user;
+  final String password;
+  final String psk;
+  final bool secretsMissing;
+  final bool dnsAutomatic;
+  final List<DnsServerConfig> dnsServers;
+  final int mtu;
+  final ConnectionMode connectionMode;
+  final SplitTunnelSettings splitTunnelSettings;
+  final ProxySettings proxySettings;
+
+  @override
+  List<Object?> get props => [
+    profileId,
+    profileName,
+    server,
+    user,
+    password,
+    psk,
+    secretsMissing,
+    dnsAutomatic,
+    dnsServers,
+    mtu,
+    connectionMode,
+    splitTunnelSettings,
+    proxySettings,
+  ];
+}
+
 class ImportTransferRequest extends Equatable {
   const ImportTransferRequest({
     required this.transfer,

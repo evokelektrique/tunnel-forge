@@ -7,6 +7,7 @@ class TunnelForgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         DiagnosticLog.init(this)
+        QuickSettingsTileController.init(this)
         installUncaughtHandler()
         ExitReasonReporter.report(this)
     }

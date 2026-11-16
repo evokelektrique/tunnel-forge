@@ -535,6 +535,9 @@ class TunnelRepositoryImpl implements TunnelRepository {
           onBatteryOptimizationStatusChanged: (status) {
             _batteryOptimizationStatusController.add(status);
           },
+          onQuickSettingsConnect: () {
+            _quickSettingsConnectController.add(null);
+          },
         );
   }
 
@@ -548,6 +551,8 @@ class TunnelRepositoryImpl implements TunnelRepository {
   final StreamController<BatteryOptimizationStatus>
   _batteryOptimizationStatusController =
       StreamController<BatteryOptimizationStatus>.broadcast();
+  final StreamController<void> _quickSettingsConnectController =
+      StreamController<void>.broadcast();
 
   @override
   Stream<EngineLogMessage> get engineLogs => _engineLogController.stream;
@@ -560,10 +565,22 @@ class TunnelRepositoryImpl implements TunnelRepository {
       _batteryOptimizationStatusController.stream;
 
   @override
+  Stream<void> get quickSettingsConnectRequests =>
+      _quickSettingsConnectController.stream;
+
+  @override
   Stream<TunnelHostUpdate> get tunnelStates => _tunnelStateController.stream;
 
   @override
   Future<TunnelRuntimeState> getRuntimeState() => _client.getRuntimeState();
+
+  @override
+  Future<void> syncQuickSettingsProfile(QuickSettingsProfileConfig? config) =>
+      _client.syncQuickSettingsProfile(config);
+
+  @override
+  Future<bool> consumePendingQuickSettingsConnect() =>
+      _client.consumePendingQuickSettingsConnect();
 
   @override
   Future<BatteryOptimizationStatus> getBatteryOptimizationStatus() {
@@ -606,6 +623,7 @@ class TunnelRepositoryImpl implements TunnelRepository {
     unawaited(_engineLogController.close());
     unawaited(_proxyExposureController.close());
     unawaited(_batteryOptimizationStatusController.close());
+    unawaited(_quickSettingsConnectController.close());
   }
 
   @override

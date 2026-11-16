@@ -190,7 +190,18 @@ class _RecordingTunnelRepository implements TunnelRepository {
       const Stream.empty();
 
   @override
+  Stream<void> get quickSettingsConnectRequests => const Stream.empty();
+
+  @override
   Future<bool> prepareVpn() async => true;
+
+  @override
+  Future<void> syncQuickSettingsProfile(
+    QuickSettingsProfileConfig? config,
+  ) async {}
+
+  @override
+  Future<bool> consumePendingQuickSettingsConnect() async => false;
 
   @override
   Future<bool?> checkProxyPortAvailable(

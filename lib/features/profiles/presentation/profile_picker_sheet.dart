@@ -47,7 +47,7 @@ class ProfilePickerSheet extends StatefulWidget {
   final ProfileStore store;
   final LogsRepository? logsRepository;
 
-  static Future<void> show(
+  static Future<String?> show(
     BuildContext context, {
     required ProfilesBloc profilesBloc,
     required ProfileStore store,
@@ -57,7 +57,7 @@ class ProfilePickerSheet extends StatefulWidget {
     final sheetColor =
         theme.bottomSheetTheme.backgroundColor ??
         theme.colorScheme.surfaceContainerLow;
-    return showModalBottomSheet<void>(
+    return showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -169,7 +169,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
   }
 
   Future<void> _selectProfile(String id) async {
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(id);
     _profilesBloc.add(ProfilesSelectionChanged(id));
   }
 
