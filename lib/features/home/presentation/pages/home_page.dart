@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
 import 'package:material_ui/material_ui.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:get_it/get_it.dart';
 import 'package:share_plus/share_plus.dart';
@@ -447,38 +446,6 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     );
   }
 
-  Future<void> _copyLogs(LogsState logsState) async {
-    final visibleLogs = logsState.visibleLogs;
-    if (visibleLogs.isEmpty) {
-      _toast(
-        logsState.entries.isEmpty
-            ? AppText.pick('No logs to copy', 'گزارشی برای کپی نیست')
-            : AppText.pick(
-                'No visible logs to copy',
-                'گزارش نمایانی برای کپی نیست',
-              ),
-      );
-      return;
-    }
-    await Clipboard.setData(
-      ClipboardData(
-        text: visibleLogs.map((entry) => entry.toPlainText()).join('\n'),
-      ),
-    );
-    final count = visibleLogs.length;
-    widget.locator<LogsRepository>().logDart(
-      LogLevel.debug,
-      'logs',
-      'Copied visible logs count=$count level=${logsState.level.storageValue}',
-    );
-    _toast(
-      AppText.pick(
-        'Copied $count ${count == 1 ? 'line' : 'lines'} to clipboard',
-        '$count خط در کلیپ‌بورد کپی شد',
-      ),
-    );
-  }
-
   Future<bool> _promptIncludeTombstone() async {
     final result = await showDialog<bool>(
       context: context,
@@ -775,13 +742,6 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                       icon: Icon(
                         logsState.wordWrap ? Icons.wrap_text : Icons.swap_horiz,
                       ),
-                    ),
-                    IconButton(
-                      tooltip: t.copyVisible,
-                      onPressed: logsState.visibleLogs.isEmpty
-                          ? null
-                          : () => _copyLogs(logsState),
-                      icon: const Icon(Icons.copy_all_outlined),
                     ),
                     IconButton(
                       tooltip: t.shareDebugLogs,

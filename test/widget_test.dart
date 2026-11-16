@@ -1284,25 +1284,12 @@ void main() {
     ]);
   });
 
-  testWidgets('copy visible only uses the current log level', (
+  testWidgets('logs tab omits copy button and keeps export and log actions', (
     WidgetTester tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
-    String? clipboardText;
     installVpnChannelMock(<String>[]);
     addTearDown(uninstallVpnChannelMock);
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-          if (call.method == 'Clipboard.setData') {
-            final args = Map<String, dynamic>.from(call.arguments as Map);
-            clipboardText = args['text'] as String?;
-          }
-          return null;
-        });
-    addTearDown(() {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, null);
-    });
     addTearDown(() async {
       await tester.binding.setSurfaceSize(null);
     });
@@ -1327,36 +1314,20 @@ void main() {
       tag: 'MainActivity',
       message: 'info message',
     );
-    await simulateHostEngineLog(
-      tester,
-      priority: 5,
-      source: 'native',
-      tag: 'tunnel_engine',
-      message: 'warn message',
-    );
-    await simulateHostEngineLog(
-      tester,
-      priority: 6,
-      source: 'kotlin',
-      tag: 'TunnelVpnService',
-      message: 'error message',
-    );
 
     await tester.tap(find.text('Logs'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
-    await tester.tap(find.byTooltip('Log level'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('WARNING').last);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byTooltip('Copy visible'));
-    await tester.pump();
-
-    expect(clipboardText, isNot(contains('info message')));
-    expect(clipboardText, contains('warn message'));
-    expect(clipboardText, contains('error message'));
+    expect(find.byTooltip('Copy visible'), findsNothing);
+    expect(find.byIcon(Icons.copy_all_outlined), findsNothing);
+    expect(find.byTooltip('Log level'), findsOneWidget);
+    expect(
+      find.byTooltip('Turn off word wrap (wide lines scroll sideways)'),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('Share debug logs'), findsOneWidget);
+    expect(find.byTooltip('Clear'), findsOneWidget);
   });
 
   testWidgets('VPN tab shows profile picker tile', (WidgetTester tester) async {

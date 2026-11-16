@@ -103,8 +103,4 @@ class LogEntry {
     if (trimmedTag.isEmpty) return source.label;
     return '${source.label}/$trimmedTag';
   }
-
-  String toPlainText() {
-    return '$timeLabel  ${level.label}  $sourceTagLabel  $message';
-  }
 }
