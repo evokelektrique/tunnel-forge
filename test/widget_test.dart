@@ -1887,4 +1887,144 @@ void main() {
       expect(shareCalls, hasLength(1));
     },
   );
+
+  testWidgets(
+    'user-initiated profile and settings tasks emit redacted DEBUG logs',
+    (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: MemorySecretStore(),
+      );
+      for (var i = 1; i <= 5; i++) {
+        await store.upsertProfile(
+          Profile(
+            id: 'p$i',
+            displayName: 'Existing VPN $i',
+            server: 'existing$i.secret.example',
+            user: 'alice',
+            favorite: true,
+          ),
+          password: 'pw$i',
+          psk: '',
+        );
+      }
+
+      installVpnChannelMock(<String>[]);
+      addTearDown(uninstallVpnChannelMock);
+      addTearDown(() async {
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.binding.setSurfaceSize(const Size(480, 1200));
+
+      await tester.pumpWidget(
+        TunnelForgeApp(
+          onboardingRepository: const _AcceptedOnboardingRepository(),
+          profileStore: store,
+        ),
+      );
+      await tester.pump();
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // 1. Add a profile via the profile picker sheet.
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Create new profile'));
+      await tester.pumpAndSettle();
+      final fields = find.byType(TextField);
+      await tester.enterText(fields.at(0), 'Secret New Profile');
+      await tester.enterText(fields.at(1), 'new-vpn.secret.example');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final savedProfiles = await store.loadProfiles();
+      final createdProfile = savedProfiles.firstWhere(
+        (p) => p.displayName == 'Secret New Profile',
+      );
+
+      final listScrollable = find.descendant(
+        of: find.byType(CustomScrollView).last,
+        matching: find.byType(Scrollable),
+      );
+
+      // 2. Try to favorite a 6th profile (hits max 5 favorites limit).
+      final newStar = find.byKey(Key('favorite_button_${createdProfile.id}'));
+      await tester.scrollUntilVisible(newStar, 120, scrollable: listScrollable);
+      await tester.ensureVisible(newStar);
+      await tester.tap(newStar);
+      await tester.pumpAndSettle();
+
+      // Unfavorite p1 and favorite the new profile.
+      final p1Star = find.byKey(const Key('favorite_button_p1'));
+      await tester.scrollUntilVisible(p1Star, -120, scrollable: listScrollable);
+      await tester.ensureVisible(p1Star);
+      await tester.tap(p1Star);
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(newStar, 120, scrollable: listScrollable);
+      await tester.ensureVisible(newStar);
+      await tester.tap(newStar);
+      await tester.pumpAndSettle();
+
+      // 3. Select p2 from the picker sheet.
+      final p2Tile = find.byKey(const ValueKey<String>('p2'));
+      await tester.scrollUntilVisible(p2Tile, -120, scrollable: listScrollable);
+      await tester.ensureVisible(p2Tile);
+      await tester.tap(p2Tile);
+      await tester.pumpAndSettle();
+
+      // Switch to Settings and change ThemeMode.
+      await tester.tap(find.text('Settings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Dark'));
+      await tester.pumpAndSettle();
+
+      // Switch to Logs tab: INFO level should hide DEBUG entries.
+      await tester.tap(find.text('Logs'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.textContaining('Profile created'), findsNothing);
+      expect(find.textContaining('Favorite limit reached'), findsNothing);
+      expect(find.textContaining('Profile selected'), findsNothing);
+
+      // Switch filter to DEBUG and verify redacted entries appear.
+      await tester.tap(find.byTooltip('Log level'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('DEBUG').last);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Secret New Profile'), findsNothing);
+      expect(find.textContaining('new-vpn.secret.example'), findsNothing);
+      expect(find.textContaining('Existing VPN 2'), findsNothing);
+      expect(find.textContaining('existing2.secret.example'), findsNothing);
+
+      expect(
+        find.textContaining('Profile created profile=${createdProfile.id}'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          'Favorite limit reached max=5 profile=${createdProfile.id}',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Profile favorited profile=${createdProfile.id}'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Profile selected profile=p2'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Theme mode changed previous=system to=dark'),
+        findsOneWidget,
+      );
+    },
+  );
 }

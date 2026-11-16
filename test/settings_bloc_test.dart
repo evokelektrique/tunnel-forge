@@ -5,6 +5,7 @@ import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
 import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
+import 'package:tunnel_forge/features/home/domain/log_redaction.dart';
 import 'package:tunnel_forge/features/home/presentation/bloc/settings_bloc.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
@@ -118,7 +119,15 @@ class _FakeLogsRepository implements LogsRepository {
 
   @override
   void append(LogEntry entry) {
-    appended.add(entry);
+    appended.add(
+      LogEntry(
+        timestamp: entry.timestamp,
+        level: entry.level,
+        source: entry.source,
+        tag: entry.tag,
+        message: redactLogMessage(entry.message),
+      ),
+    );
   }
 
   @override
@@ -1001,6 +1010,147 @@ void main() {
           ),
         ),
       ],
+    );
+
+    test(
+      'logs immediate DEBUG entries for toggles/updates and debounced redacted entries for text fields',
+      () async {
+        final logs = _FakeLogsRepository();
+        final settingsRepo = _FakeSettingsRepository()
+          ..updateCheckConsentGranted = true;
+        final bloc = SettingsBloc(
+          settingsRepo,
+          _FakeAppVersionRepository(
+            const AppVersionInfo(
+              displayVersion: '0.3.0+11',
+              semanticVersion: SemanticVersion(major: 0, minor: 3, patch: 0),
+            ),
+          ),
+          _FakeAppUpdateRepository(
+            release: AppReleaseInfo(
+              version: const SemanticVersion(major: 0, minor: 3, patch: 0),
+              htmlUrl:
+                  'https://github.com/evokelektrique/tunnel-forge/releases',
+              publishedAt: DateTime.utc(2026, 4, 19),
+              prerelease: true,
+            ),
+          ),
+          logs,
+          _FakeTunnelRepository(),
+        );
+        addTearDown(bloc.close);
+
+        bloc.add(const SettingsStarted());
+        await Future<void>.delayed(Duration.zero);
+
+        bloc.add(const SettingsConnectionModeChanged(ConnectionMode.vpnTunnel));
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          logs.appended.last.message,
+          'Connection mode changed mode=vpnTunnel',
+        );
+
+        bloc.add(
+          const SettingsSplitTunnelSettingsChanged(
+            SplitTunnelSettings(
+              enabled: true,
+              mode: SplitTunnelMode.inclusive,
+              inclusivePackages: ['com.example.secretapp'],
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          logs.appended.last.message,
+          'Split tunnel updated enabled=true mode=inclusive inclusiveApps=1 exclusiveApps=0',
+        );
+        expect(
+          logs.appended.last.message,
+          isNot(contains('com.example.secretapp')),
+        );
+
+        // Rapid port edits coalesce into one debounced log after 500ms.
+        bloc.add(
+          const SettingsProxySettingsChanged(ProxySettings(httpPort: 18081)),
+        );
+        bloc.add(
+          const SettingsProxySettingsChanged(ProxySettings(httpPort: 18082)),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          logs.appended.where((e) => e.message.startsWith('Proxy settings')),
+          isEmpty,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 560));
+        expect(
+          logs.appended.where((e) => e.message.startsWith('Proxy settings')),
+          hasLength(1),
+        );
+        expect(
+          logs.appended.last.message,
+          'Proxy settings updated http=18082 socks=1080 lan=false',
+        );
+
+        // Allow-LAN toggle logs immediately.
+        bloc.add(
+          const SettingsProxySettingsChanged(
+            ProxySettings(httpPort: 18082, allowLanConnections: true),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          logs.appended.last.message,
+          'Proxy settings updated http=18082 socks=1080 lan=true',
+        );
+
+        // Invalid connectivity URL logs a warning immediately.
+        bloc.add(
+          const SettingsConnectivityCheckSettingsChanged(
+            ConnectivityCheckSettings(url: 'not-a-url', timeoutMs: 3000),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(logs.appended.last.level, LogLevel.warning);
+        expect(
+          logs.appended.last.message,
+          'Connectivity check settings rejected',
+        );
+
+        // Valid connectivity URL debounces and redacts the URL.
+        bloc.add(
+          const SettingsConnectivityCheckSettingsChanged(
+            ConnectivityCheckSettings(
+              url: 'https://secret.example.com/health',
+              timeoutMs: 4500,
+            ),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 560));
+        expect(logs.appended.last.level, LogLevel.debug);
+        expect(
+          logs.appended.last.message,
+          'Connectivity check settings updated url=[REDACTED_URI] timeoutMs=4500',
+        );
+        expect(
+          logs.appended.last.message,
+          isNot(contains('secret.example.com')),
+        );
+
+        bloc.add(const SettingsVersionCheckRequested());
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          logs.appended.any(
+            (e) =>
+                e.level == LogLevel.debug &&
+                e.message == 'update: checking GitHub releases',
+          ),
+          isTrue,
+        );
+        expect(
+          logs.appended.last.message,
+          'update: check complete status=upToDate latest=0.3.0',
+        );
+      },
     );
   });
 }

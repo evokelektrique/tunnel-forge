@@ -20,6 +20,7 @@ import 'package:tunnel_forge/features/tunnel/data/vpn_client.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
 import '../domain/home_models.dart';
 import '../domain/home_repositories.dart';
+import '../domain/log_redaction.dart';
 
 class ProfilesRepositoryImpl implements ProfilesRepository {
   ProfilesRepositoryImpl(this._profileStore);
@@ -696,6 +697,7 @@ class LogsRepositoryImpl implements LogsRepository {
   Timer? _flushTimer;
   bool _hasPendingEmit = false;
   bool _loaded = false;
+  bool _disposed = false;
 
   DiagnosticsBridge get _bridge =>
       _bridgeOverride ?? DiagnosticsBridge.instance;
@@ -736,14 +738,25 @@ class LogsRepositoryImpl implements LogsRepository {
 
   @override
   void append(LogEntry entry) {
-    _entries.addLast(entry);
+    if (_disposed) return;
+    final sanitizedMessage = redactLogMessage(entry.message);
+    final sanitizedEntry = sanitizedMessage == entry.message
+        ? entry
+        : LogEntry(
+            timestamp: entry.timestamp,
+            level: entry.level,
+            source: entry.source,
+            tag: entry.tag,
+            message: sanitizedMessage,
+          );
+    _entries.addLast(sanitizedEntry);
     while (_entries.length > _maxLines) {
       _entries.removeFirst();
     }
     _entriesCache = null;
     _hasPendingEmit = true;
-    if (entry.source == LogSource.dart) {
-      _pendingBridgeWrites.add(entry);
+    if (sanitizedEntry.source == LogSource.dart) {
+      _pendingBridgeWrites.add(sanitizedEntry);
     }
     _flushTimer ??= Timer(_flushInterval, _flush);
   }
@@ -763,6 +776,7 @@ class LogsRepositoryImpl implements LogsRepository {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     _flushTimer?.cancel();
     _flushTimer = null;
     _pendingBridgeWrites.clear();

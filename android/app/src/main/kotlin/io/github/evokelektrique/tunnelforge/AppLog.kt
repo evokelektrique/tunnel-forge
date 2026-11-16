@@ -51,6 +51,11 @@ private val secretFieldPattern =
             "auth",
             "user",
             "username",
+            "displayName",
+            "profileName",
+            "name",
+            "file",
+            "filename",
         ),
     )
 private val dnsFieldPattern = keyValuePattern(listOf("dns"), allowCommas = true)

@@ -9,6 +9,7 @@ import 'package:get_it/get_it.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
+import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
@@ -59,7 +60,15 @@ class _TunnelForgeAppState extends State<TunnelForgeApp> {
   @override
   void initState() {
     super.initState();
-    _languageController = AppLanguageController();
+    _languageController = AppLanguageController(
+      onLanguageChanged: (previous, next) {
+        _locator<LogsRepository>().logDart(
+          LogLevel.debug,
+          'language',
+          'Language changed previous=${previous.code} to=${next.code}',
+        );
+      },
+    );
     _locator = createAppLocator(
       profileStore: widget.profileStore,
       connectivityChecker: widget.connectivityChecker,

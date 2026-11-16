@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:tunnel_forge/app/ui/app_scaffold_messenger.dart';
 import 'package:tunnel_forge/features/home/data/home_repositories_impl.dart';
+import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
 import 'package:tunnel_forge/features/profile_form/presentation/bloc/profile_form_bloc.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
@@ -20,15 +21,18 @@ class ProfileEditorSheet extends StatelessWidget {
     super.key,
     required this.profileId,
     required this.store,
+    this.logsRepository,
   });
 
   final String profileId;
   final ProfileStore store;
+  final LogsRepository? logsRepository;
 
   static Future<bool> show(
     BuildContext context, {
     required String profileId,
     required ProfileStore store,
+    LogsRepository? logsRepository,
   }) {
     final theme = Theme.of(context);
     final sheetColor =
@@ -42,16 +46,21 @@ class ProfileEditorSheet extends StatelessWidget {
       useSafeArea: true,
       sheetAnimationStyle: _kSheetAnimationStyle,
       backgroundColor: sheetColor,
-      builder: (ctx) => ProfileEditorSheet(profileId: profileId, store: store),
+      builder: (ctx) => ProfileEditorSheet(
+        profileId: profileId,
+        store: store,
+        logsRepository: logsRepository,
+      ),
     ).then((value) => value ?? false);
   }
 
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) =>
-          ProfileFormBloc(ProfilesRepositoryImpl(store))
-            ..add(ProfileFormStarted(profileId)),
+      create: (_) => ProfileFormBloc(
+        ProfilesRepositoryImpl(store),
+        logsRepository: logsRepository,
+      )..add(ProfileFormStarted(profileId)),
       child: ProfileEditorView(
         onClose: () => Navigator.of(context).pop(false),
         onSaved: (_) => Navigator.of(context).pop(true),

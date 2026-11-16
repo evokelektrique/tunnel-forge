@@ -1,9 +1,11 @@
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
+import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import '../../../home/domain/home_repositories.dart';
+import '../../../home/domain/log_redaction.dart';
 
 sealed class ProfileFormEvent extends Equatable {
   const ProfileFormEvent();
@@ -272,7 +274,9 @@ String? _mtuValidationMessage(String value) {
 }
 
 class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
-  ProfileFormBloc(this._profilesRepository) : super(const ProfileFormState()) {
+  ProfileFormBloc(this._profilesRepository, {LogsRepository? logsRepository})
+    : _logsRepository = logsRepository,
+      super(const ProfileFormState()) {
     on<ProfileFormStarted>(_onStarted);
     on<ProfileFormDisplayNameChanged>(
       (event, emit) =>
@@ -318,12 +322,31 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
   }
 
   final ProfilesRepository _profilesRepository;
+  final LogsRepository? _logsRepository;
+  bool _isNewProfile = false;
+
+  void _log(LogLevel level, String message) {
+    _logsRepository?.logDart(level, 'profile_form', message);
+  }
+
+  void _logSaved(Profile profile, {bool afterReset = false}) {
+    final action = _isNewProfile ? 'created' : 'updated';
+    final suffix = afterReset ? ' after reset' : '';
+    _log(
+      LogLevel.debug,
+      'Profile $action$suffix profile=${profile.id} '
+      'name=${quoteLogValue(profile.displayName)} server=${profile.server} '
+      'dnsAuto=${profile.dnsAutomatic} mtu=${profile.mtu}',
+    );
+    _isNewProfile = false;
+  }
 
   Future<void> _onStarted(
     ProfileFormStarted event,
     Emitter<ProfileFormState> emit,
   ) async {
     final profileId = event.profileId;
+    _isNewProfile = profileId == null;
     if (profileId == null) {
       emit(
         state.copyWith(
@@ -386,6 +409,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
   Profile? _validateAndBuildProfile(Emitter<ProfileFormState> emit) {
     final serverTrim = state.server.trim();
     if (serverTrim.isEmpty) {
+      _log(LogLevel.debug, 'Profile save blocked: empty server');
       emit(
         _messageState(
           AppText.pick('Enter a server address', 'نشانی سرور را وارد کنید'),
@@ -395,6 +419,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     }
     final mtuErrorText = state.mtuErrorText;
     if (mtuErrorText != null) {
+      _log(LogLevel.debug, 'Profile save blocked: invalid mtu');
       emit(_messageState(mtuErrorText));
       return null;
     }
@@ -405,6 +430,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         state.dns1Protocol,
       );
       if (invalidDns1 != null) {
+        _log(LogLevel.debug, 'Profile save blocked: invalid dns1');
         emit(
           _messageState(
             Profile.validationMessageForDnsServer(
@@ -421,6 +447,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         state.dns2Protocol,
       );
       if (invalidDns2 != null) {
+        _log(LogLevel.debug, 'Profile save blocked: invalid dns2');
         emit(
           _messageState(
             Profile.validationMessageForDnsServer(
@@ -438,6 +465,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         dns2Host: state.dns2,
         dns2Protocol: state.dns2Protocol,
       ).isEmpty) {
+        _log(LogLevel.debug, 'Profile save blocked: empty custom dns');
         emit(
           _messageState(
             AppText.pick(
@@ -494,8 +522,13 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         password: state.password,
         psk: state.psk,
       );
+      _logSaved(profile);
       emit(state.copyWith(saving: false, saved: true));
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile save failed profile=${profile.id} error=${error.runtimeType}',
+      );
       emit(
         _messageState(
           AppText.pick('Could not save changes', 'تغییرات ذخیره نشد'),
@@ -521,6 +554,10 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         secureStorageWriteFailed: false,
       ),
     );
+    _log(
+      LogLevel.debug,
+      'Retrying profile save after secure storage reset profile=${profile.id}',
+    );
     try {
       await _profilesRepository.resetSecureStorage();
       await _profilesRepository.upsertProfile(
@@ -528,8 +565,13 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         password: state.password,
         psk: state.psk,
       );
+      _logSaved(profile, afterReset: true);
       emit(state.copyWith(saving: false, saved: true));
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile save after secure storage reset failed profile=${profile.id} error=${error.runtimeType}',
+      );
       emit(
         _messageState(
           AppText.pick('Could not save changes', 'تغییرات ذخیره نشد'),

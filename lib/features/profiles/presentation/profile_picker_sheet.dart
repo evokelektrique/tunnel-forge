@@ -8,8 +8,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:tunnel_forge/app/ui/app_scaffold_messenger.dart';
+import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/home/data/home_repositories_impl.dart';
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
+import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
+import 'package:tunnel_forge/features/home/domain/log_redaction.dart';
 import 'package:tunnel_forge/features/home/presentation/bloc/profiles_bloc.dart';
 import 'package:tunnel_forge/features/profile_form/presentation/bloc/profile_form_bloc.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
@@ -30,15 +33,18 @@ class ProfilePickerSheet extends StatefulWidget {
     super.key,
     required this.profilesBloc,
     required this.store,
+    this.logsRepository,
   });
 
   final ProfilesBloc profilesBloc;
   final ProfileStore store;
+  final LogsRepository? logsRepository;
 
   static Future<void> show(
     BuildContext context, {
     required ProfilesBloc profilesBloc,
     required ProfileStore store,
+    LogsRepository? logsRepository,
   }) {
     final theme = Theme.of(context);
     final sheetColor =
@@ -54,7 +60,11 @@ class ProfilePickerSheet extends StatefulWidget {
       backgroundColor: sheetColor,
       builder: (sheetContext) => BlocProvider.value(
         value: profilesBloc,
-        child: ProfilePickerSheet(profilesBloc: profilesBloc, store: store),
+        child: ProfilePickerSheet(
+          profilesBloc: profilesBloc,
+          store: store,
+          logsRepository: logsRepository,
+        ),
       ),
     );
   }
@@ -253,6 +263,11 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
       final bytes = await file.readAsBytes();
       if (!mounted) return;
       if (bytes.isEmpty) {
+        widget.logsRepository?.logDart(
+          LogLevel.warning,
+          'profiles',
+          'Profile import failed origin=file file=${quoteLogValue(file.name)} reason=empty_file',
+        );
         showAppSnackBar(
           context,
           AppText.current.couldNotReadSelectedFile,
@@ -268,7 +283,12 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
           source: file.name,
         ),
       );
-    } catch (_) {
+    } catch (error) {
+      widget.logsRepository?.logDart(
+        LogLevel.warning,
+        'profiles',
+        'Profile import failed origin=file reason=${error.runtimeType}',
+      );
       if (!mounted) return;
       showAppSnackBar(context, AppText.current.couldNotImportTfp, error: true);
     }
@@ -279,6 +299,11 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
       final data = await Clipboard.getData('text/plain');
       final text = data?.text?.trim() ?? '';
       if (text.isEmpty) {
+        widget.logsRepository?.logDart(
+          LogLevel.debug,
+          'profiles',
+          'Profile clipboard import skipped: clipboard empty',
+        );
         if (!mounted) return;
         showAppSnackBar(context, AppText.current.clipboardEmpty, error: true);
         return;
@@ -319,6 +344,11 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
       }
       await _importTransfer(transfer);
     } on FormatException catch (error) {
+      widget.logsRepository?.logDart(
+        LogLevel.warning,
+        'profiles',
+        'Profile import failed origin=clipboard reason=${error.runtimeType}',
+      );
       if (!mounted) return;
       final message = error.message.toString();
       showAppSnackBar(
@@ -326,7 +356,12 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         message.isEmpty ? AppText.current.clipboardInvalidProfile : message,
         error: true,
       );
-    } catch (_) {
+    } catch (error) {
+      widget.logsRepository?.logDart(
+        LogLevel.warning,
+        'profiles',
+        'Profile import failed origin=clipboard reason=${error.runtimeType}',
+      );
       if (!mounted) return;
       showAppSnackBar(
         context,
@@ -855,7 +890,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         'editor:${_editingProfileId ?? 'draft'}:$_editorSession',
       ),
       create: (_) =>
-          ProfileFormBloc(repository)
+          ProfileFormBloc(repository, logsRepository: widget.logsRepository)
             ..add(ProfileFormStarted(_editingProfileId)),
       child: ProfileEditorView(
         onClose: _closeEditor,

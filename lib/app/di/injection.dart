@@ -89,19 +89,23 @@ GetIt createAppLocator({
     () => ProfileTransferRepositoryImpl(bridge: profileTransferBridge),
     dispose: (repo) => repo.dispose(),
   );
-  locator.registerLazySingleton<LogsRepository>(
-    LogsRepositoryImpl.new,
+  locator.registerSingleton<LogsRepository>(
+    LogsRepositoryImpl(),
     dispose: (repo) => repo is LogsRepositoryImpl ? repo.dispose() : null,
   );
 
   locator.registerFactory<AppThemeBloc>(
-    () => AppThemeBloc(locator<ThemeRepository>()),
+    () => AppThemeBloc(
+      locator<ThemeRepository>(),
+      logsRepository: locator<LogsRepository>(),
+    ),
   );
   locator.registerFactory<OnboardingBloc>(
     () => OnboardingBloc(
       locator<OnboardingRepository>(),
       locator<AppExitController>(),
       skipDisclosureSteps: skipOnboardingDisclosure,
+      logsRepository: locator<LogsRepository>(),
     ),
   );
   locator.registerFactory<HomeNavBloc>(HomeNavBloc.new);
@@ -109,6 +113,7 @@ GetIt createAppLocator({
     () => ProfilesBloc(
       locator<ProfilesRepository>(),
       locator<ProfileTransferRepository>(),
+      logsRepository: locator<LogsRepository>(),
     ),
   );
   locator.registerFactory<SettingsBloc>(
@@ -141,5 +146,11 @@ GetIt createAppLocator({
 }
 
 void disposeLocator(GetIt locator) {
+  if (locator.isRegistered<LogsRepository>()) {
+    final logs = locator<LogsRepository>();
+    if (logs is LogsRepositoryImpl) {
+      unawaited(logs.dispose());
+    }
+  }
   unawaited(locator.reset(dispose: true));
 }

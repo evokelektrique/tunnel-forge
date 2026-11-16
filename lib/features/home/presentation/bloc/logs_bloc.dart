@@ -114,8 +114,14 @@ class LogsBloc extends Bloc<LogsEvent, LogsState> {
     Emitter<LogsState> emit,
   ) async {
     if (state.level == event.level) return;
+    final previous = state.level;
     emit(state.copyWith(level: event.level));
     await _settingsRepository.saveLogDisplayLevel(event.level);
+    _logsRepository.logDart(
+      LogLevel.debug,
+      'logs',
+      'Log level changed previous=${previous.storageValue} to=${event.level.storageValue}',
+    );
   }
 
   void _onWordWrapToggled(LogsWordWrapToggled event, Emitter<LogsState> emit) {

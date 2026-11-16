@@ -45,6 +45,55 @@ void main() {
       expect(tunnelRepository.levelCalls, isEmpty);
     },
   );
+
+  test('display level change logs DEBUG and clear leaves logs empty', () async {
+    final logs = _RecordingLogsRepository();
+    final bloc = LogsBloc(logs, settingsRepository, tunnelRepository);
+    addTearDown(bloc.close);
+
+    bloc.add(const LogsStarted());
+    await Future<void>.delayed(Duration.zero);
+
+    bloc.add(const LogsLevelChangeRequested(LogDisplayLevel.debug));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(logs.entries, hasLength(1));
+    expect(logs.entries.single.level, LogLevel.debug);
+    expect(logs.entries.single.tag, 'logs');
+    expect(
+      logs.entries.single.message,
+      'Log level changed previous=info to=debug',
+    );
+
+    bloc.add(const LogsCleared());
+    await Future<void>.delayed(Duration.zero);
+
+    expect(logs.clearCalls, 1);
+    expect(logs.entries, isEmpty);
+  });
+}
+
+class _RecordingLogsRepository implements LogsRepository {
+  final List<LogEntry> _entries = <LogEntry>[];
+  int clearCalls = 0;
+
+  @override
+  List<LogEntry> get entries => List<LogEntry>.unmodifiable(_entries);
+
+  @override
+  Stream<List<LogEntry>> get entriesStream => const Stream.empty();
+
+  @override
+  Future<void> loadPersisted() async {}
+
+  @override
+  void append(LogEntry entry) => _entries.add(entry);
+
+  @override
+  void clear() {
+    clearCalls += 1;
+    _entries.clear();
+  }
 }
 
 class _FakeLogsRepository implements LogsRepository {

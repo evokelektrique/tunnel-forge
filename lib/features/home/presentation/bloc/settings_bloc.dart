@@ -274,11 +274,26 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
   bool _batteryRefreshQueued = false;
   bool _batteryUnrestrictedLoggedThisSession = false;
   bool _pendingExternalBatterySettingsLog = false;
+  final Map<String, Timer> _debouncedLogTimers = <String, Timer>{};
 
   @override
   Future<void> close() async {
+    for (final timer in _debouncedLogTimers.values) {
+      timer.cancel();
+    }
+    _debouncedLogTimers.clear();
     await _batteryStatusSubscription?.cancel();
     return super.close();
+  }
+
+  void _scheduleDebouncedDebugLog(String key, String tag, String message) {
+    _debouncedLogTimers.remove(key)?.cancel();
+    _debouncedLogTimers[key] = Timer(const Duration(milliseconds: 500), () {
+      _debouncedLogTimers.remove(key);
+      if (!isClosed) {
+        _appendLog(LogLevel.debug, message, tag: tag);
+      }
+    });
   }
 
   Future<void> _onStarted(
@@ -559,6 +574,11 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
   ) async {
     emit(state.copyWith(connectionMode: event.mode));
     await _settingsRepository.saveConnectionMode(event.mode);
+    _appendLog(
+      LogLevel.debug,
+      'Connection mode changed mode=${event.mode.jsonValue}',
+      tag: 'settings',
+    );
   }
 
   Future<void> _onSplitTunnelSettingsChanged(
@@ -568,14 +588,35 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     final normalized = event.settings.copyWith();
     emit(state.copyWith(splitTunnelSettings: normalized));
     await _settingsRepository.saveSplitTunnelSettings(normalized);
+    _appendLog(
+      LogLevel.debug,
+      'Split tunnel updated enabled=${normalized.enabled} '
+      'mode=${normalized.mode.jsonValue} '
+      'inclusiveApps=${normalized.inclusivePackages.length} '
+      'exclusiveApps=${normalized.exclusivePackages.length}',
+      tag: 'settings',
+    );
   }
 
   Future<void> _onProxySettingsChanged(
     SettingsProxySettingsChanged event,
     Emitter<SettingsState> emit,
   ) async {
+    final lanChanged =
+        state.proxySettings.allowLanConnections !=
+        event.settings.allowLanConnections;
     emit(state.copyWith(proxySettings: event.settings));
     await _settingsRepository.saveProxySettings(event.settings);
+    final message =
+        'Proxy settings updated http=${event.settings.httpPort} '
+        'socks=${event.settings.socksPort} '
+        'lan=${event.settings.allowLanConnections}';
+    if (lanChanged) {
+      _debouncedLogTimers.remove('proxy')?.cancel();
+      _appendLog(LogLevel.debug, message, tag: 'settings');
+    } else {
+      _scheduleDebouncedDebugLog('proxy', 'settings', message);
+    }
   }
 
   Future<void> _onConnectivityCheckSettingsChanged(
@@ -587,6 +628,11 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       '${event.settings.timeoutMs}',
     );
     if (urlError != null || timeoutError != null) {
+      _appendLog(
+        LogLevel.warning,
+        'Connectivity check settings rejected',
+        tag: 'settings',
+      );
       emit(state.copyWith(connectivityUrlError: urlError ?? timeoutError));
       return;
     }
@@ -601,6 +647,11 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       ),
     );
     await _settingsRepository.saveConnectivityCheckSettings(settings);
+    _scheduleDebouncedDebugLog(
+      'connectivity',
+      'settings',
+      'Connectivity check settings updated url=${settings.url} timeoutMs=${settings.timeoutMs}',
+    );
   }
 
   Future<void> _onVersionCheckRequested(
@@ -622,6 +673,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       return;
     }
 
+    _appendLog(LogLevel.debug, 'update: checking GitHub releases');
     emit(
       state.copyWith(
         appUpdateStatus: AppUpdateStatus.loading,
@@ -658,6 +710,11 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
           'update: fetched ${release.versionLabel} but could not compare installed build. ${updateMessage ?? ''}'
               .trim(),
         );
+      } else {
+        _appendLog(
+          LogLevel.debug,
+          'update: check complete status=${status.name} latest=${release.versionLabel}',
+        );
       }
     } on AppUpdateException catch (error) {
       _appendLog(
@@ -687,19 +744,16 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     Emitter<SettingsState> emit,
   ) async {
     await _settingsRepository.saveUpdateCheckConsentGranted(true);
+    _appendLog(LogLevel.debug, 'update: consent granted by user');
     emit(state.copyWith(updateCheckConsentGranted: true));
     add(const SettingsVersionCheckRequested());
   }
 
-  void _appendLog(LogLevel level, String message) {
-    _logsRepository.append(
-      LogEntry(
-        timestamp: DateTime.now(),
-        level: level,
-        source: LogSource.dart,
-        tag: 'settings_update',
-        message: message,
-      ),
-    );
+  void _appendLog(
+    LogLevel level,
+    String message, {
+    String tag = 'settings_update',
+  }) {
+    _logsRepository.logDart(level, tag, message);
   }
 }

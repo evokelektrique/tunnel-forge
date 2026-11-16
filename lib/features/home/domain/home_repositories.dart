@@ -113,3 +113,17 @@ abstract class LogsRepository {
   void append(LogEntry entry);
   void clear();
 }
+
+extension LogsRepositoryDartLog on LogsRepository {
+  void logDart(LogLevel level, String tag, String message) {
+    append(
+      LogEntry(
+        timestamp: DateTime.now(),
+        level: level,
+        source: LogSource.dart,
+        tag: tag,
+        message: message,
+      ),
+    );
+  }
+}

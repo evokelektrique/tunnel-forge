@@ -246,6 +246,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       context,
       profilesBloc: profilesBloc,
       store: widget.locator<ProfileStore>(),
+      logsRepository: widget.locator<LogsRepository>(),
     );
   }
 
@@ -370,6 +371,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       context,
       profileId: profile.id,
       store: widget.locator<ProfileStore>(),
+      logsRepository: widget.locator<LogsRepository>(),
     );
     if (!mounted || !saved) return;
     final refreshResult = profilesBloc.stream
@@ -464,6 +466,11 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       ),
     );
     final count = visibleLogs.length;
+    widget.locator<LogsRepository>().logDart(
+      LogLevel.debug,
+      'logs',
+      'Copied visible logs count=$count level=${logsState.level.storageValue}',
+    );
     _toast(
       AppText.pick(
         'Copied $count ${count == 1 ? 'line' : 'lines'} to clipboard',
@@ -529,13 +536,23 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
           title: 'Share TunnelForge debug logs',
         ),
       );
+      widget.locator<LogsRepository>().logDart(
+        LogLevel.debug,
+        'logs',
+        'Shared debug logs files=${paths.length} includeTombstone=$includeTombstone',
+      );
       _toast(
         AppText.pick(
           'Prepared debug log archive for sharing',
           'فایل گزارش دیباگ برای اشتراک‌گذاری آماده شد',
         ),
       );
-    } catch (_) {
+    } catch (error) {
+      widget.locator<LogsRepository>().logDart(
+        LogLevel.warning,
+        'logs',
+        'Share debug logs failed error=${error.runtimeType}',
+      );
       _toast(
         AppText.pick(
           'Could not share debug logs',

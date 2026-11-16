@@ -23,12 +23,16 @@ enum AppLanguage {
 }
 
 class AppLanguageController extends ChangeNotifier {
-  AppLanguageController() {
+  AppLanguageController({
+    void Function(AppLanguage previous, AppLanguage next)? onLanguageChanged,
+  }) : _onLanguageChanged = onLanguageChanged {
     _load();
   }
 
   static const String _prefsKey = 'app_language_v1';
 
+  final void Function(AppLanguage previous, AppLanguage next)?
+  _onLanguageChanged;
   AppLanguage _language = AppLanguage.english;
 
   AppLanguage get language => _language;
@@ -44,9 +48,11 @@ class AppLanguageController extends ChangeNotifier {
 
   Future<void> setLanguage(AppLanguage language) async {
     if (language == _language) return;
+    final previous = _language;
     _language = language;
     AppText.setLanguage(language);
     notifyListeners();
+    _onLanguageChanged?.call(previous, language);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefsKey, language.code);
   }

@@ -4,6 +4,8 @@ import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
 
+import 'package:tunnel_forge/core/logging/log_entry.dart';
+import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
 import '../../domain/app_exit_controller.dart';
 import '../../domain/onboarding_repository.dart';
 
@@ -126,7 +128,9 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
     this._repository,
     this._appExitController, {
     bool? skipDisclosureSteps,
+    LogsRepository? logsRepository,
   }) : _skipDisclosureSteps = skipDisclosureSteps ?? kDebugMode,
+       _logsRepository = logsRepository,
        super(const OnboardingState()) {
     on<OnboardingStarted>(_onStarted);
     on<OnboardingReadOnlyOpened>(_onReadOnlyOpened);
@@ -141,7 +145,12 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
   final OnboardingRepository _repository;
   final AppExitController _appExitController;
   final bool _skipDisclosureSteps;
+  final LogsRepository? _logsRepository;
   StreamSubscription<int>? _countdownSubscription;
+
+  void _logDebug(String message) {
+    _logsRepository?.logDart(LogLevel.debug, 'onboarding', message);
+  }
 
   Future<void> _onStarted(
     OnboardingStarted event,
@@ -169,6 +178,7 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
     Emitter<OnboardingState> emit,
   ) async {
     await _stopCountdown();
+    _logDebug('Opened L2TP security notice (read-only)');
     emit(
       state.copyWith(
         status: OnboardingFlowStatus.presenting,
@@ -190,13 +200,18 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
         await _repository.saveAcknowledgedVersion(
           kCurrentL2tpDisclosureVersion,
         );
+        _logDebug(
+          'Onboarding completed from language step (disclosure skipped)',
+        );
         emit(state.copyWith(status: OnboardingFlowStatus.accepted));
         return;
       }
+      _logDebug('Onboarding step=language nextStep=intro');
       emit(state.copyWith(step: OnboardingStep.intro));
       return;
     }
     if (state.step != OnboardingStep.intro) return;
+    _logDebug('Onboarding step=intro nextStep=acknowledgement');
     emit(
       state.copyWith(
         step: OnboardingStep.acknowledgement,
@@ -245,6 +260,9 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
     if (!state.canAgree) return;
     await _repository.saveAcknowledgedVersion(kCurrentL2tpDisclosureVersion);
     await _stopCountdown();
+    _logDebug(
+      'Onboarding L2TP disclosure accepted version=$kCurrentL2tpDisclosureVersion',
+    );
     emit(state.copyWith(status: OnboardingFlowStatus.accepted));
   }
 
@@ -254,6 +272,7 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
   ) async {
     if (!state.isBlocking) return;
     await _stopCountdown();
+    _logDebug('Onboarding cancelled by user step=${state.step.name}');
     emit(state.copyWith(status: OnboardingFlowStatus.exiting));
     await _appExitController.closeApp();
   }

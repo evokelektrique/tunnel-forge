@@ -154,4 +154,68 @@ void main() {
       await repository.dispose();
     },
   );
+
+  test(
+    'redacts profile names, filenames, secrets, and endpoints on append and skips after dispose',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final bridge = FakeDiagnosticsBridge();
+      final repository = LogsRepositoryImpl(
+        prefsOverride: prefs,
+        bridgeOverride: bridge,
+      );
+
+      repository.append(
+        LogEntry(
+          timestamp: DateTime(2026, 1, 2, 3, 4, 5),
+          level: LogLevel.debug,
+          source: LogSource.dart,
+          tag: 'profiles',
+          message:
+              'Profile created profile=abc123 name="My Secret VPN" displayName="Work Office" '
+              'profileName=CorpVpn file="secret profile.tfp" filename=backup.tfp '
+              'server=vpn.example.com target=[REDACTED_TARGET]:443 url=https://example.com/check',
+        ),
+      );
+
+      expect(repository.entries, hasLength(1));
+      final rendered = repository.entries.single.message;
+      expect(rendered, isNot(contains('My Secret VPN')));
+      expect(rendered, isNot(contains('Work Office')));
+      expect(rendered, isNot(contains('CorpVpn')));
+      expect(rendered, isNot(contains('secret profile.tfp')));
+      expect(rendered, isNot(contains('backup.tfp')));
+      expect(rendered, isNot(contains('vpn.example.com')));
+      expect(rendered, isNot(contains('https://example.com/check')));
+      expect(rendered, contains('profile=abc123'));
+      expect(rendered, contains('name="[REDACTED]"'));
+      expect(rendered, contains('displayName="[REDACTED]"'));
+      expect(rendered, contains('profileName=[REDACTED]'));
+      expect(rendered, contains('file="[REDACTED]"'));
+      expect(rendered, contains('filename=[REDACTED]'));
+      expect(rendered, contains('server=[REDACTED_HOST]'));
+      expect(rendered, contains('target=[REDACTED_TARGET]:443'));
+      expect(rendered, contains('url=[REDACTED_URI]'));
+
+      await Future<void>.delayed(const Duration(milliseconds: 260));
+      expect(bridge.appendedEntries, hasLength(1));
+      expect(
+        bridge.appendedEntries.single[DiagnosticsContract.argMessage],
+        rendered,
+      );
+
+      await repository.dispose();
+      repository.append(
+        LogEntry(
+          timestamp: DateTime(2026, 1, 2, 3, 4, 6),
+          level: LogLevel.debug,
+          source: LogSource.dart,
+          tag: 'profiles',
+          message: 'ignored after dispose',
+        ),
+      );
+      expect(repository.entries, hasLength(1));
+    },
+  );
 }

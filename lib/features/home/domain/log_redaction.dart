@@ -20,6 +20,11 @@ final RegExp _logSecretFieldPattern = _logKeyValuePattern(<String>[
   'auth',
   'user',
   'username',
+  'displayName',
+  'profileName',
+  'name',
+  'file',
+  'filename',
 ]);
 final RegExp _logDnsFieldPattern = _logKeyValuePattern(<String>[
   'dns',
@@ -52,6 +57,11 @@ final RegExp _logIpv4EndpointPattern = RegExp(
 final RegExp _logHostnameEndpointPattern = RegExp(
   r'^(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+(?::\d{1,5})?$',
 );
+
+String quoteLogValue(String value) {
+  final safe = value.replaceAll('"', "'").replaceAll(RegExp(r'[\r\n]+'), ' ');
+  return '"$safe"';
+}
 
 String redactLogMessage(String input) {
   var output = input;
@@ -113,11 +123,9 @@ String _replaceLogKeyedValues(
 
 RegExp _logKeyValuePattern(List<String> keys, {bool allowCommas = false}) {
   final body = keys.map(RegExp.escape).join('|');
-  final valueClass = allowCommas ? '[^\\s;]+' : '[^\\s,;]+';
-  return RegExp(
-    '\\b($body)\\b(\\s*[=:]\\s*)($valueClass)',
-    caseSensitive: false,
-  );
+  final bareValueClass = allowCommas ? '[^\\s;]+' : '[^\\s,;]+';
+  final valueClass = '("[^"]*"|\'[^\']*\'|\\([^)]+\\)|$bareValueClass)';
+  return RegExp('\\b($body)\\b(\\s*[=:]\\s*)$valueClass', caseSensitive: false);
 }
 
 String? _logLocationPlaceholder(String key, String value) {
@@ -125,12 +133,12 @@ String? _logLocationPlaceholder(String key, String value) {
   final token = _trimLogWrappedToken(value);
   if (token.isEmpty) return null;
   if (_isLocalIpv4Endpoint(token)) return null;
+  if (token.startsWith('[REDACTED')) return token;
   final placeholder = switch (lowerKey) {
     'target' => '[REDACTED_TARGET]',
     'uri' || 'url' => '[REDACTED_URI]',
     _ => '[REDACTED_HOST]',
   };
-  if (token == '[REDACTED_URI]') return '[REDACTED_URI]';
   if (_logIpv4EndpointPattern.hasMatch(token)) {
     return _logPlaceholderWithPort(token, placeholder);
   }

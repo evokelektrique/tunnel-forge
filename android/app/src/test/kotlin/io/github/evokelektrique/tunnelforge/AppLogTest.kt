@@ -101,6 +101,26 @@ class AppLogTest {
         assertFalse(rendered.contains("hunter2"))
     }
 
+    @Test
+    fun renderForwardedMessageRedactsProfileNamesAndFilenames() {
+        val rendered =
+            AppLog.renderForwardedMessage(
+                """Profile created name="My Home VPN" displayName="Work Office" profileName=CorpVpn file="secret profile.tfp" filename=backup.tfp""",
+                null,
+            )
+
+        assertFalse(rendered.contains("My Home VPN"))
+        assertFalse(rendered.contains("Work Office"))
+        assertFalse(rendered.contains("CorpVpn"))
+        assertFalse(rendered.contains("secret profile.tfp"))
+        assertFalse(rendered.contains("backup.tfp"))
+        assertTrue(rendered.contains("""name="[REDACTED]""""))
+        assertTrue(rendered.contains("""displayName="[REDACTED]""""))
+        assertTrue(rendered.contains("profileName=[REDACTED]"))
+        assertTrue(rendered.contains("""file="[REDACTED]""""))
+        assertTrue(rendered.contains("filename=[REDACTED]"))
+    }
+
     private fun captureThrowable(): Throwable {
         return try {
             throw IllegalStateException("boom")

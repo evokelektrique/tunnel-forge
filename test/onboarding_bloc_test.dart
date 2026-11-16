@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tunnel_forge/core/logging/log_entry.dart';
+import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
 import 'package:tunnel_forge/features/onboarding/domain/app_exit_controller.dart';
 import 'package:tunnel_forge/features/onboarding/domain/onboarding_repository.dart';
 import 'package:tunnel_forge/features/onboarding/presentation/bloc/onboarding_bloc.dart';
@@ -212,5 +214,91 @@ void main() {
         ),
       ],
     );
+
+    test('emits DEBUG logs for onboarding transitions and actions', () async {
+      final logs = _RecordingLogsRepository();
+      final repository = _FakeOnboardingRepository();
+      final exitController = _FakeAppExitController();
+      final bloc = OnboardingBloc(
+        repository,
+        exitController,
+        skipDisclosureSteps: false,
+        logsRepository: logs,
+      );
+      addTearDown(bloc.close);
+
+      bloc.add(const OnboardingStarted());
+      await Future<void>.delayed(Duration.zero);
+      bloc.add(const OnboardingContinuePressed());
+      await Future<void>.delayed(Duration.zero);
+      bloc.add(const OnboardingContinuePressed());
+      await Future<void>.delayed(
+        const Duration(
+          seconds: kOnboardingAgreeCountdownSeconds,
+          milliseconds: 100,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      bloc.add(const OnboardingCheckboxChanged(true));
+      await Future<void>.delayed(Duration.zero);
+      bloc.add(const OnboardingAgreePressed());
+      await Future<void>.delayed(Duration.zero);
+
+      expect(logs.entries.every((e) => e.level == LogLevel.debug), isTrue);
+      expect(logs.entries.map((e) => e.message), [
+        'Onboarding step=language nextStep=intro',
+        'Onboarding step=intro nextStep=acknowledgement',
+        'Onboarding L2TP disclosure accepted version=$kCurrentL2tpDisclosureVersion',
+      ]);
+
+      final cancelLogs = _RecordingLogsRepository();
+      final cancelBloc = OnboardingBloc(
+        _FakeOnboardingRepository(),
+        _FakeAppExitController(),
+        logsRepository: cancelLogs,
+      );
+      addTearDown(cancelBloc.close);
+      cancelBloc.add(const OnboardingStarted());
+      await Future<void>.delayed(Duration.zero);
+      cancelBloc.add(const OnboardingCancelPressed());
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        cancelLogs.entries.single.message,
+        'Onboarding cancelled by user step=language',
+      );
+
+      final readOnlyLogs = _RecordingLogsRepository();
+      final readOnlyBloc = OnboardingBloc(
+        _FakeOnboardingRepository(),
+        _FakeAppExitController(),
+        logsRepository: readOnlyLogs,
+      );
+      addTearDown(readOnlyBloc.close);
+      readOnlyBloc.add(const OnboardingReadOnlyOpened());
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        readOnlyLogs.entries.single.message,
+        'Opened L2TP security notice (read-only)',
+      );
+    });
   });
+}
+
+class _RecordingLogsRepository implements LogsRepository {
+  final List<LogEntry> _entries = <LogEntry>[];
+
+  @override
+  List<LogEntry> get entries => List<LogEntry>.unmodifiable(_entries);
+
+  @override
+  Stream<List<LogEntry>> get entriesStream => const Stream.empty();
+
+  @override
+  Future<void> loadPersisted() async {}
+
+  @override
+  void append(LogEntry entry) => _entries.add(entry);
+
+  @override
+  void clear() => _entries.clear();
 }

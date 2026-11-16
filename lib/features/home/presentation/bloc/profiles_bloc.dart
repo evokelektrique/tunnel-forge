@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
+import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
@@ -11,6 +12,7 @@ import 'package:tunnel_forge/features/profiles/data/profile_transfer_contract.da
 import '../../../home/data/home_repositories_impl.dart';
 import '../../../home/domain/home_models.dart';
 import '../../../home/domain/home_repositories.dart';
+import '../../../home/domain/log_redaction.dart';
 
 sealed class ProfilesEvent extends Equatable {
   const ProfilesEvent();
@@ -214,8 +216,12 @@ class ProfilesState extends Equatable {
 }
 
 class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
-  ProfilesBloc(this._profilesRepository, this._transferRepository)
-    : super(const ProfilesState()) {
+  ProfilesBloc(
+    this._profilesRepository,
+    this._transferRepository, {
+    LogsRepository? logsRepository,
+  }) : _logsRepository = logsRepository,
+       super(const ProfilesState()) {
     on<ProfilesStarted>(_onStarted);
     on<ProfilesSelectionChanged>(_onSelectionChanged);
     on<ProfilesImportRequested>(_onImportRequested);
@@ -234,8 +240,22 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
 
   final ProfilesRepository _profilesRepository;
   final ProfileTransferRepository _transferRepository;
+  final LogsRepository? _logsRepository;
   StreamSubscription<IncomingProfileTransfer>? _transferSub;
   int _messageId = 0;
+
+  void _log(LogLevel level, String message) {
+    _logsRepository?.logDart(level, 'profiles', message);
+  }
+
+  String _describeTransferSource(IncomingProfileTransfer transfer) {
+    final source = transfer.source;
+    if (source == 'Clipboard') return 'origin=clipboard';
+    if (source != null && source.isNotEmpty) {
+      return 'origin=file file=${quoteLogValue(source)}';
+    }
+    return 'origin=file';
+  }
 
   Future<void> _onStarted(
     ProfilesStarted event,
@@ -262,6 +282,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
   ) async {
     if (event.id == null) {
       await _profilesRepository.setLastProfileId(null);
+      _log(LogLevel.debug, 'Profile selection cleared');
       emit(
         state.copyWith(clearActiveProfileId: true, clearActiveProfileRow: true),
       );
@@ -269,6 +290,10 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     }
     final row = await _profilesRepository.loadProfileWithSecrets(event.id!);
     if (row == null) {
+      _log(
+        LogLevel.warning,
+        'Profile selection failed: missing profile=${event.id}',
+      );
       emit(
         state.copyWith(
           message: _nextMessage(
@@ -283,6 +308,12 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       return;
     }
     await _profilesRepository.setLastProfileId(event.id);
+    _log(
+      LogLevel.debug,
+      'Profile selected profile=${event.id} '
+      'name=${quoteLogValue(row.profile.displayName)} '
+      'server=${row.profile.server} favorite=${row.profile.favorite}',
+    );
     emit(state.copyWith(activeProfileId: event.id, activeProfileRow: row));
   }
 
@@ -291,7 +322,12 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     Emitter<ProfilesState> emit,
   ) async {
     final transfer = event.request.transfer;
+    final sourceDesc = _describeTransferSource(transfer);
     if (transfer.isError) {
+      _log(
+        LogLevel.warning,
+        'Profile import failed $sourceDesc type=${transfer.type} reason=transfer_error',
+      );
       emit(
         state.copyWith(
           message: _nextMessage(
@@ -313,6 +349,12 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       final imported = await _profilesRepository.saveImportedProfiles(
         envelopes,
         selectAsLastProfile: event.request.selectAsLastProfile,
+      );
+      _log(
+        LogLevel.debug,
+        'Imported profiles count=${imported.length} $sourceDesc type=${transfer.type} '
+        'selected=${event.request.selectAsLastProfile} '
+        'ids=${imported.map((p) => p.id).join(',')}',
       );
       await _reloadProfiles(
         emit,
@@ -350,8 +392,16 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         ),
       );
     } on FormatException catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile import failed $sourceDesc type=${transfer.type} reason=${error.runtimeType}',
+      );
       emit(state.copyWith(message: _nextMessage(error.message, error: true)));
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile import failed $sourceDesc type=${transfer.type} reason=${error.runtimeType}',
+      );
       emit(
         state.copyWith(
           message: _nextMessage(
@@ -386,6 +436,12 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         envelopes,
         selectAsLastProfile: event.selectAsLastProfile,
       );
+      _log(
+        LogLevel.debug,
+        'Imported profiles batch count=${imported.length} origin=clipboard '
+        'selected=${event.selectAsLastProfile} '
+        'ids=${imported.map((p) => p.id).join(',')}',
+      );
       await _reloadProfiles(
         emit,
         preferredActiveId: event.selectAsLastProfile && imported.isNotEmpty
@@ -409,8 +465,16 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         ),
       );
     } on FormatException catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile batch import failed origin=clipboard count=${event.transfers.length} reason=${error.runtimeType}',
+      );
       emit(state.copyWith(message: _nextMessage(error.message, error: true)));
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile batch import failed origin=clipboard count=${event.transfers.length} reason=${error.runtimeType}',
+      );
       emit(
         state.copyWith(
           message: _nextMessage(
@@ -440,6 +504,10 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     if (uniqueIds.isEmpty) return;
     try {
       await _profilesRepository.deleteProfiles(uniqueIds);
+      _log(
+        LogLevel.debug,
+        'Deleted profiles count=${uniqueIds.length} ids=${uniqueIds.join(',')}',
+      );
       final shouldSelectFallback =
           state.activeProfileId != null &&
           uniqueIds.contains(state.activeProfileId);
@@ -463,7 +531,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           ),
         ),
       );
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Delete profiles failed count=${uniqueIds.length} error=${error.runtimeType}',
+      );
       final count = uniqueIds.length;
       emit(
         state.copyWith(
@@ -508,6 +580,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     if (ids.isEmpty) return;
     try {
       await _profilesRepository.copyProfileShareLinks(ids);
+      _log(LogLevel.debug, 'Copied share links count=${ids.length}');
       final count = ids.length;
       emit(
         state.copyWith(
@@ -522,8 +595,16 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         ),
       );
     } on ProfileRepositoryException catch (error) {
+      _log(
+        LogLevel.warning,
+        'Copy share links failed count=${ids.length} reason=repository_exception',
+      );
       emit(state.copyWith(message: _nextMessage(error.message, error: true)));
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Copy share links failed count=${ids.length} error=${error.runtimeType}',
+      );
       final count = ids.length;
       emit(
         state.copyWith(
@@ -562,6 +643,10 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     if (ids.isEmpty) return;
     try {
       await _profilesRepository.exportProfileFiles(ids, combined: combined);
+      _log(
+        LogLevel.debug,
+        'Exported profile files count=${ids.length} combined=$combined',
+      );
       final count = ids.length;
       emit(
         state.copyWith(
@@ -579,8 +664,16 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         ),
       );
     } on ProfileRepositoryException catch (error) {
+      _log(
+        LogLevel.warning,
+        'Export profile files failed count=${ids.length} combined=$combined reason=repository_exception',
+      );
       emit(state.copyWith(message: _nextMessage(error.message, error: true)));
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Export profile files failed count=${ids.length} combined=$combined error=${error.runtimeType}',
+      );
       final count = ids.length;
       emit(
         state.copyWith(
@@ -619,6 +712,10 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     try {
       final result = await _profilesRepository.toggleProfileFavorite(event.id);
       if (result.limitReached) {
+        _log(
+          LogLevel.debug,
+          'Favorite limit reached max=${Profile.maxFavorites} profile=${event.id}',
+        );
         emit(
           state.copyWith(
             message: _nextMessage(
@@ -628,6 +725,12 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         );
         return;
       }
+      final favoritesCount = result.profiles.where((p) => p.favorite).length;
+      _log(
+        LogLevel.debug,
+        'Profile ${result.favorite ? 'favorited' : 'unfavorited'} '
+        'profile=${event.id} favoritesCount=$favoritesCount',
+      );
       final currentActiveRow = state.activeProfileRow;
       var nextActiveRow = currentActiveRow;
       if (currentActiveRow != null && currentActiveRow.profile.id == event.id) {
@@ -649,7 +752,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           activeProfileRow: nextActiveRow,
         ),
       );
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile favorite toggle failed profile=${event.id} error=${error.runtimeType}',
+      );
       emit(
         state.copyWith(
           message: _nextMessage(
@@ -683,10 +790,20 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         oldIndex: event.oldIndex,
         newIndex: event.newIndex,
       );
+      _log(
+        LogLevel.debug,
+        'Profiles reordered section=${event.favoritesSection ? 'favorites' : 'others'} '
+        'oldIndex=${event.oldIndex} newIndex=${event.newIndex}',
+      );
       if (!_sameProfileOrder(state.profiles, persisted)) {
         emit(state.copyWith(profiles: persisted));
       }
-    } catch (_) {
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profiles reorder failed section=${event.favoritesSection ? 'favorites' : 'others'} '
+        'error=${error.runtimeType}',
+      );
       await _reloadProfiles(emit, preferredActiveId: state.activeProfileId);
       emit(
         state.copyWith(
