@@ -1,0 +1,108 @@
+name: Bug Report
+description: Report a bug or connection issue in TunnelForge
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe actual vs. expected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create profile with...
+        2. Tap Connect...
+        3. Observe error...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_source
+    attributes:
+      label: Install source
+      options:
+        - F-Droid
+        - GitHub Releases
+        - Self-built / Debug
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: self_built_commit
+    attributes:
+      label: Commit SHA (if Self-built / Debug)
+      description: Which commit did you build up to?
+      placeholder: e.g. a1b2c3d or git rev-parse --short HEAD
+
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: device_android
+    attributes:
+      label: Device model and Android version
+      placeholder: e.g. Pixel 7, Android 14
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Tunnel mode
+      options:
+        - Full-device VPN
+        - Proxy-only (HTTP / SOCKS5)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ipsec
+    attributes:
+      label: IPsec (IKEv1)
+      options:
+        - Enabled (IKEv1)
+        - Disabled (L2TP-only)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: routing
+    attributes:
+      label: Per-app routing
+      options:
+        - Off
+        - Inclusive
+        - Exclusive
+    validations:
+      required: true
+
+  - type: input
+    id: dns_mtu
+    attributes:
+      label: Custom DNS and MTU
+      placeholder: e.g. DNS: TLS 1.1.1.1 | MTU: 1400
+
+  - type: input
+    id: server_type
+    attributes:
+      label: VPN server software (if known)
+      placeholder: e.g. Libreswan, MikroTik, Windows, corporate gateway
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: App debug logs
+      description: From logs tab, click the export button and upload the .txt file here.
+      render: text
