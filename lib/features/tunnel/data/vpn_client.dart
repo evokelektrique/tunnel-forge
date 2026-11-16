@@ -45,8 +45,7 @@ class VpnClient {
        _onTunnelState = onTunnelState,
        _onEngineLog = onEngineLog,
        _onProxyExposureChanged = onProxyExposureChanged,
-       _onBatteryOptimizationStatusChanged =
-           onBatteryOptimizationStatusChanged,
+       _onBatteryOptimizationStatusChanged = onBatteryOptimizationStatusChanged,
        _onQuickSettingsConnect = onQuickSettingsConnect {
     _channel.setMethodCallHandler(_handleHostCall);
     _quickSettingsChannel.setMethodCallHandler(_handleQuickSettingsCall);

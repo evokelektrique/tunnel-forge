@@ -797,40 +797,37 @@ void main() {
     },
   );
 
-  test(
-    'Quick Settings attempt while idle triggers runtime sync',
-    () async {
-      final repo = _MutableRuntimeTunnelRepository(
-        const TunnelRuntimeState.idle(),
-      );
-      final bloc = TunnelBloc(repo, _FakeLogsRepository());
-      addTearDown(bloc.close);
+  test('Quick Settings attempt while idle triggers runtime sync', () async {
+    final repo = _MutableRuntimeTunnelRepository(
+      const TunnelRuntimeState.idle(),
+    );
+    final bloc = TunnelBloc(repo, _FakeLogsRepository());
+    addTearDown(bloc.close);
 
-      bloc.add(const TunnelStarted());
-      await Future<void>.delayed(Duration.zero);
-      expect(bloc.state.tunnelUp, isFalse);
+    bloc.add(const TunnelStarted());
+    await Future<void>.delayed(Duration.zero);
+    expect(bloc.state.tunnelUp, isFalse);
 
-      repo.currentRuntimeState = const TunnelRuntimeState(
-        state: VpnTunnelState.connected,
-        detail: 'Connected',
-        connectionMode: ConnectionMode.vpnTunnel,
-        attemptId: 'qs-123',
-      );
-      bloc.add(
-        const TunnelHostStateReceived(
-          TunnelHostUpdate(
-            state: VpnTunnelState.connected,
-            detail: 'Connected',
-            attemptId: 'qs-123',
-          ),
+    repo.currentRuntimeState = const TunnelRuntimeState(
+      state: VpnTunnelState.connected,
+      detail: 'Connected',
+      connectionMode: ConnectionMode.vpnTunnel,
+      attemptId: 'qs-123',
+    );
+    bloc.add(
+      const TunnelHostStateReceived(
+        TunnelHostUpdate(
+          state: VpnTunnelState.connected,
+          detail: 'Connected',
+          attemptId: 'qs-123',
         ),
-      );
-      await Future<void>.delayed(Duration.zero);
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
 
-      expect(bloc.state.tunnelUp, isTrue);
-      expect(bloc.state.activeAttemptId, 'qs-123');
-    },
-  );
+    expect(bloc.state.tunnelUp, isTrue);
+    expect(bloc.state.activeAttemptId, 'qs-123');
+  });
 }
 
 late _MutableRuntimeTunnelRepository _mutableRuntimeRepository;

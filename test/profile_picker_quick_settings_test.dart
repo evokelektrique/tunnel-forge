@@ -205,10 +205,7 @@ void main() {
       final syncCalls = qsCalls
           .where((c) => c.method == QuickSettingsContract.syncProfile)
           .toList();
-      expect(
-        (syncCalls.last.arguments as Map)[VpnContract.argProfileId],
-        'p2',
-      );
+      expect((syncCalls.last.arguments as Map)[VpnContract.argProfileId], 'p2');
       expect(
         (syncCalls.last.arguments as Map)[VpnContract.argServer],
         'beta.example',

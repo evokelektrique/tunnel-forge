@@ -172,7 +172,8 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   }
 
   Future<void> _consumePendingQuickSettingsConnect() async {
-    final pending = await widget.locator<TunnelRepository>()
+    final pending = await widget
+        .locator<TunnelRepository>()
         .consumePendingQuickSettingsConnect();
     if (!mounted || !pending) return;
     _handleQuickSettingsConnectSignal();
