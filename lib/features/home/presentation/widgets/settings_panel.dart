@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
+
+typedef ProxyPortAvailabilityChecker =
+    Future<bool?> Function(int port, {required bool allowLan});
 
 /// Theme mode, connection mode, split tunneling, and global local-proxy settings.
 class SettingsPanel extends StatefulWidget {
@@ -23,6 +28,7 @@ class SettingsPanel extends StatefulWidget {
     required this.onConnectionModeChanged,
     required this.onSplitTunnelSettingsChanged,
     required this.onProxySettingsChanged,
+    this.onCheckProxyPortAvailable,
     required this.onConnectivityCheckSettingsChanged,
     required this.onRequestBatteryOptimization,
     required this.onChooseApps,
@@ -56,6 +62,7 @@ class SettingsPanel extends StatefulWidget {
   final ValueChanged<ConnectionMode> onConnectionModeChanged;
   final ValueChanged<SplitTunnelSettings> onSplitTunnelSettingsChanged;
   final ValueChanged<ProxySettings> onProxySettingsChanged;
+  final ProxyPortAvailabilityChecker? onCheckProxyPortAvailable;
   final ValueChanged<ConnectivityCheckSettings>
   onConnectivityCheckSettingsChanged;
   final VoidCallback onRequestBatteryOptimization;
@@ -96,8 +103,11 @@ class _SettingsPanelState extends State<SettingsPanel> {
     20,
   );
 
-  late final TextEditingController _httpPortController;
-  late final TextEditingController _socksPortController;
+  static const Duration _kPortCheckDebounce = Duration(milliseconds: 500);
+  static const Duration _kPortCheckTimeout = Duration(seconds: 3);
+
+  late final _ProxyPortSlot _httpPortSlot;
+  late final _ProxyPortSlot _socksPortSlot;
   late final TextEditingController _connectivityUrlController;
   late final TextEditingController _connectivityTimeoutController;
   String? _connectivityUrlError;
@@ -106,12 +116,15 @@ class _SettingsPanelState extends State<SettingsPanel> {
   @override
   void initState() {
     super.initState();
-    _httpPortController = TextEditingController(
-      text: '${widget.proxySettings.httpPort}',
+    _httpPortSlot = _ProxyPortSlot(
+      initialPort: widget.proxySettings.httpPort,
+      onBlur: () => _handlePortFieldBlur(_httpPortSlot),
     );
-    _socksPortController = TextEditingController(
-      text: '${widget.proxySettings.socksPort}',
+    _socksPortSlot = _ProxyPortSlot(
+      initialPort: widget.proxySettings.socksPort,
+      onBlur: () => _handlePortFieldBlur(_socksPortSlot),
     );
+    _syncProxyFieldValidation(allowCheck: false);
     _connectivityUrlController = TextEditingController(
       text: widget.connectivityCheckSettings.url,
     );
@@ -123,17 +136,28 @@ class _SettingsPanelState extends State<SettingsPanel> {
   @override
   void didUpdateWidget(covariant SettingsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.proxySettings.httpPort != widget.proxySettings.httpPort) {
-      final nextText = '${widget.proxySettings.httpPort}';
-      if (_httpPortController.text != nextText) {
-        _httpPortController.text = nextText;
-      }
+    final httpUpdated = _syncSlotWithExternalPort(
+      _httpPortSlot,
+      oldPort: oldWidget.proxySettings.httpPort,
+      newPort: widget.proxySettings.httpPort,
+    );
+    final socksUpdated = _syncSlotWithExternalPort(
+      _socksPortSlot,
+      oldPort: oldWidget.proxySettings.socksPort,
+      newPort: widget.proxySettings.socksPort,
+    );
+    final allowLanChanged =
+        oldWidget.proxySettings.allowLanConnections !=
+        widget.proxySettings.allowLanConnections;
+    if (allowLanChanged) {
+      _httpPortSlot.resetAvailability();
+      _socksPortSlot.resetAvailability();
     }
-    if (oldWidget.proxySettings.socksPort != widget.proxySettings.socksPort) {
-      final nextText = '${widget.proxySettings.socksPort}';
-      if (_socksPortController.text != nextText) {
-        _socksPortController.text = nextText;
-      }
+    if (httpUpdated || socksUpdated || allowLanChanged) {
+      _syncProxyFieldValidation(
+        allowCheck: allowLanChanged && !widget.routingLocked,
+        immediateCheck: allowLanChanged,
+      );
     }
     if (oldWidget.connectivityCheckSettings.url !=
         widget.connectivityCheckSettings.url) {
@@ -159,8 +183,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   @override
   void dispose() {
-    _httpPortController.dispose();
-    _socksPortController.dispose();
+    _httpPortSlot.dispose();
+    _socksPortSlot.dispose();
     _connectivityUrlController.dispose();
     _connectivityTimeoutController.dispose();
     super.dispose();
@@ -382,36 +406,21 @@ class _SettingsPanelState extends State<SettingsPanel> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextFormField(
+                _buildProxyPortField(
                   key: const Key('proxy_http_port_field'),
-                  controller: _httpPortController,
-                  enabled: !widget.routingLocked,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(labelText: t.httpPort),
-                  onChanged: (value) => widget.onProxySettingsChanged(
-                    widget.proxySettings.copyWith(
-                      httpPort: ProxySettings.portFromText(
-                        value,
-                        fallback: widget.proxySettings.httpPort,
-                      ),
-                    ),
-                  ),
+                  label: t.httpPort,
+                  slot: _httpPortSlot,
                 ),
                 const SizedBox(height: 16),
-                TextFormField(
+                _buildProxyPortField(
                   key: const Key('proxy_socks_port_field'),
-                  controller: _socksPortController,
-                  enabled: !widget.routingLocked,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(labelText: t.socksPort),
-                  onChanged: (value) => widget.onProxySettingsChanged(
-                    widget.proxySettings.copyWith(
-                      socksPort: ProxySettings.portFromText(
-                        value,
-                        fallback: widget.proxySettings.socksPort,
-                      ),
-                    ),
-                  ),
+                  label: t.socksPort,
+                  slot: _socksPortSlot,
+                ),
+                const SizedBox(height: 8),
+                _cardText(
+                  t.proxyPortLimitsNote,
+                  color: widget.colorScheme.onSurfaceVariant,
                 ),
                 const SizedBox(height: 12),
                 SwitchListTile(
@@ -433,17 +442,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
                           ),
                         ),
                 ),
-                if (widget.proxySettings.httpPort ==
-                    widget.proxySettings.socksPort)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      t.proxyPortsDifferent,
-                      style: widget.textTheme.bodySmall?.copyWith(
-                        color: widget.colorScheme.error,
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -822,5 +820,316 @@ class _SettingsPanelState extends State<SettingsPanel> {
             : t.updateCheckError(widget.updateErrorMessage!),
       _ => t.checkGithubReleases,
     };
+  }
+
+  Widget _buildProxyPortField({
+    required Key key,
+    required String label,
+    required _ProxyPortSlot slot,
+  }) {
+    return TextFormField(
+      key: key,
+      controller: slot.controller,
+      focusNode: slot.focusNode,
+      enabled: !widget.routingLocked,
+      keyboardType: TextInputType.number,
+      inputFormatters: [
+        FilteringTextInputFormatter.digitsOnly,
+        LengthLimitingTextInputFormatter(5),
+      ],
+      decoration: InputDecoration(
+        labelText: label,
+        errorText: slot.errorText,
+        errorMaxLines: 2,
+        suffixIcon: slot.checking
+            ? const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : null,
+        suffixIconConstraints: const BoxConstraints(
+          minWidth: 40,
+          minHeight: 40,
+        ),
+      ),
+      onChanged: (_) => _handlePortFieldChanged(slot),
+      onEditingComplete: () => _handlePortFieldBlur(slot),
+    );
+  }
+
+  bool _syncSlotWithExternalPort(
+    _ProxyPortSlot slot, {
+    required int oldPort,
+    required int newPort,
+  }) {
+    if (oldPort == newPort) return false;
+    final nextText = '$newPort';
+    if (!slot.focusNode.hasFocus &&
+        slot.errorText == null &&
+        slot.controller.text != nextText) {
+      slot.controller.text = nextText;
+      slot.resetAvailability(verifiedPort: newPort);
+      return true;
+    }
+    return false;
+  }
+
+  void _handlePortFieldChanged(_ProxyPortSlot changedSlot) {
+    changedSlot.cancelPendingCheck();
+    final parsed = ProxySettings.parseValidPort(changedSlot.controller.text);
+    if (changedSlot.inUsePort != parsed) {
+      changedSlot.inUsePort = null;
+    }
+    _syncProxyFieldValidation(
+      allowCheck: true,
+      changedSlot: changedSlot,
+      notifyWidget: true,
+    );
+  }
+
+  void _handlePortFieldBlur(_ProxyPortSlot slot) {
+    if (slot.debounceTimer != null || slot.pendingCheckPort != null) {
+      slot.debounceTimer?.cancel();
+      slot.debounceTimer = null;
+      unawaited(_runPortCheck(slot));
+    }
+  }
+
+  void _syncProxyFieldValidation({
+    required bool allowCheck,
+    _ProxyPortSlot? changedSlot,
+    bool immediateCheck = false,
+    bool notifyWidget = false,
+  }) {
+    final httpText = _httpPortSlot.controller.text;
+    final socksText = _socksPortSlot.controller.text;
+    final httpSyntaxError = ProxySettings.validatePortText(httpText);
+    final socksSyntaxError = ProxySettings.validatePortText(socksText);
+    final httpPort = ProxySettings.parseValidPort(httpText);
+    final socksPort = ProxySettings.parseValidPort(socksText);
+    final colliding =
+        httpPort != null && socksPort != null && httpPort == socksPort;
+
+    void applySlot(_ProxyPortSlot slot, String? syntaxError, int? parsedPort) {
+      if (colliding) {
+        slot.cancelPendingCheck();
+        slot.errorText = AppText.current.proxyPortsDifferent;
+        return;
+      }
+      if (syntaxError != null) {
+        slot.cancelPendingCheck();
+        slot.inUsePort = null;
+        slot.errorText = syntaxError;
+        return;
+      }
+      if (parsedPort != null && slot.inUsePort == parsedPort) {
+        slot.errorText = AppText.current.proxyPortInUse(parsedPort);
+        return;
+      }
+      slot.inUsePort = null;
+      slot.errorText = null;
+    }
+
+    applySlot(_httpPortSlot, httpSyntaxError, httpPort);
+    applySlot(_socksPortSlot, socksSyntaxError, socksPort);
+
+    if (notifyWidget && mounted) {
+      setState(() {});
+    }
+
+    if (colliding || !allowCheck) return;
+
+    if (widget.onCheckProxyPortAvailable == null) {
+      _emitProxyPortsIfReady();
+      return;
+    }
+
+    var scheduledAny = false;
+    for (final (slot, parsedPort) in [
+      (_httpPortSlot, httpPort),
+      (_socksPortSlot, socksPort),
+    ]) {
+      if (parsedPort == null || slot.errorText != null) continue;
+      final needsCheck =
+          slot == changedSlot ||
+          immediateCheck ||
+          slot.lastCheckedFreePort != parsedPort;
+      if (!needsCheck) continue;
+      scheduledAny = true;
+      if (immediateCheck) {
+        unawaited(_runPortCheck(slot));
+      } else {
+        _schedulePortCheck(slot, parsedPort);
+      }
+    }
+    if (!scheduledAny) {
+      _emitProxyPortsIfReady();
+    }
+  }
+
+  void _schedulePortCheck(_ProxyPortSlot slot, int port) {
+    slot.debounceTimer?.cancel();
+    slot.pendingCheckPort = port;
+    slot.debounceTimer = Timer(_kPortCheckDebounce, () {
+      slot.debounceTimer = null;
+      unawaited(_runPortCheck(slot));
+    });
+  }
+
+  Future<void> _runPortCheck(_ProxyPortSlot slot) async {
+    final checker = widget.onCheckProxyPortAvailable;
+    if (checker == null || widget.routingLocked) return;
+    final port = ProxySettings.parseValidPort(slot.controller.text);
+    final httpPort = ProxySettings.parseValidPort(
+      _httpPortSlot.controller.text,
+    );
+    final socksPort = ProxySettings.parseValidPort(
+      _socksPortSlot.controller.text,
+    );
+    if (port == null || (httpPort != null && httpPort == socksPort)) {
+      slot.pendingCheckPort = null;
+      return;
+    }
+    final generation = ++slot.checkGeneration;
+    final allowLan = widget.proxySettings.allowLanConnections;
+    slot.timeoutTimer?.cancel();
+    slot.timeoutTimer = Timer(_kPortCheckTimeout, () {
+      slot.timeoutTimer = null;
+      if (!mounted || generation != slot.checkGeneration) return;
+      slot.checkGeneration += 1;
+      setState(() => slot.checking = false);
+      _emitProxyPortsIfReady();
+    });
+    if (mounted) {
+      setState(() {
+        slot.checking = true;
+        slot.pendingCheckPort = null;
+      });
+    }
+    bool? available;
+    try {
+      available = await checker(port, allowLan: allowLan);
+    } catch (_) {
+      available = null;
+    } finally {
+      if (generation == slot.checkGeneration) {
+        slot.timeoutTimer?.cancel();
+        slot.timeoutTimer = null;
+      }
+    }
+    if (!mounted || generation != slot.checkGeneration) return;
+    final currentPort = ProxySettings.parseValidPort(slot.controller.text);
+    final currentHttp = ProxySettings.parseValidPort(
+      _httpPortSlot.controller.text,
+    );
+    final currentSocks = ProxySettings.parseValidPort(
+      _socksPortSlot.controller.text,
+    );
+    final currentColliding =
+        currentHttp != null &&
+        currentSocks != null &&
+        currentHttp == currentSocks;
+    if (currentPort != port ||
+        allowLan != widget.proxySettings.allowLanConnections) {
+      setState(() => slot.checking = false);
+      return;
+    }
+    setState(() {
+      slot.checking = false;
+      if (available == false) {
+        slot.inUsePort = port;
+        slot.lastCheckedFreePort = null;
+        if (!currentColliding) {
+          slot.errorText = AppText.current.proxyPortInUse(port);
+        }
+      } else {
+        slot.inUsePort = null;
+        slot.lastCheckedFreePort = port;
+        if (!currentColliding) {
+          slot.errorText = null;
+        }
+      }
+    });
+    _emitProxyPortsIfReady();
+  }
+
+  void _emitProxyPortsIfReady() {
+    final httpPort = ProxySettings.parseValidPort(
+      _httpPortSlot.controller.text,
+    );
+    final socksPort = ProxySettings.parseValidPort(
+      _socksPortSlot.controller.text,
+    );
+    if (httpPort == null || socksPort == null || httpPort == socksPort) return;
+    if (_httpPortSlot.hasBlockingState || _socksPortSlot.hasBlockingState) {
+      return;
+    }
+    if (httpPort != widget.proxySettings.httpPort ||
+        socksPort != widget.proxySettings.socksPort) {
+      widget.onProxySettingsChanged(
+        widget.proxySettings.copyWith(httpPort: httpPort, socksPort: socksPort),
+      );
+    }
+  }
+}
+
+class _ProxyPortSlot {
+  _ProxyPortSlot({required int initialPort, required VoidCallback onBlur})
+    : controller = TextEditingController(text: '$initialPort'),
+      focusNode = FocusNode(),
+      lastCheckedFreePort = initialPort {
+    _focusListener = () {
+      if (!focusNode.hasFocus) {
+        onBlur();
+      }
+    };
+    focusNode.addListener(_focusListener);
+  }
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  late final VoidCallback _focusListener;
+  Timer? debounceTimer;
+  Timer? timeoutTimer;
+  int checkGeneration = 0;
+  int? pendingCheckPort;
+  int? lastCheckedFreePort;
+  int? inUsePort;
+  bool checking = false;
+  String? errorText;
+
+  bool get hasBlockingState =>
+      errorText != null ||
+      checking ||
+      debounceTimer != null ||
+      pendingCheckPort != null ||
+      inUsePort != null;
+
+  void cancelPendingCheck() {
+    debounceTimer?.cancel();
+    debounceTimer = null;
+    timeoutTimer?.cancel();
+    timeoutTimer = null;
+    pendingCheckPort = null;
+    checkGeneration += 1;
+    checking = false;
+  }
+
+  void resetAvailability({int? verifiedPort}) {
+    cancelPendingCheck();
+    inUsePort = null;
+    lastCheckedFreePort = verifiedPort;
+  }
+
+  void dispose() {
+    debounceTimer?.cancel();
+    timeoutTimer?.cancel();
+    focusNode.removeListener(_focusListener);
+    focusNode.dispose();
+    controller.dispose();
   }
 }

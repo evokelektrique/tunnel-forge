@@ -799,6 +799,12 @@ class _FakeTunnelRepository implements TunnelRepository {
   Future<List<CandidateApp>> listVpnCandidateApps() async => const [];
 
   @override
+  Future<bool?> checkProxyPortAvailable(
+    int port, {
+    required bool allowLanConnections,
+  }) async => true;
+
+  @override
   Future<BatteryOptimizationRequestResult> openBatteryOptimizationSettings() {
     return Future.value(
       const BatteryOptimizationRequestResult(

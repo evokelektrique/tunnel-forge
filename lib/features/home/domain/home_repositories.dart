@@ -90,6 +90,10 @@ abstract class TunnelRepository {
   Future<BatteryOptimizationRequestResult> openManufacturerBackgroundSettings();
   Future<List<CandidateApp>> listVpnCandidateApps();
   Future<Uint8List?> getAppIcon(String packageName);
+  Future<bool?> checkProxyPortAvailable(
+    int port, {
+    required bool allowLanConnections,
+  });
   void dispose();
 }
 

@@ -193,6 +193,12 @@ class _RecordingTunnelRepository implements TunnelRepository {
   Future<bool> prepareVpn() async => true;
 
   @override
+  Future<bool?> checkProxyPortAvailable(
+    int port, {
+    required bool allowLanConnections,
+  }) async => true;
+
+  @override
   Future<TunnelRuntimeState> getRuntimeState() async =>
       const TunnelRuntimeState.idle();
 

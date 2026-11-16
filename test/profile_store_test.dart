@@ -254,6 +254,41 @@ void main() {
       expect(proxy.allowLanConnections, isTrue);
     });
 
+    test(
+      'normalizes privileged and Android-reserved proxy ports to defaults',
+      () {
+        expect(ProxySettings.isAllowedPort(0), isFalse);
+        expect(ProxySettings.isAllowedPort(80), isFalse);
+        expect(ProxySettings.isAllowedPort(1023), isFalse);
+        expect(ProxySettings.isAllowedPort(1024), isTrue);
+        expect(ProxySettings.isAllowedPort(1701), isFalse);
+        expect(ProxySettings.isAllowedPort(4500), isFalse);
+        expect(ProxySettings.isAllowedPort(5037), isFalse);
+        expect(ProxySettings.isAllowedPort(5353), isFalse);
+        expect(ProxySettings.isAllowedPort(5554), isFalse);
+        expect(ProxySettings.isAllowedPort(5555), isFalse);
+        expect(ProxySettings.isAllowedPort(65536), isFalse);
+        expect(
+          ProxySettings.normalizePort(
+            80,
+            fallback: ProxySettings.defaultHttpPort,
+          ),
+          ProxySettings.defaultHttpPort,
+        );
+        expect(
+          ProxySettings.normalizePort(
+            5353,
+            fallback: ProxySettings.defaultSocksPort,
+          ),
+          ProxySettings.defaultSocksPort,
+        );
+        expect(ProxySettings.validatePortText('80'), contains('1–1023'));
+        expect(ProxySettings.validatePortText('5353'), contains('5353'));
+        expect(ProxySettings.validatePortText('5555'), contains('5555'));
+        expect(ProxySettings.validatePortText('18080'), isNull);
+      },
+    );
+
     test('persists split-tunnel settings', () async {
       await store.saveSplitTunnelSettings(
         const SplitTunnelSettings(

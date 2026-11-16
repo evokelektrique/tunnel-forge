@@ -218,8 +218,7 @@ class HttpConnectivityChecker implements ConnectivityChecker {
         if (host == null ||
             host.isEmpty ||
             port == null ||
-            port < ProxySettings.minPort ||
-            port > ProxySettings.maxPort) {
+            !ProxySettings.isAllowedPort(port)) {
           throw SocketException('Invalid local HTTP proxy configuration');
         }
         return 'PROXY $host:$port';

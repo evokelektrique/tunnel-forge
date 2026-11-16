@@ -366,4 +366,24 @@ class VpnClient {
       <String, Object?>{VpnContract.argLogLevel: level.storageValue},
     );
   }
+
+  /// Checks whether [port] can bind on Android; null if unsupported or check fails.
+  Future<bool?> checkProxyPortAvailable(
+    int port, {
+    required bool allowLanConnections,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+        VpnContract.checkProxyPortAvailable,
+        <String, Object?>{
+          VpnContract.argPort: port,
+          VpnContract.argProxyAllowLan: allowLanConnections,
+        },
+      );
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
 }

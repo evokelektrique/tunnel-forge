@@ -170,22 +170,60 @@ class ProxySettings {
 
   static const int defaultHttpPort = 8080;
   static const int defaultSocksPort = 1080;
-  static const int minPort = 1;
+  static const int minPort = 1024;
   static const int maxPort = 65535;
+  static const Map<int, String> reservedPorts = <int, String>{
+    1701: 'L2TP',
+    4500: 'IPsec NAT-T',
+    5037: 'ADB',
+    5353: 'mDNS',
+    5554: 'Android Emulator',
+    5555: 'ADB over TCP',
+  };
 
   final int httpPort;
   final int socksPort;
   final bool allowLanConnections;
 
+  static bool isAllowedPort(int port) {
+    return port >= minPort &&
+        port <= maxPort &&
+        !reservedPorts.containsKey(port);
+  }
+
   static int normalizePort(int value, {required int fallback}) {
-    if (value < minPort || value > maxPort) return fallback;
+    if (!isAllowedPort(value)) return fallback;
     return value;
   }
 
-  static int portFromText(String text, {required int fallback}) {
+  static int? parseValidPort(String text) {
     final parsed = int.tryParse(text.trim());
-    if (parsed == null) return fallback;
-    return normalizePort(parsed, fallback: fallback);
+    if (parsed == null || !isAllowedPort(parsed)) return null;
+    return parsed;
+  }
+
+  static String? validatePortText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      return AppText.current.proxyPortInvalidFormat;
+    }
+    final parsed = int.tryParse(trimmed);
+    if (parsed == null || parsed < 1 || parsed > maxPort) {
+      return AppText.current.proxyPortInvalidFormat;
+    }
+    if (parsed < minPort) {
+      return AppText.current.proxyPortPrivileged;
+    }
+    final reservedService = reservedPorts[parsed];
+    if (reservedService != null) {
+      return AppText.current.proxyPortReserved(parsed, reservedService);
+    }
+    return null;
+  }
+
+  static int portFromText(String text, {required int fallback}) {
+    final parsed = parseValidPort(text);
+    return parsed ?? fallback;
   }
 
   ProxySettings copyWith({

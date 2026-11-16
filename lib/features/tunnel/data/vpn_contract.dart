@@ -18,9 +18,11 @@ abstract final class VpnContract {
       'openBatteryOptimizationSettings';
   static const String openManufacturerBackgroundSettings =
       'openManufacturerBackgroundSettings';
+  static const String checkProxyPortAvailable = 'checkProxyPortAvailable';
 
   /// Correlates one connect attempt across Dart UI, logs, and Android logcat.
   static const String argAttemptId = 'attemptId';
+  static const String argPort = 'port';
   static const String argLogLevel = 'logLevel';
   static const String argBatteryOptimizationState = 'state';
   static const String argBatteryOptimizationOutcome = 'outcome';

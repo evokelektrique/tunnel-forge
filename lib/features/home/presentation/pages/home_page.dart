@@ -901,6 +901,13 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                     onProxySettingsChanged: (settings) => context
                         .read<SettingsBloc>()
                         .add(SettingsProxySettingsChanged(settings)),
+                    onCheckProxyPortAvailable: (port, {required allowLan}) =>
+                        widget
+                            .locator<TunnelRepository>()
+                            .checkProxyPortAvailable(
+                              port,
+                              allowLanConnections: allowLan,
+                            ),
                     proxyExposure: tunnelState.proxyExposure,
                     onConnectivityCheckSettingsChanged: (settings) =>
                         context.read<SettingsBloc>().add(

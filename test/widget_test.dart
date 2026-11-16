@@ -2027,4 +2027,50 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'editing local proxy port in Settings tab checks and saves port',
+    (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: MemorySecretStore(),
+      );
+
+      installVpnChannelMock(<String>[]);
+      addTearDown(uninstallVpnChannelMock);
+      addTearDown(() async {
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.binding.setSurfaceSize(const Size(480, 1200));
+
+      await tester.pumpWidget(
+        TunnelForgeApp(
+          onboardingRepository: const _AcceptedOnboardingRepository(),
+          profileStore: store,
+        ),
+      );
+      await tester.pump();
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      await tester.tap(find.text('Settings'));
+      await tester.pumpAndSettle();
+
+      final httpField = find.byKey(const Key('proxy_http_port_field'));
+      await tester.scrollUntilVisible(
+        httpField,
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.enterText(httpField, '18080');
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect((await store.loadProxySettings()).httpPort, 18080);
+    },
+  );
 }

@@ -398,6 +398,39 @@ class MainActivity : FlutterActivity() {
                 VpnContract.OPEN_MANUFACTURER_BACKGROUND_SETTINGS -> {
                     result.success(openManufacturerBackgroundSettings())
                 }
+                VpnContract.CHECK_PROXY_PORT_AVAILABLE -> {
+                    val args = call.arguments as? Map<*, *>
+                    val port = (args?.get(VpnContract.ARG_PORT) as? Number)?.toInt()
+                    val allowLan = args?.get(VpnContract.ARG_PROXY_ALLOW_LAN) as? Boolean ?: false
+                    if (port == null || !ProxyPortAllocator.isAllowedPort(port)) {
+                        result.success(false)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        profileTransferExecutor.execute {
+                            val available =
+                                try {
+                                    val bindHosts =
+                                        if (!allowLan) {
+                                            listOf(ProxyExposureInfo.LOOPBACK)
+                                        } else {
+                                            LanProxyAddressResolver(this).resolve(
+                                                httpPort = port,
+                                                socksPort = port,
+                                                lanRequested = true,
+                                            ).listenerBindAddresses()
+                                        }
+                                    ProxyPortAllocator.isAvailableOnAllHosts(port, bindHosts)
+                                } catch (t: Throwable) {
+                                    AppLog.w(TAG, "checkProxyPortAvailable failed port=$port: ${t.message}")
+                                    null
+                                }
+                            mainHandler.post { result.success(available) }
+                        }
+                    } catch (_: RejectedExecutionException) {
+                        result.success(null)
+                    }
+                }
                 VpnContract.DISCONNECT -> {
                     val args = call.arguments as? Map<*, *>
                     val rawMode = args?.get(VpnContract.ARG_CONNECTION_MODE)?.toString()
@@ -917,7 +950,7 @@ class MainActivity : FlutterActivity() {
                 is Number -> raw.toInt()
                 else -> fallback
             }
-        return if (candidate in 1..65535) candidate else fallback
+        return ProxyPortAllocator.sanitizePort(candidate, fallback)
     }
 
     private fun parseDnsServers(raw: Any?): List<DnsServerConfig> {

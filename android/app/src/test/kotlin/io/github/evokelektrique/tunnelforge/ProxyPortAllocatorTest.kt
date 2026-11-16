@@ -165,4 +165,45 @@ class ProxyPortAllocatorTest {
         assertNull(selection)
         assertEquals(ProxyPortAllocator.RANDOM_CHECKS, randomPortChecks)
     }
+
+    @Test
+    fun rejectsPrivilegedAndReservedAndroidPorts() {
+        assertFalse(ProxyPortAllocator.isAllowedPort(0))
+        assertFalse(ProxyPortAllocator.isAllowedPort(80))
+        assertFalse(ProxyPortAllocator.isAllowedPort(1023))
+        assertTrue(ProxyPortAllocator.isAllowedPort(1024))
+        assertFalse(ProxyPortAllocator.isAllowedPort(1701))
+        assertFalse(ProxyPortAllocator.isAllowedPort(4500))
+        assertFalse(ProxyPortAllocator.isAllowedPort(5037))
+        assertFalse(ProxyPortAllocator.isAllowedPort(5353))
+        assertFalse(ProxyPortAllocator.isAllowedPort(5554))
+        assertFalse(ProxyPortAllocator.isAllowedPort(5555))
+        assertFalse(ProxyPortAllocator.isAllowedPort(65536))
+
+        assertEquals(8080, ProxyPortAllocator.sanitizePort(80, 8080))
+        assertEquals(1080, ProxyPortAllocator.sanitizePort(5353, 1080))
+        assertEquals(18080, ProxyPortAllocator.sanitizePort(18080, 8080))
+
+        val sequential =
+            ProxyPortAllocator.chooseSequential(
+                requestedHttpPort = 5553,
+                requestedSocksPort = 5352,
+                bindHosts = listOf("127.0.0.1"),
+                isPortAvailable = { _, _ -> true },
+            )
+        assertNotNull(sequential)
+        assertEquals(5553, sequential!!.httpPort)
+        assertEquals(5352, sequential.socksPort)
+
+        val skippedReserved =
+            ProxyPortAllocator.chooseSequential(
+                requestedHttpPort = 5554,
+                requestedSocksPort = 5353,
+                bindHosts = listOf("127.0.0.1"),
+                isPortAvailable = { _, _ -> true },
+            )
+        assertNotNull(skippedReserved)
+        assertEquals(5556, skippedReserved!!.httpPort)
+        assertEquals(5354, skippedReserved.socksPort)
+    }
 }

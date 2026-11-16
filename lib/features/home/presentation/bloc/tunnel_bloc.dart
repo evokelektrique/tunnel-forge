@@ -276,6 +276,22 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
       );
       return;
     }
+    if (!ProxySettings.isAllowedPort(request.proxySettings.httpPort) ||
+        !ProxySettings.isAllowedPort(request.proxySettings.socksPort)) {
+      _toast(
+        emit,
+        AppText.pick(
+          'Local proxy ports must be 1024–65535 and not reserved on Android.',
+          'درگاه‌های پروکسی محلی باید بین ۱۰۲۴ تا ۶۵۵۳۵ باشند و در اندروید رزرو نشده باشند.',
+        ),
+        error: true,
+      );
+      _logWarning(
+        'Connect blocked: invalid proxy ports http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort}',
+        tag: 'tunnel',
+      );
+      return;
+    }
     if (request.proxySettings.httpPort == request.proxySettings.socksPort) {
       _toast(
         emit,

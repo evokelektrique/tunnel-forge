@@ -1215,7 +1215,7 @@ class ProxyTunnelService : Service() {
         private const val CHANNEL_ID = "tunnel_forge_proxy"
         private const val NOTIFICATION_ID = 7111
 
-        internal fun sanitizePort(value: Int, fallback: Int): Int = if (value in 1..65535) value else fallback
+        internal fun sanitizePort(value: Int, fallback: Int): Int = ProxyPortAllocator.sanitizePort(value, fallback)
         private fun sanitizeMtu(value: Int): Int = TunnelVpnService.sanitizeMtu(value)
 
         private fun prefixAttempt(attemptId: String): String = if (attemptId.isEmpty()) "" else "attempt=$attemptId "

@@ -514,5 +514,42 @@ void main() {
         ),
       );
     });
+
+    test(
+      'checkProxyPortAvailable passes args and handles missing plugin',
+      () async {
+        final client = VpnClient();
+        expect(
+          await client.checkProxyPortAvailable(
+            18080,
+            allowLanConnections: true,
+          ),
+          isNull,
+        );
+
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+              const MethodChannel(VpnContract.channel),
+              (call) async {
+                if (call.method == VpnContract.checkProxyPortAvailable) {
+                  final args = call.arguments as Map;
+                  expect(args[VpnContract.argPort], 18080);
+                  expect(args[VpnContract.argProxyAllowLan], isTrue);
+                  return false;
+                }
+                return null;
+              },
+            );
+
+        expect(
+          await client.checkProxyPortAvailable(
+            18080,
+            allowLanConnections: true,
+          ),
+          isFalse,
+        );
+        client.dispose();
+      },
+    );
   });
 }

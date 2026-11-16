@@ -280,6 +280,26 @@ extension AppStrings on AppLocalizations {
     'HTTP and SOCKS5 ports must be different before connecting.',
     'درگاه‌های HTTP و SOCKS5 قبل از اتصال باید متفاوت باشند.',
   );
+  String get proxyPortInvalidFormat => AppText.pick(
+    'Enter a port number between 1024 and 65535.',
+    'یک شماره درگاه بین ۱۰۲۴ تا ۶۵۵۳۵ وارد کنید.',
+  );
+  String get proxyPortPrivileged => AppText.pick(
+    'Ports 1–1023 are reserved by Android and require system privileges. Use 1024–65535.',
+    'درگاه‌های ۱ تا ۱۰۲۳ توسط اندروید رزرو شده‌اند و به دسترسی سیستمی نیاز دارند. از ۱۰۲۴ تا ۶۵۵۳۵ استفاده کنید.',
+  );
+  String proxyPortReserved(int port, String service) => AppText.pick(
+    'Port $port is reserved on Android ($service) and cannot be used.',
+    'درگاه $port در اندروید رزرو شده است ($service) و قابل استفاده نیست.',
+  );
+  String proxyPortInUse(int port) => AppText.pick(
+    'Port $port is currently in use by another app or service.',
+    'درگاه $port در حال حاضر توسط برنامه یا سرویس دیگری استفاده می‌شود.',
+  );
+  String get proxyPortLimitsNote => AppText.pick(
+    'Android restricts ports 1–1023 (system privileged) and reserves critical ports such as 1701 (L2TP), 4500 (IPsec), 5037 (ADB), 5353 (mDNS), and 5554–5555 (Emulator/ADB). Allowed range: 1024–65535.',
+    'اندروید درگاه‌های ۱ تا ۱۰۲۳ (سیستمی) را محدود می‌کند و درگاه‌های حساس مانند ۱۷۰۱ (L2TP)، ۴۵۰۰ (IPsec)، ۵۰۳۷ (ADB)، ۵۳۵۳ (mDNS) و ۵۵۵۴–۵۵۵۵ (شبیه‌ساز/ADB) رزرو هستند. بازه مجاز: ۱۰۲۴ تا ۶۵۵۳۵.',
+  );
   String get proxyEndpoints =>
       AppText.pick('Proxy endpoints', 'نقطه‌های پایانی پروکسی');
   String get lanClientsCanUse => AppText.pick(

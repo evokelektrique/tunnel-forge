@@ -641,6 +641,17 @@ class TunnelRepositoryImpl implements TunnelRepository {
   Future<void> setLogLevel(LogDisplayLevel level) {
     return _client.setLogLevel(level);
   }
+
+  @override
+  Future<bool?> checkProxyPortAvailable(
+    int port, {
+    required bool allowLanConnections,
+  }) {
+    return _client.checkProxyPortAvailable(
+      port,
+      allowLanConnections: allowLanConnections,
+    );
+  }
 }
 
 class ConnectivityRepositoryImpl implements ConnectivityRepository {
