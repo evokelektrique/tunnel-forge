@@ -254,7 +254,6 @@ static int recv_plain(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt, int *use
                         "l2tp recv_plain: esp_try_decrypt skip raw_len=%zd (IKE retransmit or garbage)", n);
       l2tp_hs_trace_evt("decrypt-skip short", raw, n);
     }
-    continue;
   }
 
   tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: exceeded max iterations (keepalive loop)");
@@ -440,7 +439,10 @@ static uint16_t pick_local_id(uint16_t remote, uint16_t salt) {
 }
 
 static int recv_ctrl_update_nr(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt, uint8_t *in, size_t cap,
-                               int timeout_ms, l2tp_session_t *s, uint16_t *out_mt, int *used_alt) {
+                               int timeout_ms, l2tp_session_t *s, uint16_t *out_mt, uint16_t *out_nr,
+                               int *out_result_err, int *used_alt) {
+  if (out_result_err != NULL)
+    *out_result_err = 0;
   int ilen = recv_plain(esp_fd, esp, esp_alt, used_alt, in, cap, timeout_ms);
   if (ilen < 0) {
     tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: recv_plain failed/timeout ilen=%d", ilen);
@@ -459,10 +461,11 @@ static int recv_ctrl_update_nr(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt,
   uint16_t peer_ns, peer_nr;
   if (l2tp_ctrl_get_ns_nr(in, (size_t)ilen, &peer_ns, &peer_nr) != 0)
     return -1;
-  (void)peer_nr;
   if (ilen > (int)L2TP_CTRL_HDR)
     ingest_peer_ns(s, peer_ns);
   if (l2tp_ctrl_result_ok(in, (size_t)ilen) != 0) {
+    if (out_result_err != NULL)
+      *out_result_err = 1;
     uint16_t mt_dbg = 0;
     uint16_t result_code = 0;
     uint16_t error_code = 0;
@@ -480,6 +483,8 @@ static int recv_ctrl_update_nr(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt,
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: Result Code AVP error");
     return -1;
   }
+  if (out_nr != NULL)
+    *out_nr = peer_nr;
   if (out_mt) {
     if (l2tp_ctrl_msg_type(in, (size_t)ilen, out_mt) != 0) {
       // ZLB/ACK control packets may have no Message Type AVP.
@@ -506,7 +511,7 @@ static int recv_until_mt(int esp_fd, esp_keys_t *esp, const struct sockaddr *pee
                          size_t cap, l2tp_session_t *s, uint16_t want_mt) {
   for (int i = 0; i < 12; i++) {
     uint16_t mt = 0;
-    int ilen = recv_ctrl_update_nr(esp_fd, esp, NULL, in, cap, 8000, s, &mt, NULL);
+    int ilen = recv_ctrl_update_nr(esp_fd, esp, NULL, in, cap, 8000, s, &mt, NULL, NULL, NULL);
     if (ilen < 0)
       return -1;
     if (mt == want_mt)
@@ -518,7 +523,7 @@ static int recv_until_mt(int esp_fd, esp_keys_t *esp, const struct sockaddr *pee
                         (unsigned)want_mt, i, (unsigned)s->send_ns, (unsigned)s->recv_nr_expected);
       continue;
     }
-    if (mt == 5) {
+    if (mt == L2TP_MSG_HELLO) {
       if (send_zlb(esp_fd, esp, peer, peer_len, s) != 0)
         return -1;
       continue;
@@ -529,6 +534,35 @@ static int recv_until_mt(int esp_fd, esp_keys_t *esp, const struct sockaddr *pee
                       (unsigned)want_mt);
   }
   return -1;
+}
+
+/* RFC 2661 sec 6.3: SCCCN carries Message Type (and optional Challenge Response), never Assigned Tunnel ID. */
+static int build_scccn_avps(uint8_t *avps, size_t cap, size_t *out_len) {
+  size_t ao = 0;
+  if (l2tp_avp_append_u16(avps, cap, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_SCCCN) != 0)
+    return -1;
+  *out_len = ao;
+  return 0;
+}
+
+/* Wait up to timeout_ms for peer Nr to acknowledge target_nr when peer Receive Window Size is 1.
+ * Returns 0 when acknowledged, -1 on fatal Result Code / send error, or 1 on timeout fallback. */
+static int wait_ctrl_ack(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                         l2tp_session_t *s, uint16_t target_nr, int timeout_ms) {
+  uint8_t in[4096];
+  for (int i = 0; i < 4; i++) {
+    uint16_t mt = 0;
+    uint16_t peer_nr = 0;
+    int result_err = 0;
+    int ilen = recv_ctrl_update_nr(esp_fd, esp, NULL, in, sizeof(in), timeout_ms, s, &mt, &peer_nr, &result_err, NULL);
+    if (ilen < 0)
+      return result_err ? -1 : 1;
+    if (mt == L2TP_MSG_HELLO && send_zlb(esp_fd, esp, peer, peer_len, s) != 0)
+      return -1;
+    if ((uint16_t)(peer_nr - target_nr) < 0x8000u)
+      return 0;
+  }
+  return 1;
 }
 
 static int l2tp_dispatch_control(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
@@ -584,7 +618,7 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   uint8_t in[4096];
   uint16_t mt = 0;
   /* First SCCRP can be slow on loaded xl2tpd / lossy Wi-Fi; runtime saw rx=0 @ 8s with no decrypt attempts. */
-  int ilen = recv_ctrl_update_nr(esp_fd, esp, NULL, in, sizeof(in), 15000, s, &mt, NULL);
+  int ilen = recv_ctrl_update_nr(esp_fd, esp, NULL, in, sizeof(in), 15000, s, &mt, NULL, NULL, NULL);
   if (ilen < 0) {
     struct profile_try {
       int swap_direction;
@@ -608,7 +642,7 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
         continue;
       }
       int used_alt = 0;
-      ilen = recv_ctrl_update_nr(esp_fd, esp, &esp_alt, in, sizeof(in), 15000, s, &mt, &used_alt);
+      ilen = recv_ctrl_update_nr(esp_fd, esp, &esp_alt, in, sizeof(in), 15000, s, &mt, NULL, NULL, &used_alt);
       if (ilen >= 0) {
         if (used_alt) {
           *esp = esp_alt;
@@ -642,14 +676,17 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   uint16_t remote_tid = 0;
   if (l2tp_avp_first_u16(in, (size_t)ilen, L2TP_AVP_ASSIGNED_TUNNEL, &remote_tid) != 0 || remote_tid == 0)
     return -1;
+  uint16_t peer_rws = 0;
+  (void)l2tp_avp_first_u16(in, (size_t)ilen, L2TP_AVP_RECV_WINDOW, &peer_rws);
 
   s->tunnel_id = remote_tid;
   s->peer_tunnel_id = local_tid;
 
-  ao = 0;
-  avp_u16(avps, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_SCCCN);
-  avp_u16(avps, &ao, L2TP_AVP_ASSIGNED_TUNNEL, local_tid);
+  if (build_scccn_avps(avps, sizeof(avps), &ao) != 0)
+    return -1;
   if (send_ctrl(esp_fd, esp, peer, peer_len, s, avps, ao) != 0)
+    return -1;
+  if (peer_rws == 1u && wait_ctrl_ack(esp_fd, esp, peer, peer_len, s, s->send_ns, 1500) < 0)
     return -1;
 
   // RFC 2661: ICRQ must carry caller-assigned Session ID (AVP 14).

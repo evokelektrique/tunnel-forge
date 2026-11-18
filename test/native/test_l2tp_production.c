@@ -63,7 +63,8 @@ int main(void) {
   l2tp_session_t session = {0};
   uint8_t incoming[128];
   uint16_t mt;
-  assert(recv_ctrl_update_nr(sockets[1], &esp, NULL, incoming, sizeof(incoming), 100, &session, &mt, NULL) == 12);
+  assert(recv_ctrl_update_nr(sockets[1], &esp, NULL, incoming, sizeof(incoming), 100, &session, &mt, NULL, NULL,
+                             NULL) == 12);
   assert(mt == 0 && session.recv_nr_expected == 0); /* ZLB consumes no sequence number. */
   assert(send(sockets[0], ack, sizeof(ack), 0) == sizeof(ack));
   size_t length;
@@ -73,12 +74,29 @@ int main(void) {
   assert(send(sockets[0], incoming, length, 0) == (ssize_t)length);
   assert(recv_until_mt(sockets[1], &esp, NULL, 0, incoming, sizeof(incoming), &session, L2TP_MSG_SCCRP) == (int)length);
   assert(session.recv_nr_expected == 1);
+
+  assert(build_scccn_avps(avps, sizeof(avps), &off) == 0 && off == 8);
+  assert(l2tp_ctrl_build(incoming, sizeof(incoming), 0x51ce, 0, 1, 1, avps, off, &length) == 0);
+  assert(l2tp_ctrl_msg_type(incoming, length, &mt) == 0 && mt == L2TP_MSG_SCCCN);
+  uint16_t unexpected_tid = 0;
+  assert(l2tp_avp_first_u16(incoming, length, L2TP_AVP_ASSIGNED_TUNNEL, &unexpected_tid) == -1);
+
+  uint8_t scccn_ack[12] = {0xc8, 2, 0, 12, 0x35, 0x19, 0, 0, 0, 1, 0, 2};
+  assert(send(sockets[0], scccn_ack, sizeof(scccn_ack), 0) == sizeof(scccn_ack));
+  assert(wait_ctrl_ack(sockets[1], &esp, NULL, 0, &session, 2, 100) == 0);
+  assert(wait_ctrl_ack(sockets[1], &esp, NULL, 0, &session, 2, 20) == 1);
+
   off = 0;
   assert(l2tp_avp_append_u16(avps, sizeof(avps), &off, L2TP_AVP_MSG_TYPE, 4) == 0);
   assert(l2tp_avp_append_result(avps, sizeof(avps), &off, 2, 8) == 0);
   assert(l2tp_ctrl_build(incoming, sizeof(incoming), 0, 0, 1, 1, avps, off, &length) == 0);
   assert(send(sockets[0], incoming, length, 0) == (ssize_t)length);
-  assert(recv_ctrl_update_nr(sockets[1], &esp, NULL, incoming, sizeof(incoming), 100, &session, &mt, NULL) == -1);
+  assert(recv_ctrl_update_nr(sockets[1], &esp, NULL, incoming, sizeof(incoming), 100, &session, &mt, NULL, NULL,
+                             NULL) == -1);
+  assert(failure[0] == 2 && failure[1] == 2 && failure[2] == 8);
+  failure[0] = failure[1] = failure[2] = 0;
+  assert(send(sockets[0], incoming, length, 0) == (ssize_t)length);
+  assert(wait_ctrl_ack(sockets[1], &esp, NULL, 0, &session, 2, 100) == -1);
   assert(failure[0] == 2 && failure[1] == 2 && failure[2] == 8);
   failure[0] = failure[1] = failure[2] = 0;
   off = 0;
