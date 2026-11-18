@@ -1374,7 +1374,6 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                       "IKE MM1: no reply on UDP 500, retrying via NAT-T UDP 4500 (RFC 3947 non-ESP marker)");
     close(fd);
-    fd = -1;
     if (resolve_udp(server, NAT_T_PORT, &peer_active, &peer_active_len) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: resolve NAT-T :4500 for MM1 fallback failed");
       mbedtls_dhm_free(&dhm);
@@ -1886,15 +1885,16 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     }
     uint8_t dec6[256];
     size_t dec6_len = 0;
+    const uint8_t *iv6_in = msg5_iv_out;
     uint8_t iv6_out[16];
     if (ike->p1_aes) {
-      if (isakmp_aes128_decrypt(aeskey, msg5_iv_out, in + 28, enc6_len, dec6, &dec6_len, iv6_out) != 0) {
+      if (isakmp_aes128_decrypt(aeskey, iv6_in, in + 28, enc6_len, dec6, &dec6_len, iv6_out) != 0) {
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM msg6: AES decrypt failed");
         goto fail_fd;
       }
       memcpy(p1_last_block, iv6_out, 16);
     } else {
-      if (isakmp_3des_decrypt(deskey, msg5_iv_out, in + 28, enc6_len, dec6, &dec6_len, iv6_out) != 0) {
+      if (isakmp_3des_decrypt(deskey, iv6_in, in + 28, enc6_len, dec6, &dec6_len, iv6_out) != 0) {
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM msg6: 3DES decrypt failed");
         goto fail_fd;
       }
