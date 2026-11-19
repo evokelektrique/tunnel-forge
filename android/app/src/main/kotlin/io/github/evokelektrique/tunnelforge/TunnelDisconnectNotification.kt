@@ -166,6 +166,150 @@ internal object TunnelDisconnectNotification {
         return base
     }
 
+    private fun specificLocalizedReason(
+        resContext: Context,
+        failure: Map<String, Any>?,
+        exitCode: Int,
+    ): String? {
+        val namespace = failure?.get("namespace") as? String
+        val code = (failure?.get("code") as? Number)?.toInt()
+        val generalError = (failure?.get("generalError") as? Number)?.toInt() ?: 0
+        if (namespace != null && code != null) {
+            when (namespace) {
+                "mschap" -> {
+                    val resId =
+                        when (code) {
+                            646 -> R.string.tunnel_reason_mschap_646
+                            647 -> R.string.tunnel_reason_mschap_647
+                            648 -> R.string.tunnel_reason_mschap_648
+                            649 -> R.string.tunnel_reason_mschap_649
+                            691 -> R.string.tunnel_reason_auth_failed
+                            709 -> R.string.tunnel_reason_mschap_709
+                            else -> null
+                        }
+                    return if (resId != null) {
+                        resContext.getString(resId)
+                    } else {
+                        resContext.getString(R.string.tunnel_reason_mschap_unknown, code)
+                    }
+                }
+                "chap" -> {
+                    return if (code == 4) {
+                        resContext.getString(R.string.tunnel_reason_auth_failed)
+                    } else {
+                        resContext.getString(R.string.tunnel_reason_chap_unknown, code)
+                    }
+                }
+                "pap" -> {
+                    return if (code == 3) {
+                        resContext.getString(R.string.tunnel_reason_auth_failed)
+                    } else {
+                        resContext.getString(R.string.tunnel_reason_pap_unknown, code)
+                    }
+                }
+                "l2tp-stopccn" -> {
+                    val base =
+                        when (code) {
+                            1 -> resContext.getString(R.string.tunnel_reason_stopccn_1)
+                            2 -> resContext.getString(R.string.tunnel_reason_stopccn_2)
+                            3 -> resContext.getString(R.string.tunnel_reason_stopccn_3)
+                            4 -> resContext.getString(R.string.tunnel_reason_stopccn_4)
+                            5 -> resContext.getString(R.string.tunnel_reason_stopccn_5)
+                            6 -> resContext.getString(R.string.tunnel_reason_stopccn_6)
+                            7 -> resContext.getString(R.string.tunnel_reason_stopccn_7)
+                            8 -> resContext.getString(R.string.tunnel_reason_stopccn_8)
+                            else -> resContext.getString(R.string.vpn_notification_disconnected_server)
+                        }
+                    return formatLocalizedL2tpReason(resContext, base, code, generalError)
+                }
+                "l2tp-cdn" -> {
+                    val base =
+                        when (code) {
+                            1 -> resContext.getString(R.string.tunnel_reason_cdn_1)
+                            2 -> resContext.getString(R.string.tunnel_reason_cdn_2)
+                            3 -> resContext.getString(R.string.tunnel_reason_cdn_3)
+                            4 -> resContext.getString(R.string.tunnel_reason_cdn_4)
+                            5 -> resContext.getString(R.string.tunnel_reason_cdn_5)
+                            6 -> resContext.getString(R.string.tunnel_reason_cdn_6)
+                            7 -> resContext.getString(R.string.tunnel_reason_cdn_7)
+                            8 -> resContext.getString(R.string.tunnel_reason_cdn_8)
+                            9 -> resContext.getString(R.string.tunnel_reason_cdn_9)
+                            10 -> resContext.getString(R.string.tunnel_reason_cdn_10)
+                            11 -> resContext.getString(R.string.tunnel_reason_cdn_11)
+                            12 -> resContext.getString(R.string.tunnel_reason_cdn_12)
+                            else -> resContext.getString(R.string.vpn_notification_disconnected_server)
+                        }
+                    return formatLocalizedL2tpReason(resContext, base, code, generalError)
+                }
+                "engine" -> return localizedEngineReason(resContext, code)
+                VpnAndroidFailure.NAMESPACE -> {
+                    val resId =
+                        when (code) {
+                            VpnAndroidFailure.CODE_VPN_REVOKED -> R.string.tunnel_reason_android_1
+                            VpnAndroidFailure.CODE_SYSTEM_DESTROYED -> R.string.tunnel_reason_android_2
+                            VpnAndroidFailure.CODE_TASK_REMOVED -> R.string.tunnel_reason_android_3
+                            VpnAndroidFailure.CODE_VPN_PERMISSION_REVOKED -> R.string.tunnel_reason_android_4
+                            VpnAndroidFailure.CODE_LOCAL_PROXY_FAILED -> R.string.tunnel_reason_android_5
+                            VpnAndroidFailure.CODE_UNEXPECTED_STOP -> R.string.tunnel_reason_android_6
+                            else -> null
+                        }
+                    return resId?.let { resContext.getString(it) }
+                }
+            }
+        }
+        if (exitCode != 0) {
+            return localizedEngineReason(resContext, exitCode)
+        }
+        return null
+    }
+
+    private fun localizedEngineReason(resContext: Context, code: Int): String? {
+        val resId =
+            when (code) {
+                1 -> R.string.tunnel_reason_engine_1
+                2 -> R.string.tunnel_reason_engine_2
+                3 -> R.string.tunnel_reason_engine_3
+                4 -> R.string.tunnel_reason_engine_4
+                10 -> R.string.tunnel_reason_engine_10
+                11 -> R.string.tunnel_reason_engine_11
+                13 -> R.string.tunnel_reason_engine_13
+                14 -> R.string.tunnel_reason_engine_14
+                15 -> R.string.tunnel_reason_engine_15
+                else -> null
+            }
+        return resId?.let { resContext.getString(it) }
+    }
+
+    private fun formatLocalizedL2tpReason(
+        resContext: Context,
+        base: String,
+        code: Int,
+        generalError: Int,
+    ): String {
+        if (code == 2 && generalError != 0) {
+            val suffixResId =
+                when (generalError) {
+                    1 -> R.string.tunnel_reason_general_1
+                    2 -> R.string.tunnel_reason_general_2
+                    3 -> R.string.tunnel_reason_general_3
+                    4 -> R.string.tunnel_reason_general_4
+                    5 -> R.string.tunnel_reason_general_5
+                    6 -> R.string.tunnel_reason_general_6
+                    7 -> R.string.tunnel_reason_general_7
+                    8 -> R.string.tunnel_reason_general_8
+                    9 -> R.string.tunnel_reason_general_9
+                    10 -> R.string.tunnel_reason_general_10
+                    11 -> R.string.tunnel_reason_general_11
+                    12 -> R.string.tunnel_reason_general_12
+                    else -> null
+                }
+            if (suffixResId != null) {
+                return "${base.removeSuffix(".")}: ${resContext.getString(suffixResId)}."
+            }
+        }
+        return base
+    }
+
     fun show(
         context: Context,
         detail: String,
@@ -174,7 +318,8 @@ internal object TunnelDisconnectNotification {
         exitCode: Int = 0,
         wasConnected: Boolean = true,
     ) {
-        val nm = notificationManagerIfPermitted(context) ?: return
+        val resContext = AppLocaleSupport.localizedContext(context)
+        val nm = notificationManagerIfPermitted(resContext) ?: return
         nm.cancel(RECONNECT_ALERT_NOTIFICATION_ID)
         val pending = launchPendingIntent(context, NOTIFICATION_ID) ?: return
         val titleRes =
@@ -183,19 +328,20 @@ internal object TunnelDisconnectNotification {
             } else {
                 R.string.vpn_notification_connect_failed_title
             }
-        val body =
-            formatDisconnectMessage(
-                detail = detail,
-                failure = failure,
-                profileLabel = profileLabel,
-                serverClosedText = context.getString(R.string.vpn_notification_disconnected_server),
-                exitCode = exitCode,
-            )
+        val specificReason = specificLocalizedReason(resContext, failure, exitCode)
+        val core =
+            when {
+                specificReason != null -> specificReason
+                detail.isNotBlank() -> detail.trim()
+                else -> resContext.getString(R.string.tunnel_reason_android_6)
+            }
+        val cleanLabel = profileLabel?.trim().orEmpty()
+        val body = if (cleanLabel.isEmpty()) core else "$cleanLabel: $core"
         postNotification(
-            context = context,
+            context = resContext,
             nm = nm,
             notificationId = NOTIFICATION_ID,
-            title = context.getString(titleRes),
+            title = resContext.getString(titleRes),
             body = body,
             pending = pending,
             category = NotificationCompat.CATEGORY_ERROR,
@@ -206,18 +352,19 @@ internal object TunnelDisconnectNotification {
         context: Context,
         profileLabel: String? = null,
     ) {
-        val nm = notificationManagerIfPermitted(context) ?: return
+        val resContext = AppLocaleSupport.localizedContext(context)
+        val nm = notificationManagerIfPermitted(resContext) ?: return
         val pending = launchPendingIntent(context, RECONNECT_ALERT_NOTIFICATION_ID) ?: return
         val body =
             formatStalledReconnectMessage(
                 profileLabel = profileLabel,
-                baseText = context.getString(R.string.vpn_notification_reconnecting_alert_body),
+                baseText = resContext.getString(R.string.vpn_notification_reconnecting_alert_body),
             )
         postNotification(
-            context = context,
+            context = resContext,
             nm = nm,
             notificationId = RECONNECT_ALERT_NOTIFICATION_ID,
-            title = context.getString(R.string.vpn_notification_reconnecting_alert_title),
+            title = resContext.getString(R.string.vpn_notification_reconnecting_alert_title),
             body = body,
             pending = pending,
             category = NotificationCompat.CATEGORY_STATUS,

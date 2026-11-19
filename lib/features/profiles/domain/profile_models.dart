@@ -1,4 +1,5 @@
 import 'package:tunnel_forge/l10n/app_localizations.dart';
+import 'package:tunnel_forge/l10n/generated/app_localizations_en.dart';
 
 /// Connection surface: Android VPN/TUN vs. local proxy listeners only.
 enum ConnectionMode {
@@ -211,21 +212,22 @@ class ProxySettings {
     return parsed;
   }
 
-  static String? validatePortText(String text) {
+  static String? validatePortText(String text, {AppLocalizations? l10n}) {
+    final t = l10n ?? AppL10n.current;
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
-      return AppText.current.proxyPortInvalidFormat;
+      return t.proxyPortInvalidFormat;
     }
     final parsed = int.tryParse(trimmed);
     if (parsed == null || parsed < 1 || parsed > maxPort) {
-      return AppText.current.proxyPortInvalidFormat;
+      return t.proxyPortInvalidFormat;
     }
     if (parsed < minPort) {
-      return AppText.current.proxyPortPrivileged;
+      return t.proxyPortPrivileged;
     }
     final reservedService = reservedPorts[parsed];
     if (reservedService != null) {
-      return AppText.current.proxyPortReserved(parsed, reservedService);
+      return t.proxyPortReserved(parsed, reservedService);
     }
     return null;
   }
@@ -377,39 +379,29 @@ class ConnectivityCheckSettings {
     return value;
   }
 
-  static String? validateUrl(String text) {
+  static String? validateUrl(String text, {AppLocalizations? l10n}) {
+    final t = l10n ?? AppL10n.current;
     final normalized = normalizeUrl(text);
     final uri = Uri.tryParse(normalized);
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-      return AppText.pick(
-        'Enter a valid absolute HTTP or HTTPS URL',
-        'یک نشانی کامل و معتبر HTTP یا HTTPS وارد کنید',
-      );
+      return t.connectivityUrlInvalid;
     }
     final scheme = uri.scheme.toLowerCase();
     if (scheme != 'http' && scheme != 'https') {
-      return AppText.pick(
-        'Only HTTP and HTTPS URLs are supported',
-        'فقط نشانی‌های HTTP و HTTPS پشتیبانی می‌شوند',
-      );
+      return t.connectivityUrlUnsupportedScheme;
     }
     return null;
   }
 
-  static String? validateTimeoutMs(String text) {
+  static String? validateTimeoutMs(String text, {AppLocalizations? l10n}) {
+    final t = l10n ?? AppL10n.current;
     if (text.trim().isEmpty) return null;
     final value = int.tryParse(text.trim());
     if (value == null) {
-      return AppText.pick(
-        'Enter a whole number of milliseconds',
-        'یک عدد صحیح بر حسب میلی‌ثانیه وارد کنید',
-      );
+      return t.connectivityTimeoutWholeNumber;
     }
     if (value <= 0) {
-      return AppText.pick(
-        'Enter a timeout greater than 0 ms',
-        'مهلت باید بیشتر از ۰ میلی‌ثانیه باشد',
-      );
+      return t.connectivityTimeoutPositive;
     }
     return null;
   }
@@ -622,25 +614,30 @@ class Profile {
   static String validationMessageForDnsServer(
     String label,
     String text,
-    DnsProtocol protocol,
-  ) {
+    DnsProtocol protocol, {
+    AppLocalizations? l10n,
+  }) {
     if (invalidDnsServer(text, protocol) == null) return '';
+    final t = l10n ?? AppL10n.current;
     final requirement = switch (protocol) {
-      DnsProtocol.dnsOverTcp || DnsProtocol.dnsOverUdp => AppText.pick(
-        'hostname or IPv4',
-        'نام میزبان یا IPv4',
-      ),
-      DnsProtocol.dnsOverTls => AppText.pick('hostname', 'نام میزبان'),
-      DnsProtocol.dnsOverHttps => AppText.pick(
-        'hostname or HTTPS URL',
-        'نام میزبان یا نشانی HTTPS',
-      ),
+      DnsProtocol.dnsOverTcp ||
+      DnsProtocol.dnsOverUdp => t.dnsRequirementHostnameOrIpv4,
+      DnsProtocol.dnsOverTls => t.dnsRequirementHostname,
+      DnsProtocol.dnsOverHttps => t.dnsRequirementHostnameOrHttpsUrl,
     };
-    return AppText.pick(
-      '$label: use $requirement',
-      '$label: از $requirement استفاده کنید',
-    );
+    return t.dnsValidationError(label, requirement);
   }
+
+  static String englishValidationMessageForDnsServer(
+    String label,
+    String text,
+    DnsProtocol protocol,
+  ) => validationMessageForDnsServer(
+    label,
+    text,
+    protocol,
+    l10n: AppLocalizationsEn(),
+  );
 
   static List<DnsServerConfig> orderedDnsServers({
     required String dns1Host,

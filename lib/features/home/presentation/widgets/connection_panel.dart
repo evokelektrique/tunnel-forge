@@ -177,7 +177,7 @@ class ConnectionPanel extends StatelessWidget {
     final locked = busy || stopRequested;
     final showProgress = busy || waitingToConnect || stopRequested;
     final theme = Theme.of(context);
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final semanticColors =
         theme.extension<AppSemanticColors>() ??
         AppSemanticColors.fallback(theme.brightness);

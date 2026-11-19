@@ -42,6 +42,7 @@ go-cache/
 # -----------------------------------------------------------------------------
 # Flutter & Dart
 .dart_tool/
+lib/l10n/generated/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages

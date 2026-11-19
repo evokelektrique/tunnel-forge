@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">TunnelForge</string>
-    <string name="vpn_session_name">TunnelForge</string>
+    <string name="app_name" translatable="false">TunnelForge</string>
+    <string name="vpn_session_name" translatable="false">TunnelForge</string>
     <string name="vpn_notification_title">TunnelForge VPN</string>
     <string name="vpn_notification_connecting">Connecting...</string>
     <string name="vpn_notification_connected">VPN active</string>
     <string name="vpn_notification_connected_profile">Connected: %1$s</string>
     <string name="vpn_notification_waiting_network">Waiting for network (blocking internet)</string>
     <string name="vpn_notification_reconnecting">Reconnecting...</string>
+    <string name="proxy_notification_starting">Starting local proxy...</string>
     <string name="proxy_notification_waiting_network">Waiting for network</string>
     <string name="vpn_notification_action_disconnect">Disconnect</string>
     <string name="vpn_notification_channel_name">VPN</string>
@@ -18,10 +19,72 @@
     <string name="vpn_notification_reconnecting_alert_title">TunnelForge connection dropped</string>
     <string name="vpn_notification_reconnecting_alert_body">Connection lost. Reconnecting in background...</string>
     <string name="proxy_notification_title">TunnelForge proxy</string>
-    <string name="qs_tile_label">TunnelForge</string>
-    <string name="qs_tile_no_profile">No profile selected</string>
-    <string name="qs_tile_connected">Connected</string>
-    <string name="qs_tile_connecting">Connecting…</string>
-    <string name="qs_tile_waiting_network">Waiting for network</string>
-    <string name="qs_tile_reconnecting">Reconnecting…</string>
+    <string name="qs_tile_label" translatable="false">TunnelForge</string>
+    <string name="qs_tile_no_profile" translatable="false">No profile selected</string>
+    <string name="qs_tile_connected" translatable="false">Connected</string>
+    <string name="qs_tile_connecting" translatable="false">Connecting…</string>
+    <string name="qs_tile_waiting_network" translatable="false">Waiting for network</string>
+    <string name="qs_tile_reconnecting" translatable="false">Reconnecting…</string>
+
+    <string name="tunnel_reason_auth_failed">Authentication failed.</string>
+    <string name="tunnel_reason_mschap_646">Restricted logon hours.</string>
+    <string name="tunnel_reason_mschap_647">Account disabled.</string>
+    <string name="tunnel_reason_mschap_648">Password expired.</string>
+    <string name="tunnel_reason_mschap_649">Account not permitted.</string>
+    <string name="tunnel_reason_mschap_709">Password change failed.</string>
+    <string name="tunnel_reason_mschap_unknown">Authentication failed (MS-CHAP %1$d).</string>
+    <string name="tunnel_reason_chap_unknown">CHAP authentication failed (%1$d).</string>
+    <string name="tunnel_reason_pap_unknown">PAP authentication failed (%1$d).</string>
+
+    <string name="tunnel_reason_stopccn_1">Server closed the control connection.</string>
+    <string name="tunnel_reason_stopccn_2">Server reported a general error.</string>
+    <string name="tunnel_reason_stopccn_3">Control connection already exists.</string>
+    <string name="tunnel_reason_stopccn_4">Control connection not authorized.</string>
+    <string name="tunnel_reason_stopccn_5">Unsupported protocol version.</string>
+    <string name="tunnel_reason_stopccn_6">VPN server is shutting down.</string>
+    <string name="tunnel_reason_stopccn_7">L2TP protocol state error.</string>
+    <string name="tunnel_reason_stopccn_8">Mismatching CCDS value.</string>
+
+    <string name="tunnel_reason_cdn_1">Carrier lost.</string>
+    <string name="tunnel_reason_cdn_2">L2TP session error.</string>
+    <string name="tunnel_reason_cdn_3">Session administratively disconnected.</string>
+    <string name="tunnel_reason_cdn_4">Server resources temporarily unavailable.</string>
+    <string name="tunnel_reason_cdn_5">Required server facilities unavailable.</string>
+    <string name="tunnel_reason_cdn_6">Invalid destination.</string>
+    <string name="tunnel_reason_cdn_7">No carrier detected.</string>
+    <string name="tunnel_reason_cdn_8">Destination busy.</string>
+    <string name="tunnel_reason_cdn_9">No dial tone.</string>
+    <string name="tunnel_reason_cdn_10">Session establishment timed out.</string>
+    <string name="tunnel_reason_cdn_11">No appropriate framing detected.</string>
+    <string name="tunnel_reason_cdn_12">Mismatching SDS value.</string>
+
+    <string name="tunnel_reason_general_1">No control connection exists</string>
+    <string name="tunnel_reason_general_2">Invalid message length</string>
+    <string name="tunnel_reason_general_3">Invalid field value</string>
+    <string name="tunnel_reason_general_4">Insufficient server resources</string>
+    <string name="tunnel_reason_general_5">Invalid session ID</string>
+    <string name="tunnel_reason_general_6">Vendor-specific error</string>
+    <string name="tunnel_reason_general_7">Try another server</string>
+    <string name="tunnel_reason_general_8">Unsupported mandatory attribute</string>
+    <string name="tunnel_reason_general_9">Try another directed server</string>
+    <string name="tunnel_reason_general_10">Next hop unreachable</string>
+    <string name="tunnel_reason_general_11">Next hop busy</string>
+    <string name="tunnel_reason_general_12">Tunnel switching aggregator busy</string>
+
+    <string name="tunnel_reason_engine_1">IPsec negotiation failed. Check the PSK and server settings.</string>
+    <string name="tunnel_reason_engine_2">L2TP handshake failed.</string>
+    <string name="tunnel_reason_engine_3">PPP negotiation failed.</string>
+    <string name="tunnel_reason_engine_4">Tunnel poll I/O error.</string>
+    <string name="tunnel_reason_engine_10">Invalid tunnel arguments from the app.</string>
+    <string name="tunnel_reason_engine_11">Proxy transport is not implemented yet.</string>
+    <string name="tunnel_reason_engine_13">Network connection lost.</string>
+    <string name="tunnel_reason_engine_14">VPN server stopped responding.</string>
+    <string name="tunnel_reason_engine_15">VPN server closed the connection.</string>
+
+    <string name="tunnel_reason_android_1">VPN was revoked by Android.</string>
+    <string name="tunnel_reason_android_2">Tunnel was stopped by Android system.</string>
+    <string name="tunnel_reason_android_3">Tunnel stopped after app was removed from recents.</string>
+    <string name="tunnel_reason_android_4">VPN permission is no longer granted.</string>
+    <string name="tunnel_reason_android_5">Local proxy startup failed.</string>
+    <string name="tunnel_reason_android_6">Tunnel disconnected unexpectedly.</string>
 </resources>

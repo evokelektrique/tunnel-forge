@@ -263,7 +263,15 @@ class AppVersionInfo extends Equatable {
   List<Object?> get props => [displayVersion, semanticVersion, errorReason];
 }
 
-enum AppUpdateErrorKind { http, timeout, network, tls, response, unknown }
+enum AppUpdateErrorKind {
+  http,
+  timeout,
+  network,
+  tls,
+  response,
+  noReleases,
+  unknown,
+}
 
 class AppUpdateException with Equatable implements Exception {
   const AppUpdateException({

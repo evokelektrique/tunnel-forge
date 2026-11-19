@@ -110,7 +110,7 @@ class ProxyTunnelService : Service() {
             }
 
             ACTION_START -> {
-                startForegroundWithType(buildNotification("Starting local proxy..."))
+                startForegroundWithType(buildNotification(AppLocaleSupport.getString(this, R.string.proxy_notification_starting)))
                 TunnelDisconnectNotification.cancelAll(this)
                 val attemptId = intent.getStringExtra(EXTRA_ATTEMPT_ID) ?: ""
                 val server = intent.getStringExtra(EXTRA_SERVER)
@@ -339,9 +339,10 @@ class ProxyTunnelService : Service() {
 
                 if (!monitor.hasUsableNetwork()) {
                     currentTunnelState = VpnContract.TUNNEL_WAITING_FOR_NETWORK
-                    currentTunnelDetail = getString(R.string.proxy_notification_waiting_network)
+                    // Protocol state detail stays strictly English for logs/events; only the notification is localized.
+                    currentTunnelDetail = "Waiting for network"
                     emitAttemptState(attemptId, VpnContract.TUNNEL_WAITING_FOR_NETWORK, currentTunnelDetail)
-                    updateForegroundNotification(currentTunnelDetail)
+                    updateForegroundNotification(AppLocaleSupport.getString(this, R.string.proxy_notification_waiting_network))
                     waitForRecoveryCondition(
                         attemptId = attemptId,
                         timeoutMs = null,
@@ -355,9 +356,9 @@ class ProxyTunnelService : Service() {
 
                 if (hasEverConnected) {
                     currentTunnelState = VpnContract.TUNNEL_RECONNECTING
-                    currentTunnelDetail = getString(R.string.vpn_notification_reconnecting)
+                    currentTunnelDetail = "Reconnecting..."
                     emitAttemptState(attemptId, VpnContract.TUNNEL_RECONNECTING, currentTunnelDetail)
-                    updateForegroundNotification(currentTunnelDetail)
+                    updateForegroundNotification(AppLocaleSupport.getString(this, R.string.vpn_notification_reconnecting))
                     val delayMs =
                         if (immediateSwitchReconnect) {
                             0L
@@ -1129,7 +1130,7 @@ class ProxyTunnelService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.proxy_notification_title))
+            .setContentTitle(AppLocaleSupport.getString(this, R.string.proxy_notification_title))
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentIntent(pending)
@@ -1161,7 +1162,7 @@ class ProxyTunnelService : Service() {
         nm.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "TunnelForge proxy",
+                AppLocaleSupport.getString(this, R.string.proxy_notification_title),
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )

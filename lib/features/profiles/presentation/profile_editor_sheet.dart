@@ -185,7 +185,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     required ValueChanged<String> onChanged,
     required ValueChanged<DnsProtocol?> onProtocolChanged,
   }) {
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -251,7 +251,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     TextTheme tt,
     Color dnsSectionColor,
   ) {
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     return Container(
       key: const Key('dns_servers_section'),
       padding: const EdgeInsets.all(12),
@@ -309,31 +309,27 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     final bloc = context.read<ProfileFormBloc>();
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          AppText.pick('Reset secure storage?', 'بازنشانی حافظه امن؟'),
-        ),
-        content: Text(
-          AppText.pick(
-            'Android could not save credentials. Resetting secure storage deletes the saved passwords and PSKs for all profiles. Profiles themselves are kept.',
-            'اندروید نتوانست اطلاعات ورود را ذخیره کند. بازنشانی حافظه امن گذرواژه‌ها و کلیدهای مشترک ذخیره‌شدهٔ همهٔ پروفایل‌ها را پاک می‌کند. خود پروفایل‌ها نگه داشته می‌شوند.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(AppLocalizations.of(ctx).cancel),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(ctx).colorScheme.error,
-              foregroundColor: Theme.of(ctx).colorScheme.onError,
+      builder: (ctx) {
+        final t = AppL10n.of(ctx);
+        return AlertDialog(
+          title: Text(t.resetSecureStorageTitle),
+          content: Text(t.resetSecureStorageBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t.cancel),
             ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(AppText.pick('Reset and save', 'بازنشانی و ذخیره')),
-          ),
-        ],
-      ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error,
+                foregroundColor: Theme.of(ctx).colorScheme.onError,
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t.resetAndSave),
+            ),
+          ],
+        );
+      },
     );
     if (ok == true && mounted) {
       bloc.add(const ProfileFormSecureStorageResetRequested());
@@ -351,7 +347,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final safeBottom = MediaQuery.paddingOf(context).bottom;
     final dnsSectionColor = theme.colorScheme.surfaceContainerHigh;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final mtuHelper = t.mtuHelper(
       Profile.minVpnMtu,
       Profile.maxVpnMtu,

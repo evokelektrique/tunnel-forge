@@ -397,7 +397,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   }
 
   Future<void> _pickAppsForVpn() async {
-    final t = AppText.current;
+    final t = AppL10n.of(context);
     final splitTunnelSettings = context
         .read<SettingsBloc>()
         .state
@@ -460,29 +460,19 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   }
 
   Future<void> _openReleasePage(String url) {
+    final t = AppL10n.of(context);
     return _openExternalUrl(
       url,
-      invalidMessage: AppText.pick(
-        'Release page URL is invalid.',
-        'نشانی صفحه انتشار معتبر نیست.',
-      ),
-      failureMessage: AppText.pick(
-        'Could not open the release page.',
-        'صفحه انتشار باز نشد.',
-      ),
+      invalidMessage: t.releasePageUrlInvalid,
+      failureMessage: t.couldNotOpenReleasePage,
     );
   }
 
   void _handleMissingProfileTap(ProfilesState profilesState) {
+    final t = AppL10n.of(context);
     final message = profilesState.profiles.isEmpty
-        ? AppText.pick(
-            'Create a profile first. You will need a server, username, and tunnel settings before connecting.',
-            'ابتدا یک پروفایل بسازید. پیش از اتصال به سرور، نام کاربری و تنظیمات تونل نیاز دارید.',
-          )
-        : AppText.pick(
-            'Choose one of your saved profiles before connecting.',
-            'پیش از اتصال یکی از پروفایل‌های ذخیره‌شده را انتخاب کنید.',
-          );
+        ? t.createProfileBeforeConnecting
+        : t.selectProfileBeforeConnecting;
     _toast(message, error: true);
     widget.locator<LogsRepository>().append(
       LogEntry(
@@ -496,11 +486,9 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   }
 
   Future<void> _handleMissingSecrets(Profile profile) async {
+    final t = AppL10n.of(context);
     _toast(
-      AppText.pick(
-        'Saved password/PSK for "${profile.displayName}" could not be read. Re-enter them.',
-        'گذرواژه یا کلید مشترک ذخیره‌شده برای «${profile.displayName}» خوانده نشد. دوباره وارد کنید.',
-      ),
+      t.savedSecretsUnreadableForProfile(profile.displayName),
       error: true,
     );
     widget.locator<LogsRepository>().append(
@@ -532,7 +520,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       await refreshResult;
     } on TimeoutException {
       if (!mounted) return;
-      _toast(AppText.current.profileRefreshTimedOut, error: true);
+      _toast(AppL10n.of(context).profileRefreshTimedOut, error: true);
     }
   }
 
@@ -601,36 +589,30 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   Future<bool> _promptIncludeTombstone() async {
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          AppText.pick(
-            'Include native crash dump?',
-            'ضمیمه‌کردن دامپ کرش بومی؟',
-          ),
-        ),
-        content: Text(
-          AppText.pick(
-            'Include native crash dump? It may contain memory contents from the crashed process.',
-            'آیا دامپ کرش بومی ضمیمه شود؟ ممکن است شامل محتوای حافظهٔ فرایند کرش‌شده باشد.',
-          ),
-        ),
-        actions: [
-          FilledButton(
-            autofocus: true,
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(AppText.pick('No', 'خیر')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(AppText.pick('Yes', 'بله')),
-          ),
-        ],
-      ),
+      builder: (ctx) {
+        final t = AppL10n.of(ctx);
+        return AlertDialog(
+          title: Text(t.includeNativeCrashDumpTitle),
+          content: Text(t.includeNativeCrashDumpBody),
+          actions: [
+            FilledButton(
+              autofocus: true,
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t.noLabel),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t.yesLabel),
+            ),
+          ],
+        );
+      },
     );
     return result ?? false;
   }
 
   Future<void> _shareDebugLogs(LogsState logsState) async {
+    final t = AppL10n.of(context);
     try {
       final bridge = DiagnosticsBridge.instance;
       var includeTombstone = false;
@@ -641,18 +623,13 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       }
       final paths = await bridge.exportLogs(includeTombstone: includeTombstone);
       if (paths.isEmpty) {
-        _toast(
-          AppText.pick(
-            'No debug logs to share',
-            'گزارش دیباگی برای اشتراک‌گذاری نیست',
-          ),
-        );
+        _toast(t.noDebugLogsToShare);
         return;
       }
       await SharePlus.instance.share(
         ShareParams(
           files: paths.map((path) => XFile(path)).toList(growable: false),
-          title: 'Share TunnelForge debug logs',
+          title: t.shareDebugLogsTitle,
         ),
       );
       widget.locator<LogsRepository>().logDart(
@@ -660,40 +637,29 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
         'logs',
         'Shared debug logs files=${paths.length} includeTombstone=$includeTombstone',
       );
-      _toast(
-        AppText.pick(
-          'Prepared debug log archive for sharing',
-          'فایل گزارش دیباگ برای اشتراک‌گذاری آماده شد',
-        ),
-      );
+      _toast(t.preparedDebugLogArchive);
     } catch (error) {
       widget.locator<LogsRepository>().logDart(
         LogLevel.warning,
         'logs',
         'Share debug logs failed error=${error.runtimeType}',
       );
-      _toast(
-        AppText.pick(
-          'Could not share debug logs',
-          'اشتراک‌گذاری گزارش‌های دیباگ انجام نشد',
-        ),
-        error: true,
-      );
+      _toast(t.couldNotShareDebugLogs, error: true);
     }
   }
 
   void _clearLogs() {
     context.read<LogsBloc>().add(const LogsCleared());
     setState(() => _logsStickToBottom = true);
-    _toast(AppText.pick('Logs cleared', 'گزارش‌ها پاک شد'));
+    _toast(AppL10n.of(context).logsCleared);
   }
 
   String _connectButtonLabel(
+    AppLocalizations t,
     TunnelState tunnelState,
     bool hasActiveProfile,
     ConnectionMode connectionMode,
   ) {
-    final t = AppText.current;
     if (tunnelState.stopRequested && tunnelState.tunnelUp) {
       return t.disconnecting;
     }
@@ -720,8 +686,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     return t.ready;
   }
 
-  String _connectivityBadgeLabel(ConnectivityState state) {
-    final t = AppText.current;
+  String _connectivityBadgeLabel(AppLocalizations t, ConnectivityState state) {
     return switch (state.badgeState) {
       ConnectivityBadgeState.idle => t.tapToCheck,
       ConnectivityBadgeState.checking => t.checking,
@@ -739,7 +704,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     final logsState = context.watch<LogsBloc>().state;
     final connectivityState = context.watch<ConnectivityBloc>().state;
     final appThemeState = context.watch<AppThemeBloc>().state;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final hasDebugLogs = logsState.entries.isNotEmpty;
     final languageController = AppLanguageController.of(context);
 
@@ -962,6 +927,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                       stopRequested: tunnelState.stopRequested,
                       canStartConnection: profilesState.hasActiveProfile,
                       connectButtonLabel: _connectButtonLabel(
+                        t,
                         tunnelState,
                         profilesState.hasActiveProfile,
                         settingsState.connectionMode,
@@ -975,6 +941,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                           _handleMissingProfileTap(profilesState),
                       connectivityBadgeState: connectivityState.badgeState,
                       connectivityBadgeLabel: _connectivityBadgeLabel(
+                        t,
                         connectivityState,
                       ),
                       connectivityCheckRunId: connectivityState.runId,
@@ -1002,8 +969,8 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                     hasAnyLogs: logsState.entries.isNotEmpty,
                   ),
                   _ => SettingsPanel(
-                    language: languageController.language,
-                    onLanguageChanged: languageController.setLanguage,
+                    selectedLocale: languageController.locale,
+                    onLocaleChanged: languageController.setLocale,
                     themeMode: appThemeState.themeMode,
                     onThemeModeChanged: (mode) =>
                         context.read<AppThemeBloc>().add(AppThemeChanged(mode)),
@@ -1049,6 +1016,8 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                     appUpdateStatus: settingsState.appUpdateStatus,
                     latestReleaseVersion: settingsState.latestReleaseVersion,
                     updateErrorMessage: settingsState.updateErrorMessage,
+                    updateErrorKind: settingsState.updateErrorKind,
+                    updateErrorStatusCode: settingsState.updateErrorStatusCode,
                     onRefreshVersionCheck: () =>
                         context.read<SettingsBloc>().add(
                           settingsState.updateCheckConsentGranted
@@ -1060,25 +1029,13 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                     ),
                     onOpenTelegram: () => _openExternalUrl(
                       _kTelegramUrl,
-                      invalidMessage: AppText.pick(
-                        'Telegram link is invalid.',
-                        'پیوند تلگرام معتبر نیست.',
-                      ),
-                      failureMessage: AppText.pick(
-                        'Could not open Telegram.',
-                        'تلگرام باز نشد.',
-                      ),
+                      invalidMessage: t.telegramLinkInvalid,
+                      failureMessage: t.couldNotOpenTelegram,
                     ),
                     onOpenGithub: () => _openExternalUrl(
                       _kProjectGithubUrl,
-                      invalidMessage: AppText.pick(
-                        'GitHub link is invalid.',
-                        'پیوند GitHub معتبر نیست.',
-                      ),
-                      failureMessage: AppText.pick(
-                        'Could not open GitHub.',
-                        'GitHub باز نشد.',
-                      ),
+                      invalidMessage: t.githubLinkInvalid,
+                      failureMessage: t.couldNotOpenGithub,
                     ),
                     routingLocked:
                         profilesState.loading ||

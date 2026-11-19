@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
+import 'package:tunnel_forge/l10n/language_picker_sheet.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 
 typedef ProxyPortAvailabilityChecker =
@@ -14,8 +16,8 @@ typedef ProxyPortAvailabilityChecker =
 class SettingsPanel extends StatefulWidget {
   const SettingsPanel({
     super.key,
-    required this.language,
-    required this.onLanguageChanged,
+    required this.selectedLocale,
+    required this.onLocaleChanged,
     this.themeMode,
     this.onThemeModeChanged,
     required this.connectionMode,
@@ -39,6 +41,8 @@ class SettingsPanel extends StatefulWidget {
     required this.appUpdateStatus,
     this.latestReleaseVersion,
     this.updateErrorMessage,
+    this.updateErrorKind,
+    this.updateErrorStatusCode,
     required this.onRefreshVersionCheck,
     this.onOpenReleasePage,
     required this.onOpenTelegram,
@@ -48,8 +52,8 @@ class SettingsPanel extends StatefulWidget {
     required this.textTheme,
   });
 
-  final AppLanguage language;
-  final ValueChanged<AppLanguage> onLanguageChanged;
+  final Locale? selectedLocale;
+  final ValueChanged<Locale?> onLocaleChanged;
   final ThemeMode? themeMode;
   final ValueChanged<ThemeMode>? onThemeModeChanged;
   final ConnectionMode connectionMode;
@@ -74,6 +78,8 @@ class SettingsPanel extends StatefulWidget {
   final AppUpdateStatus appUpdateStatus;
   final String? latestReleaseVersion;
   final String? updateErrorMessage;
+  final AppUpdateErrorKind? updateErrorKind;
+  final int? updateErrorStatusCode;
   final VoidCallback onRefreshVersionCheck;
   final VoidCallback? onOpenReleasePage;
   final VoidCallback onOpenTelegram;
@@ -193,7 +199,18 @@ class _SettingsPanelState extends State<SettingsPanel> {
   @override
   Widget build(BuildContext context) {
     final splitTunnelSettings = widget.splitTunnelSettings;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
+    final selectedLocale = widget.selectedLocale;
+    final languageSummary = selectedLocale == null
+        ? t.systemDefaultLanguageSummary(
+            AppLanguageController.nativeNameFor(
+              AppLanguageController.resolveLocale(
+                null,
+                PlatformDispatcher.instance.locales,
+              ),
+            ),
+          )
+        : AppLanguageController.nativeNameFor(selectedLocale);
     final isInclusive = splitTunnelSettings.mode == SplitTunnelMode.inclusive;
     final activePackages = splitTunnelSettings.activePackages;
     final activePackagesEmpty = activePackages.isEmpty;
@@ -224,22 +241,30 @@ class _SettingsPanelState extends State<SettingsPanel> {
       children: [
         _sectionTitle(t.languageLabel),
         const SizedBox(height: _kSectionHeaderGap),
-        SegmentedButton<AppLanguage>(
-          segments: [
-            ButtonSegment<AppLanguage>(
-              value: AppLanguage.english,
-              label: Text(t.english),
+        Card(
+          margin: EdgeInsets.zero,
+          child: ListTile(
+            key: const Key('settings_language_tile'),
+            contentPadding: _kCardTilePadding,
+            leading: Icon(
+              Icons.translate_rounded,
+              color: widget.colorScheme.onSurfaceVariant,
             ),
-            ButtonSegment<AppLanguage>(
-              value: AppLanguage.persian,
-              label: Text(t.persian),
+            title: _cardTitle(t.languageLabel),
+            subtitle: _cardText(
+              languageSummary,
+              color: widget.colorScheme.onSurfaceVariant,
             ),
-          ],
-          selected: {widget.language},
-          onSelectionChanged: (next) {
-            if (next.isEmpty) return;
-            widget.onLanguageChanged(next.first);
-          },
+            trailing: Icon(
+              Icons.chevron_right,
+              color: widget.colorScheme.onSurfaceVariant,
+            ),
+            onTap: () => showLanguagePickerSheet(
+              context,
+              selectedLocale: widget.selectedLocale,
+              onSelected: widget.onLocaleChanged,
+            ),
+          ),
         ),
         const SizedBox(height: _kSectionGap),
         if (widget.themeMode != null && widget.onThemeModeChanged != null) ...[
@@ -531,7 +556,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     errorText: _connectivityUrlError,
                   ),
                   onChanged: (value) {
-                    final error = ConnectivityCheckSettings.validateUrl(value);
+                    final error = ConnectivityCheckSettings.validateUrl(
+                      value,
+                      l10n: t,
+                    );
                     if (_connectivityUrlError != error) {
                       setState(() => _connectivityUrlError = error);
                     }
@@ -555,6 +583,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                   onChanged: (value) {
                     final error = ConnectivityCheckSettings.validateTimeoutMs(
                       value,
+                      l10n: t,
                     );
                     if (_connectivityTimeoutError != error) {
                       setState(() => _connectivityTimeoutError = error);
@@ -612,9 +641,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _cardTitle(_updateTitle()),
+                _cardTitle(_updateTitle(t)),
                 _cardText(
-                  _updateSubtitle(),
+                  _updateSubtitle(t),
                   color: widget.colorScheme.onSurfaceVariant,
                 ),
                 const SizedBox(height: 12),
@@ -737,7 +766,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       widget.onRefreshVersionCheck();
       return;
     }
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final granted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -777,8 +806,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     };
   }
 
-  String _updateTitle() {
-    final t = AppText.current;
+  String _updateTitle(AppLocalizations t) {
     return switch (widget.appUpdateStatus) {
       AppUpdateStatus.loading => t.checkingUpdates,
       AppUpdateStatus.updateAvailable => t.updateAvailable,
@@ -790,8 +818,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     };
   }
 
-  String _updateSubtitle() {
-    final t = AppText.current;
+  String _updateSubtitle(AppLocalizations t) {
     final latestRelease = widget.latestReleaseVersion;
     return switch (widget.appUpdateStatus) {
       AppUpdateStatus.loading => t.lookingUpRelease,
@@ -808,17 +835,26 @@ class _SettingsPanelState extends State<SettingsPanel> {
       AppUpdateStatus.comparisonUnavailable when latestRelease != null =>
         t.latestCannotCompare(
           latestRelease,
-          t.updateCheckError(
-            widget.updateErrorMessage ??
-                widget.installedVersionError ??
-                t.installedVersionUnavailableCompare,
-          ),
+          t.installedVersionUnavailableCompare,
         ),
-      AppUpdateStatus.error =>
-        widget.updateErrorMessage == null
-            ? t.couldNotCheckUpdates
-            : t.updateCheckError(widget.updateErrorMessage!),
+      AppUpdateStatus.error => _localizedUpdateError(t),
       _ => t.checkGithubReleases,
+    };
+  }
+
+  String _localizedUpdateError(AppLocalizations t) {
+    return switch (widget.updateErrorKind) {
+      AppUpdateErrorKind.http =>
+        widget.updateErrorStatusCode != null
+            ? t.updateErrorHttp(widget.updateErrorStatusCode!)
+            : t.couldNotCheckUpdates,
+      AppUpdateErrorKind.network => t.updateErrorNetwork,
+      AppUpdateErrorKind.timeout => t.updateErrorTimeout,
+      AppUpdateErrorKind.tls => t.updateErrorTls,
+      AppUpdateErrorKind.response => t.updateErrorMalformed,
+      AppUpdateErrorKind.noReleases => t.updateErrorNoReleases,
+      AppUpdateErrorKind.unknown => t.updateErrorUnexpected,
+      null => widget.updateErrorMessage ?? t.couldNotCheckUpdates,
     };
   }
 
@@ -907,8 +943,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
   }) {
     final httpText = _httpPortSlot.controller.text;
     final socksText = _socksPortSlot.controller.text;
-    final httpSyntaxError = ProxySettings.validatePortText(httpText);
-    final socksSyntaxError = ProxySettings.validatePortText(socksText);
+    final t = AppL10n.current;
+    final httpSyntaxError = ProxySettings.validatePortText(httpText, l10n: t);
+    final socksSyntaxError = ProxySettings.validatePortText(socksText, l10n: t);
     final httpPort = ProxySettings.parseValidPort(httpText);
     final socksPort = ProxySettings.parseValidPort(socksText);
     final colliding =
@@ -917,7 +954,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     void applySlot(_ProxyPortSlot slot, String? syntaxError, int? parsedPort) {
       if (colliding) {
         slot.cancelPendingCheck();
-        slot.errorText = AppText.current.proxyPortsDifferent;
+        slot.errorText = AppL10n.current.proxyPortsDifferent;
         return;
       }
       if (syntaxError != null) {
@@ -927,7 +964,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
         return;
       }
       if (parsedPort != null && slot.inUsePort == parsedPort) {
-        slot.errorText = AppText.current.proxyPortInUse(parsedPort);
+        slot.errorText = AppL10n.current.proxyPortInUse(parsedPort);
         return;
       }
       slot.inUsePort = null;
@@ -1044,7 +1081,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
         slot.inUsePort = port;
         slot.lastCheckedFreePort = null;
         if (!currentColliding) {
-          slot.errorText = AppText.current.proxyPortInUse(port);
+          slot.errorText = AppL10n.current.proxyPortInUse(port);
         }
       } else {
         slot.inUsePort = null;

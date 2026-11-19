@@ -112,6 +112,8 @@ class SettingsState extends Equatable {
     this.latestReleaseVersion,
     this.latestReleaseUrl,
     this.updateErrorMessage,
+    this.updateErrorKind,
+    this.updateErrorStatusCode,
     this.batteryOptimizationStatus = const BatteryOptimizationStatus.unknown(),
     this.batteryOptimizationBusy = false,
     this.message,
@@ -132,6 +134,8 @@ class SettingsState extends Equatable {
   final String? latestReleaseVersion;
   final String? latestReleaseUrl;
   final String? updateErrorMessage;
+  final AppUpdateErrorKind? updateErrorKind;
+  final int? updateErrorStatusCode;
   final BatteryOptimizationStatus batteryOptimizationStatus;
   final bool batteryOptimizationBusy;
   final HomeMessage? message;
@@ -155,6 +159,8 @@ class SettingsState extends Equatable {
     String? latestReleaseVersion,
     String? latestReleaseUrl,
     String? updateErrorMessage,
+    AppUpdateErrorKind? updateErrorKind,
+    int? updateErrorStatusCode,
     bool clearUpdateErrorMessage = false,
     BatteryOptimizationStatus? batteryOptimizationStatus,
     bool? batteryOptimizationBusy,
@@ -188,6 +194,12 @@ class SettingsState extends Equatable {
       updateErrorMessage: clearUpdateErrorMessage
           ? null
           : (updateErrorMessage ?? this.updateErrorMessage),
+      updateErrorKind: clearUpdateErrorMessage
+          ? null
+          : (updateErrorKind ?? this.updateErrorKind),
+      updateErrorStatusCode: clearUpdateErrorMessage
+          ? null
+          : (updateErrorStatusCode ?? this.updateErrorStatusCode),
       batteryOptimizationStatus:
           batteryOptimizationStatus ?? this.batteryOptimizationStatus,
       batteryOptimizationBusy:
@@ -213,6 +225,8 @@ class SettingsState extends Equatable {
     latestReleaseVersion,
     latestReleaseUrl,
     updateErrorMessage,
+    updateErrorKind,
+    updateErrorStatusCode,
     batteryOptimizationStatus,
     batteryOptimizationBusy,
     message,
@@ -535,36 +549,22 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     BatteryOptimizationRequestResult result,
     BatteryOptimizationStatus status,
   ) {
+    final t = AppL10n.current;
     if (result.outcome == BatteryOptimizationRequestOutcome.requested &&
         status.state == BatteryOptimizationState.allowed) {
-      return AppText.pick(
-        'Battery optimization disabled for TunnelForge.',
-        'بهینه‌سازی باتری برای TunnelForge غیرفعال شد.',
-      );
+      return t.batteryOptimizationDisabled;
     }
     return switch (result.outcome) {
-      BatteryOptimizationRequestOutcome.unsupported => AppText.pick(
-        'Battery optimization settings are not available on this device.',
-        'تنظیمات بهینه‌سازی باتری در این دستگاه در دسترس نیست.',
-      ),
-      BatteryOptimizationRequestOutcome.alreadyAllowed => AppText.pick(
-        'Battery optimization is already disabled for TunnelForge.',
-        'بهینه‌سازی باتری برای TunnelForge از قبل غیرفعال است.',
-      ),
-      BatteryOptimizationRequestOutcome.requested => AppText.pick(
-        'Battery optimization request opened.',
-        'درخواست بهینه‌سازی باتری باز شد.',
-      ),
-      BatteryOptimizationRequestOutcome.settingsOpened => AppText.pick(
-        'Battery settings opened.',
-        'تنظیمات باتری باز شد.',
-      ),
+      BatteryOptimizationRequestOutcome.unsupported =>
+        t.batteryOptimizationUnsupportedDevice,
+      BatteryOptimizationRequestOutcome.alreadyAllowed =>
+        t.batteryOptimizationAlreadyDisabled,
+      BatteryOptimizationRequestOutcome.requested =>
+        t.batteryOptimizationRequestOpened,
+      BatteryOptimizationRequestOutcome.settingsOpened =>
+        t.batterySettingsOpened,
       BatteryOptimizationRequestOutcome.failed =>
-        result.message ??
-            AppText.pick(
-              'Could not open battery settings.',
-              'تنظیمات باتری باز نشد.',
-            ),
+        result.message ?? t.batterySettingsOpenFailed,
     };
   }
 
@@ -725,6 +725,8 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
         state.copyWith(
           appUpdateStatus: AppUpdateStatus.error,
           updateErrorMessage: error.userMessage,
+          updateErrorKind: error.kind,
+          updateErrorStatusCode: error.statusCode,
         ),
       );
     } catch (error) {
@@ -734,6 +736,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
           appUpdateStatus: AppUpdateStatus.error,
           updateErrorMessage:
               'Unexpected error while checking GitHub Releases.',
+          updateErrorKind: AppUpdateErrorKind.unknown,
         ),
       );
     }

@@ -136,6 +136,10 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(null)
                 }
+                AppInfoContract.SET_APP_LOCALE -> {
+                    AppLocaleSupport.applyAppLocale(this, call.arguments as? String)
+                    result.success(null)
+                }
                 AppInfoContract.GET_INSTALLED_VERSION -> {
                     try {
                         result.success(installedVersionInfo())

@@ -18,6 +18,7 @@ import 'package:tunnel_forge/features/profiles/data/profile_transfer_bridge.dart
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_client.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
+import 'package:tunnel_forge/l10n/app_localizations.dart';
 import '../domain/home_models.dart';
 import '../domain/home_repositories.dart';
 import '../domain/log_redaction.dart';
@@ -38,6 +39,9 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
           ids.length == 1
               ? 'This profile no longer exists.'
               : 'One or more selected profiles no longer exist.',
+          code: ids.length == 1
+              ? ProfileRepositoryErrorCode.missingSingle
+              : ProfileRepositoryErrorCode.missingMultiple,
         );
       }
       if (row.secretsMissing) {
@@ -58,6 +62,10 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
         ids.length == 1
             ? 'Saved password/PSK could not be read. Re-enter them before sharing.'
             : 'Saved password/PSK could not be read for: ${missingNames.join(', ')}. Re-enter them before sharing.',
+        code: ids.length == 1
+            ? ProfileRepositoryErrorCode.secretsMissingSingle
+            : ProfileRepositoryErrorCode.secretsMissingMultiple,
+        missingNames: List<String>.unmodifiable(missingNames),
       );
     }
     return items;
@@ -138,9 +146,7 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
       ShareParams(
         files: files,
         fileNameOverrides: fileNames,
-        title: ids.length == 1
-            ? 'Export TunnelForge profile'
-            : 'Export TunnelForge profiles',
+        title: AppL10n.current.exportProfileShareTitle(ids.length),
       ),
     );
   }
@@ -417,7 +423,7 @@ class AppUpdateRepositoryImpl implements AppUpdateRepository {
 
     if (releases.isEmpty) {
       throw const AppUpdateException(
-        kind: AppUpdateErrorKind.response,
+        kind: AppUpdateErrorKind.noReleases,
         userMessage: 'GitHub Releases returned no usable releases.',
         details: 'No valid published releases were found.',
       );
@@ -988,8 +994,34 @@ class LogsRepositoryImpl implements LogsRepository {
   }
 }
 
+enum ProfileRepositoryErrorCode {
+  missingSingle,
+  missingMultiple,
+  secretsMissingSingle,
+  secretsMissingMultiple,
+}
+
 class ProfileRepositoryException implements Exception {
-  const ProfileRepositoryException(this.message);
+  const ProfileRepositoryException(
+    this.message, {
+    this.code,
+    this.missingNames = const <String>[],
+  });
 
   final String message;
+  final ProfileRepositoryErrorCode? code;
+  final List<String> missingNames;
+
+  String localizedMessage(AppLocalizations t) {
+    return switch (code) {
+      ProfileRepositoryErrorCode.missingSingle => t.profileRepoMissingSingle,
+      ProfileRepositoryErrorCode.missingMultiple =>
+        t.profileRepoMissingMultiple,
+      ProfileRepositoryErrorCode.secretsMissingSingle =>
+        t.profileRepoSecretsMissingSingle,
+      ProfileRepositoryErrorCode.secretsMissingMultiple =>
+        t.profileRepoSecretsMissingMultiple(missingNames.join(', ')),
+      null => message,
+    };
+  }
 }

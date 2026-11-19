@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:equatable/equatable.dart';
 
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
+import 'package:tunnel_forge/l10n/generated/app_localizations_en.dart';
 
 class ConnectivityPingResult {
   const ConnectivityPingResult({
@@ -124,6 +125,7 @@ class HttpConnectivityChecker implements ConnectivityChecker {
     final normalizedUrl = ConnectivityCheckSettings.normalizeUrl(request.url);
     final validationError = ConnectivityCheckSettings.validateUrl(
       normalizedUrl,
+      l10n: AppLocalizationsEn(),
     );
     if (validationError != null) {
       return ConnectivityPingResult.failure(error: validationError);

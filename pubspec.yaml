@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  intl: any
   archive: ^4.7.1
   bloc: ^9.2.1
   cross_file: ^0.3.5+5
@@ -39,6 +40,7 @@ dev_dependencies:
   mocktail: ^1.0.5
 
 flutter:
+  generate: true
   uses-material-design: true
   fonts:
     - family: Estedad

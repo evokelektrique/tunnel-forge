@@ -1,16 +1,14 @@
 import 'dart:async';
 
-import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_localizations/flutter_localizations.dart'
-    show GlobalWidgetsLocalizations;
 import 'package:get_it/get_it.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
+import 'package:tunnel_forge/core/platform/app_info_bridge.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_bridge.dart';
@@ -53,19 +51,40 @@ class TunnelForgeApp extends StatefulWidget {
   State<TunnelForgeApp> createState() => _TunnelForgeAppState();
 }
 
-class _TunnelForgeAppState extends State<TunnelForgeApp> {
+class _TunnelForgeAppState extends State<TunnelForgeApp>
+    with WidgetsBindingObserver {
   late final GetIt _locator;
   late final AppLanguageController _languageController;
+  final AppInfoBridge _appInfoBridge = AppInfoBridge();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _languageController = AppLanguageController(
-      onLanguageChanged: (previous, next) {
+      onLocaleLoaded: (loaded) {
+        unawaited(
+          _appInfoBridge.setAppLocale(
+            loaded == null ? null : AppLanguageController.localeTag(loaded),
+          ),
+        );
+      },
+      onLocaleChanged: (previous, next) {
+        final prevTag = previous == null
+            ? 'system'
+            : AppLanguageController.localeTag(previous);
+        final nextTag = next == null
+            ? 'system'
+            : AppLanguageController.localeTag(next);
         _locator<LogsRepository>().logDart(
           LogLevel.debug,
           'language',
-          'Language changed previous=${previous.code} to=${next.code}',
+          'Language changed previous=$prevTag to=$nextTag',
+        );
+        unawaited(
+          _appInfoBridge.setAppLocale(
+            next == null ? null : AppLanguageController.localeTag(next),
+          ),
         );
       },
     );
@@ -83,7 +102,13 @@ class _TunnelForgeAppState extends State<TunnelForgeApp> {
   }
 
   @override
+  void didChangeLocales(List<Locale>? locales) {
+    _languageController.handleSystemLocalesChanged();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     disposeLocator(_locator);
     _languageController.dispose();
     super.dispose();
@@ -100,17 +125,19 @@ class _TunnelForgeAppState extends State<TunnelForgeApp> {
             return AnimatedBuilder(
               animation: _languageController,
               builder: (context, _) {
-                final language = _languageController.language;
                 return MaterialApp(
                   title: 'TunnelForge',
-                  locale: language.locale,
+                  locale: _languageController.locale,
                   supportedLocales: AppLocalizations.supportedLocales,
-                  localizationsDelegates: const [
-                    AppLocalizations.delegate,
-                    GlobalMaterialLocalizations.delegate,
-                    GlobalWidgetsLocalizations.delegate,
-                    GlobalCupertinoLocalizations.delegate,
-                  ],
+                  localizationsDelegates: AppL10n.localizationsDelegates,
+                  localeListResolutionCallback: (locales, supported) {
+                    final resolved = AppLanguageController.resolveLocale(
+                      _languageController.locale,
+                      locales ?? const <Locale>[],
+                    );
+                    AppL10n.syncLocale(resolved);
+                    return resolved;
+                  },
                   theme: appTheme(Brightness.light),
                   darkTheme: appTheme(Brightness.dark),
                   themeMode: state.themeMode,

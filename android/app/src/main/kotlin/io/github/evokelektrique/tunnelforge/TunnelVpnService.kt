@@ -248,7 +248,7 @@ class TunnelVpnService : VpnService() {
             }
             ACTION_START -> {
                 // Required immediately after Context.startForegroundService(); must run before any early return.
-                startForegroundWithType(buildNotification(getString(R.string.vpn_notification_connecting)))
+                startForegroundWithType(buildNotification(AppLocaleSupport.getString(this, R.string.vpn_notification_connecting)))
                 TunnelDisconnectNotification.cancelAll(this)
                 val attemptId = intent.getStringExtra(EXTRA_ATTEMPT_ID) ?: ""
                 val server = intent.getStringExtra(EXTRA_SERVER)
@@ -719,9 +719,10 @@ class TunnelVpnService : VpnService() {
                     activateBlockingTun(attemptId)
                     closeLiveDataplane()
                     currentTunnelState = VpnContract.TUNNEL_WAITING_FOR_NETWORK
-                    currentTunnelDetail = getString(R.string.vpn_notification_waiting_network)
+                    // Protocol state detail stays strictly English for logs/events; only the notification is localized.
+                    currentTunnelDetail = "Waiting for network (blocking internet)"
                     emitAttemptState(attemptId, VpnContract.TUNNEL_WAITING_FOR_NETWORK, currentTunnelDetail)
-                    updateForegroundNotification(currentTunnelDetail)
+                    updateForegroundNotification(AppLocaleSupport.getString(this, R.string.vpn_notification_waiting_network))
                     waitForRecoveryCondition(
                         attemptId = attemptId,
                         timeoutMs = null,
@@ -737,9 +738,9 @@ class TunnelVpnService : VpnService() {
                     activateBlockingTun(attemptId)
                     closeLiveDataplane()
                     currentTunnelState = VpnContract.TUNNEL_RECONNECTING
-                    currentTunnelDetail = getString(R.string.vpn_notification_reconnecting)
+                    currentTunnelDetail = "Reconnecting..."
                     emitAttemptState(attemptId, VpnContract.TUNNEL_RECONNECTING, currentTunnelDetail)
-                    updateForegroundNotification(currentTunnelDetail)
+                    updateForegroundNotification(AppLocaleSupport.getString(this, R.string.vpn_notification_reconnecting))
                     val delayMs =
                         if (immediateSwitchReconnect) {
                             0L
@@ -1371,13 +1372,13 @@ class TunnelVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.vpn_notification_title))
+            .setContentTitle(AppLocaleSupport.getString(this, R.string.vpn_notification_title))
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(pending)
             .addAction(
                 0,
-                getString(R.string.vpn_notification_action_disconnect),
+                AppLocaleSupport.getString(this, R.string.vpn_notification_action_disconnect),
                 disconnectPendingIntent(),
             )
             .setOngoing(true)
@@ -1405,9 +1406,9 @@ class TunnelVpnService : VpnService() {
     private fun connectedNotificationText(): String {
         val label = activeProfileName?.takeIf { it.isNotEmpty() } ?: activeServer
         return if (label.isEmpty()) {
-            getString(R.string.vpn_notification_connected)
+            AppLocaleSupport.getString(this, R.string.vpn_notification_connected)
         } else {
-            getString(R.string.vpn_notification_connected_profile, label)
+            AppLocaleSupport.getString(this, R.string.vpn_notification_connected_profile, label)
         }
     }
 
@@ -1443,7 +1444,7 @@ class TunnelVpnService : VpnService() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val ch = NotificationChannel(
             CHANNEL_ID,
-            getString(R.string.vpn_notification_channel_name),
+            AppLocaleSupport.getString(this, R.string.vpn_notification_channel_name),
             NotificationManager.IMPORTANCE_LOW,
         )
         nm.createNotificationChannel(ch)

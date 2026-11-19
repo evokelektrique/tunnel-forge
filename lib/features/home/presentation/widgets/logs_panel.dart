@@ -42,7 +42,7 @@ class _LogsPanelState extends State<LogsPanel> {
   @override
   Widget build(BuildContext context) {
     final logs = widget.logs;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     if (logs.isEmpty) {
       final title = widget.hasAnyLogs ? t.noLogsMatch : t.noActivityYet;
       final subtitle = widget.hasAnyLogs

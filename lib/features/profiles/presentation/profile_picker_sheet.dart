@@ -190,7 +190,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
       if (!mounted) return;
       showAppSnackBar(
         context,
-        AppText.current.profileRefreshTimedOut,
+        AppL10n.of(context).profileRefreshTimedOut,
         error: true,
       );
     }
@@ -221,7 +221,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
       if (!mounted) return;
       showAppSnackBar(
         context,
-        AppText.current.profileImportTimedOut,
+        AppL10n.of(context).profileImportTimedOut,
         error: true,
       );
     }
@@ -251,7 +251,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
       if (!mounted) return;
       showAppSnackBar(
         context,
-        AppText.current.profileImportTimedOut,
+        AppL10n.of(context).profileImportTimedOut,
         error: true,
       );
     }
@@ -277,7 +277,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         );
         showAppSnackBar(
           context,
-          AppText.current.couldNotReadSelectedFile,
+          AppL10n.of(context).couldNotReadSelectedFile,
           error: true,
         );
         return;
@@ -297,7 +297,11 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         'Profile import failed origin=file reason=${error.runtimeType}',
       );
       if (!mounted) return;
-      showAppSnackBar(context, AppText.current.couldNotImportTfp, error: true);
+      showAppSnackBar(
+        context,
+        AppL10n.of(context).couldNotImportTfp,
+        error: true,
+      );
     }
   }
 
@@ -312,7 +316,11 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
           'Profile clipboard import skipped: clipboard empty',
         );
         if (!mounted) return;
-        showAppSnackBar(context, AppText.current.clipboardEmpty, error: true);
+        showAppSnackBar(
+          context,
+          AppL10n.of(context).clipboardEmpty,
+          error: true,
+        );
         return;
       }
       final uriPrefix = '${ProfileTransferEnvelope.uriScheme}://';
@@ -357,12 +365,11 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         'Profile import failed origin=clipboard reason=${error.runtimeType}',
       );
       if (!mounted) return;
-      final message = error.message.toString();
-      showAppSnackBar(
-        context,
-        message.isEmpty ? AppText.current.clipboardInvalidProfile : message,
-        error: true,
-      );
+      final t = AppL10n.of(context);
+      final userMessage = error is ProfileTransferFormatException
+          ? error.localizedMessage(t)
+          : t.clipboardInvalidProfile;
+      showAppSnackBar(context, userMessage, error: true);
     } catch (error) {
       widget.logsRepository?.logDart(
         LogLevel.warning,
@@ -372,7 +379,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
       if (!mounted) return;
       showAppSnackBar(
         context,
-        AppText.current.couldNotImportClipboard,
+        AppL10n.of(context).couldNotImportClipboard,
         error: true,
       );
     }
@@ -383,28 +390,27 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     if (uniqueIds.isEmpty) return false;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          AppLocalizations.of(ctx).deleteProfilesQuestion(uniqueIds.length),
-        ),
-        content: Text(
-          AppLocalizations.of(ctx).deleteProfilesBody(uniqueIds.length),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(AppLocalizations.of(ctx).cancel),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(ctx).colorScheme.error,
-              foregroundColor: Theme.of(ctx).colorScheme.onError,
+      builder: (ctx) {
+        final t = AppL10n.of(ctx);
+        return AlertDialog(
+          title: Text(t.deleteProfilesQuestion(uniqueIds.length)),
+          content: Text(t.deleteProfilesBody(uniqueIds.length)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t.cancel),
             ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(AppLocalizations.of(ctx).delete),
-          ),
-        ],
-      ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error,
+                foregroundColor: Theme.of(ctx).colorScheme.onError,
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t.delete),
+            ),
+          ],
+        );
+      },
     );
     if (ok != true || !mounted) return false;
     final initialMessageId = _profilesBloc.state.message?.id ?? 0;
@@ -469,7 +475,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     final combined = await showDialog<bool>(
       context: context,
       builder: (ctx) {
-        final t = AppLocalizations.of(ctx);
+        final t = AppL10n.of(ctx);
         return AlertDialog(
           title: Text(t.exportTfp),
           content: Column(
@@ -513,7 +519,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final tt = theme.textTheme;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final isMultiSelect = _isMultiSelect(state);
     final hasSelection = selectedIds.isNotEmpty;
     final allSelected =
@@ -679,7 +685,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
   }) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final canReorder = section.length > 1;
 
     return SliverReorderableList(
@@ -817,7 +823,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final tt = theme.textTheme;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final selectedIds = _activeSelection(state.profiles);
     final isMultiSelect = _isMultiSelect(state);
     final favorites = state.profiles.where((p) => p.favorite).toList();
@@ -896,7 +902,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
           if (!mounted) return;
           _closeEditor();
           if (!mounted) return;
-          showAppSnackBar(this.context, AppText.current.profileSaved);
+          showAppSnackBar(this.context, AppL10n.of(this.context).profileSaved);
         },
       ),
     );

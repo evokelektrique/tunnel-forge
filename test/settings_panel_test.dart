@@ -40,8 +40,8 @@ void main() {
     return MaterialApp(
       home: Scaffold(
         body: SettingsPanel(
-          language: AppLanguage.english,
-          onLanguageChanged: (_) {},
+          selectedLocale: const Locale('en'),
+          onLocaleChanged: (_) {},
           themeMode: ThemeMode.light,
           onThemeModeChanged: (_) {},
           connectionMode: connectionMode,
@@ -806,5 +806,65 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(refreshCount, 1);
+  });
+
+  testWidgets('language tile opens scalable picker with system default', (
+    tester,
+  ) async {
+    Locale? picked = const Locale('en');
+    final theme = ThemeData.light();
+    await tester.pumpWidget(
+      MaterialApp(
+        supportedLocales: AppLocalizations.supportedLocales,
+        localizationsDelegates: AppL10n.localizationsDelegates,
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => SettingsPanel(
+              selectedLocale: picked,
+              onLocaleChanged: (locale) => setState(() => picked = locale),
+              connectionMode: ConnectionMode.proxyOnly,
+              splitTunnelSettings: const SplitTunnelSettings(),
+              proxySettings: const ProxySettings(),
+              connectivityCheckSettings: const ConnectivityCheckSettings(),
+              batteryOptimizationStatus: const BatteryOptimizationStatus(
+                state: BatteryOptimizationState.allowed,
+              ),
+              batteryOptimizationBusy: false,
+              onConnectionModeChanged: (_) {},
+              onSplitTunnelSettingsChanged: (_) {},
+              onProxySettingsChanged: (_) {},
+              onConnectivityCheckSettingsChanged: (_) {},
+              onRequestBatteryOptimization: () {},
+              onChooseApps: () {},
+              updateCheckConsentGranted: true,
+              appUpdateStatus: AppUpdateStatus.idle,
+              onRefreshVersionCheck: () {},
+              onOpenTelegram: () {},
+              onOpenGithub: () {},
+              routingLocked: false,
+              colorScheme: theme.colorScheme,
+              textTheme: theme.textTheme,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('settings_language_tile')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('language_option_system')), findsOneWidget);
+    expect(find.byKey(const Key('language_option_en')), findsOneWidget);
+    expect(find.byKey(const Key('language_option_fa')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('language_option_fa')));
+    await tester.pumpAndSettle();
+    expect(picked, const Locale('fa'));
+
+    await tester.tap(find.byKey(const Key('settings_language_tile')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('language_option_system')));
+    await tester.pumpAndSettle();
+    expect(picked, isNull);
   });
 }

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="vpn_notification_title">وی‌پی‌ان TunnelForge</string>
+    <string name="vpn_notification_connecting">در حال اتصال...</string>
+    <string name="vpn_notification_connected">وی‌پی‌ان فعال است</string>
+    <string name="vpn_notification_connected_profile">متصل: %1$s</string>
+    <string name="vpn_notification_waiting_network">در انتظار شبکه (مسدودسازی اینترنت)</string>
+    <string name="vpn_notification_reconnecting">در حال اتصال مجدد...</string>
+    <string name="proxy_notification_starting">در حال شروع پروکسی محلی...</string>
+    <string name="proxy_notification_waiting_network">در انتظار شبکه</string>
+    <string name="vpn_notification_action_disconnect">قطع اتصال</string>
+    <string name="vpn_notification_channel_name">وی‌پی‌ان</string>
+    <string name="vpn_notification_alert_channel_name">هشدارهای اتصال</string>
+    <string name="vpn_notification_disconnected_title">اتصال TunnelForge قطع شد</string>
+    <string name="vpn_notification_connect_failed_title">اتصال TunnelForge ناموفق بود</string>
+    <string name="vpn_notification_disconnected_server">سرور وی‌پی‌ان اتصال را بست.</string>
+    <string name="vpn_notification_reconnecting_alert_title">اتصال TunnelForge قطع شد</string>
+    <string name="vpn_notification_reconnecting_alert_body">اتصال قطع شد. در حال اتصال مجدد در پس‌زمینه...</string>
+    <string name="proxy_notification_title">پروکسی TunnelForge</string>
+
+    <string name="tunnel_reason_auth_failed">احراز هویت ناموفق بود.</string>
+    <string name="tunnel_reason_mschap_646">ساعات ورود محدود شده است.</string>
+    <string name="tunnel_reason_mschap_647">حساب کاربری غیرفعال است.</string>
+    <string name="tunnel_reason_mschap_648">رمز عبور منقضی شده است.</string>
+    <string name="tunnel_reason_mschap_649">حساب اجازه اتصال ندارد.</string>
+    <string name="tunnel_reason_mschap_709">تغییر رمز عبور ناموفق بود.</string>
+    <string name="tunnel_reason_mschap_unknown">احراز هویت ناموفق بود (MS-CHAP %1$d).</string>
+    <string name="tunnel_reason_chap_unknown">احراز هویت CHAP ناموفق بود (%1$d).</string>
+    <string name="tunnel_reason_pap_unknown">احراز هویت PAP ناموفق بود (%1$d).</string>
+
+    <string name="tunnel_reason_stopccn_1">سرور اتصال کنترلی را بست.</string>
+    <string name="tunnel_reason_stopccn_2">سرور خطای عمومی گزارش کرد.</string>
+    <string name="tunnel_reason_stopccn_3">اتصال کنترلی از قبل وجود دارد.</string>
+    <string name="tunnel_reason_stopccn_4">اتصال کنترلی مجاز نیست.</string>
+    <string name="tunnel_reason_stopccn_5">نسخه پروتکل پشتیبانی نمی‌شود.</string>
+    <string name="tunnel_reason_stopccn_6">سرور وی‌پی‌ان در حال خاموش شدن است.</string>
+    <string name="tunnel_reason_stopccn_7">خطای وضعیت پروتکل L2TP.</string>
+    <string name="tunnel_reason_stopccn_8">عدم تطابق مقدار CCDS.</string>
+
+    <string name="tunnel_reason_cdn_1">ارتباط حامل قطع شد.</string>
+    <string name="tunnel_reason_cdn_2">خطای نشست L2TP.</string>
+    <string name="tunnel_reason_cdn_3">نشست توسط مدیر قطع شد.</string>
+    <string name="tunnel_reason_cdn_4">منابع سرور موقتا در دسترس نیست.</string>
+    <string name="tunnel_reason_cdn_5">امکانات مورد نیاز سرور در دسترس نیست.</string>
+    <string name="tunnel_reason_cdn_6">مقصد نامعتبر است.</string>
+    <string name="tunnel_reason_cdn_7">حامل شناسایی نشد.</string>
+    <string name="tunnel_reason_cdn_8">مقصد مشغول است.</string>
+    <string name="tunnel_reason_cdn_9">بوق آزاد وجود ندارد.</string>
+    <string name="tunnel_reason_cdn_10">زمان برقراری نشست تمام شد.</string>
+    <string name="tunnel_reason_cdn_11">قالب‌بندی مناسب شناسایی نشد.</string>
+    <string name="tunnel_reason_cdn_12">عدم تطابق مقدار SDS.</string>
+
+    <string name="tunnel_reason_general_1">اتصال کنترلی وجود ندارد</string>
+    <string name="tunnel_reason_general_2">طول پیام نامعتبر است</string>
+    <string name="tunnel_reason_general_3">مقدار فیلد نامعتبر است</string>
+    <string name="tunnel_reason_general_4">منابع سرور کافی نیست</string>
+    <string name="tunnel_reason_general_5">شناسه نشست نامعتبر است</string>
+    <string name="tunnel_reason_general_6">خطای اختصاصی سازنده</string>
+    <string name="tunnel_reason_general_7">سرور دیگری را امتحان کنید</string>
+    <string name="tunnel_reason_general_8">ویژگی الزامی پشتیبانی نمی‌شود</string>
+    <string name="tunnel_reason_general_9">سرور هدایت‌شده دیگری را امتحان کنید</string>
+    <string name="tunnel_reason_general_10">گام بعدی در دسترس نیست</string>
+    <string name="tunnel_reason_general_11">گام بعدی مشغول است</string>
+    <string name="tunnel_reason_general_12">تجمیع‌کننده سوئیچینگ تونل مشغول است</string>
+
+    <string name="tunnel_reason_engine_1">مذاکره IPsec ناموفق بود. کلید مشترک و تنظیمات سرور را بررسی کنید.</string>
+    <string name="tunnel_reason_engine_2">دست‌دهی L2TP ناموفق بود.</string>
+    <string name="tunnel_reason_engine_3">مذاکره PPP ناموفق بود.</string>
+    <string name="tunnel_reason_engine_4">خطای ورودی/خروجی تونل.</string>
+    <string name="tunnel_reason_engine_10">آرگومان‌های تونل از طرف برنامه نامعتبر است.</string>
+    <string name="tunnel_reason_engine_11">انتقال پروکسی هنوز پیاده‌سازی نشده است.</string>
+    <string name="tunnel_reason_engine_13">اتصال شبکه قطع شد.</string>
+    <string name="tunnel_reason_engine_14">سرور وی‌پی‌ان دیگر پاسخ نمی‌دهد.</string>
+    <string name="tunnel_reason_engine_15">سرور وی‌پی‌ان اتصال را بست.</string>
+
+    <string name="tunnel_reason_android_1">دسترسی وی‌پی‌ان توسط اندروید لغو شد.</string>
+    <string name="tunnel_reason_android_2">تونل توسط سیستم اندروید متوقف شد.</string>
+    <string name="tunnel_reason_android_3">تونل پس از بستن برنامه از فهرست اخیر متوقف شد.</string>
+    <string name="tunnel_reason_android_4">مجوز وی‌پی‌ان دیگر برقرار نیست.</string>
+    <string name="tunnel_reason_android_5">راه‌اندازی پروکسی محلی ناموفق بود.</string>
+    <string name="tunnel_reason_android_6">تونل به‌طور غیرمنتظره قطع شد.</string>
+</resources>

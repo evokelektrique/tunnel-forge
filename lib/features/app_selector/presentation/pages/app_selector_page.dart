@@ -67,7 +67,7 @@ class _AppSelectorViewState extends State<_AppSelectorView> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     return BlocBuilder<AppSelectorBloc, AppSelectorState>(
       builder: (context, state) {
         final filtered = state.filteredApps;

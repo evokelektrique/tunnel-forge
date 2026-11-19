@@ -600,6 +600,7 @@ void main() {
           ),
           appUpdateStatus: AppUpdateStatus.error,
           updateErrorMessage: 'Network error while contacting GitHub Releases.',
+          updateErrorKind: AppUpdateErrorKind.network,
         ),
       ],
     );

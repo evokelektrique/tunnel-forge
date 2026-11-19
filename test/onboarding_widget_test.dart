@@ -283,4 +283,30 @@ void main() {
     expect(find.text('Notice'), findsNothing);
     expect(find.text('Home placeholder'), findsOneWidget);
   });
+
+  testWidgets('language step shows system default and switches UI live', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      onboardingRepository: _FakeOnboardingRepository(),
+      appExitController: _FakeAppExitController(),
+    );
+
+    expect(find.byKey(const Key('language_choice_system')), findsOneWidget);
+    expect(find.byKey(const Key('language_choice_en')), findsOneWidget);
+    expect(find.byKey(const Key('language_choice_fa')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('language_choice_fa')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('انتخاب زبان'), findsOneWidget);
+    expect(find.text('ادامه'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('language_choice_en')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose your language'), findsOneWidget);
+    expect(find.text('Continue'), findsOneWidget);
+  });
 }

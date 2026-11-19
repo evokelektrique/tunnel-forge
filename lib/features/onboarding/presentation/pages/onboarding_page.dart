@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:tunnel_forge/l10n/app_localizations.dart';
+import 'package:tunnel_forge/l10n/language_picker_sheet.dart';
 import 'package:tunnel_forge/app/theme/app_theme.dart';
 import '../bloc/onboarding_bloc.dart';
 
@@ -136,7 +138,7 @@ class _OnboardingContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final titleStyle = compact
         ? textTheme.headlineLarge
         : textTheme.displayMedium;
@@ -256,7 +258,7 @@ class _HeroSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final textTheme = Theme.of(context).textTheme;
     final brightness = Theme.of(context).brightness;
     final isDarkHero = state.isBlocking;
@@ -363,7 +365,7 @@ class _NoticePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final languageController = isLanguage
         ? AppLanguageController.of(context)
         : null;
@@ -400,8 +402,9 @@ class _NoticePanel extends StatelessWidget {
         ],
         if (isLanguage) ...[
           _LanguageChoiceList(
-            selectedLanguage: languageController!.language,
-            onLanguageChanged: languageController.setLanguage,
+            compact: compact,
+            selectedLocale: languageController!.locale,
+            onLocaleChanged: languageController.setLocale,
           ),
         ],
         if (state.isBlocking && !isIntro && !isLanguage) ...[
@@ -461,125 +464,68 @@ class _NoticePanel extends StatelessWidget {
 
 class _LanguageChoiceList extends StatelessWidget {
   const _LanguageChoiceList({
-    required this.selectedLanguage,
-    required this.onLanguageChanged,
+    required this.compact,
+    required this.selectedLocale,
+    required this.onLocaleChanged,
   });
 
-  final AppLanguage selectedLanguage;
-  final ValueChanged<AppLanguage> onLanguageChanged;
+  final bool compact;
+  final Locale? selectedLocale;
+  final ValueChanged<Locale?> onLocaleChanged;
 
   @override
   Widget build(BuildContext context) {
-    final t = AppLocalizations.of(context);
-
-    return Column(
-      children: [
-        _LanguageChoiceTile(
-          language: AppLanguage.english,
-          title: t.english,
-          selected: selectedLanguage == AppLanguage.english,
-          onTap: () => onLanguageChanged(AppLanguage.english),
-        ),
-        const SizedBox(height: 12),
-        _LanguageChoiceTile(
-          language: AppLanguage.persian,
-          title: t.persian,
-          selected: selectedLanguage == AppLanguage.persian,
-          onTap: () => onLanguageChanged(AppLanguage.persian),
-        ),
-      ],
+    final t = AppL10n.of(context);
+    final locales = <Locale?>[null, ...AppLocalizations.supportedLocales];
+    final deviceResolved = AppLanguageController.resolveLocale(
+      null,
+      PlatformDispatcher.instance.locales,
     );
-  }
-}
+    final selectedTag = selectedLocale == null
+        ? null
+        : AppLanguageController.localeTag(selectedLocale!);
 
-class _LanguageChoiceTile extends StatelessWidget {
-  const _LanguageChoiceTile({
-    required this.language,
-    required this.title,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final AppLanguage language;
-  final String title;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final semanticColors =
-        Theme.of(context).extension<AppSemanticColors>() ??
-        AppSemanticColors.fallback(Theme.of(context).brightness);
-    final borderColor = selected
-        ? semanticColors.connected
-        : colorScheme.outlineVariant.withValues(alpha: 0.72);
-    final backgroundColor = selected
-        ? semanticColors.connected.withValues(alpha: 0.10)
-        : colorScheme.surfaceContainerHighest.withValues(alpha: 0.42);
-    final direction = language == AppLanguage.persian
-        ? TextDirection.rtl
-        : TextDirection.ltr;
-
-    return Semantics(
-      button: true,
-      selected: selected,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(18),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-            decoration: BoxDecoration(
-              color: backgroundColor,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: borderColor, width: selected ? 2 : 1),
-            ),
-            child: Directionality(
-              textDirection: direction,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    width: 26,
-                    height: 26,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: selected
-                          ? semanticColors.connected
-                          : Colors.transparent,
-                      border: Border.all(
-                        color: selected
-                            ? semanticColors.connected
-                            : colorScheme.outline,
-                        width: 2,
-                      ),
-                    ),
-                    child: selected
-                        ? Icon(
-                            Icons.check,
-                            size: 17,
-                            color: semanticColors.onConnected,
-                          )
-                        : null,
-                  ),
-                ],
-              ),
-            ),
+    Widget buildTile(Locale? locale) {
+      if (locale == null) {
+        return LanguageChoiceTile(
+          key: const Key('language_choice_system'),
+          locale: null,
+          title: t.systemDefaultLanguage,
+          subtitle: t.systemDefaultLanguageSummary(
+            AppLanguageController.nativeNameFor(deviceResolved),
           ),
-        ),
+          selected: selectedTag == null,
+          onTap: () => onLocaleChanged(null),
+        );
+      }
+      final tag = AppLanguageController.localeTag(locale);
+      return LanguageChoiceTile(
+        key: Key('language_choice_$tag'),
+        locale: locale,
+        title: AppLanguageController.nativeNameFor(locale),
+        selected: selectedTag == tag,
+        onTap: () => onLocaleChanged(locale),
+      );
+    }
+
+    if (locales.length <= 5) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < locales.length; i++) ...[
+            buildTile(locales[i]),
+            if (i < locales.length - 1) const SizedBox(height: 12),
+          ],
+        ],
+      );
+    }
+
+    return SizedBox(
+      height: compact ? 200 : 260,
+      child: ListView.separated(
+        itemCount: locales.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
+        itemBuilder: (context, index) => buildTile(locales[index]),
       ),
     );
   }
@@ -611,7 +557,7 @@ class _ActionSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isExiting = state.status == OnboardingFlowStatus.exiting;
-    final t = AppLocalizations.of(context);
+    final t = AppL10n.of(context);
     final brightness = Theme.of(context).brightness;
     final semanticColors =
         Theme.of(context).extension<AppSemanticColors>() ??

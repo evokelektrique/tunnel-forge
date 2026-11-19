@@ -14,15 +14,17 @@ internal data class QuickSettingsStrings(
     val reconnecting: String,
 ) {
     companion object {
-        fun fromContext(context: Context): QuickSettingsStrings =
-            QuickSettingsStrings(
-                defaultLabel = context.getString(R.string.qs_tile_label),
-                noProfile = context.getString(R.string.qs_tile_no_profile),
-                connected = context.getString(R.string.qs_tile_connected),
-                connecting = context.getString(R.string.qs_tile_connecting),
-                waitingForNetwork = context.getString(R.string.qs_tile_waiting_network),
-                reconnecting = context.getString(R.string.qs_tile_reconnecting),
+        fun fromContext(context: Context): QuickSettingsStrings {
+            val resContext = AppLocaleSupport.englishContext(context)
+            return QuickSettingsStrings(
+                defaultLabel = resContext.getString(R.string.qs_tile_label),
+                noProfile = resContext.getString(R.string.qs_tile_no_profile),
+                connected = resContext.getString(R.string.qs_tile_connected),
+                connecting = resContext.getString(R.string.qs_tile_connecting),
+                waitingForNetwork = resContext.getString(R.string.qs_tile_waiting_network),
+                reconnecting = resContext.getString(R.string.qs_tile_reconnecting),
             )
+        }
     }
 }
 

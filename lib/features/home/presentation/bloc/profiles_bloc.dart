@@ -297,10 +297,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick(
-              'This profile no longer exists.',
-              'این پروفایل دیگر وجود ندارد.',
-            ),
+            AppL10n.current.profileNoLongerExists,
             error: true,
           ),
         ),
@@ -323,6 +320,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
   ) async {
     final transfer = event.request.transfer;
     final sourceDesc = _describeTransferSource(transfer);
+    final t = AppL10n.current;
     if (transfer.isError) {
       _log(
         LogLevel.warning,
@@ -331,11 +329,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            transfer.message ??
-                AppText.pick(
-                  'Couldn\'t open the incoming profile',
-                  'پروفایل دریافتی باز نشد',
-                ),
+            transfer.message ?? t.couldNotOpenIncomingProfile,
             error: true,
           ),
         ),
@@ -364,31 +358,33 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
             : null,
       );
       final source = switch ((transfer.source, transfer.type)) {
-        ('Clipboard', ProfileTransferContract.typeTfUri) => AppText.pick(
-          'a clipboard share link',
-          'یک پیوند اشتراک کلیپ‌بورد',
-        ),
-        ('Clipboard', _) => AppText.pick('the clipboard', 'کلیپ‌بورد'),
-        (_, ProfileTransferContract.typeTfUri) => AppText.pick(
-          'a share link',
-          'یک پیوند اشتراک',
-        ),
-        _ => AppText.pick('a .tfp file', 'یک فایل .tfp'),
+        ('Clipboard', ProfileTransferContract.typeTfUri) =>
+          t.importSourceClipboardLink,
+        ('Clipboard', _) => t.importSourceClipboard,
+        (_, ProfileTransferContract.typeTfUri) => t.importSourceShareLink,
+        _ => t.importSourceTfpFile,
       };
       final count = imported.length;
       emit(
         state.copyWith(
           message: _nextMessage(
             count == 1
-                ? AppText.pick(
-                    'Imported profile "${imported.single.displayName}" from $source',
-                    'پروفایل «${imported.single.displayName}» از $source وارد شد',
+                ? t.importedProfileNamedFromSource(
+                    imported.single.displayName,
+                    source,
                   )
-                : AppText.pick(
-                    'Imported $count profiles from $source',
-                    '$count پروفایل از $source وارد شد',
-                  ),
+                : t.importedProfilesCountFromSource(count, source),
           ),
+        ),
+      );
+    } on ProfileTransferFormatException catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile import failed $sourceDesc type=${transfer.type} reason=${error.runtimeType}',
+      );
+      emit(
+        state.copyWith(
+          message: _nextMessage(error.localizedMessage(t), error: true),
         ),
       );
     } on FormatException catch (error) {
@@ -396,7 +392,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         LogLevel.warning,
         'Profile import failed $sourceDesc type=${transfer.type} reason=${error.runtimeType}',
       );
-      emit(state.copyWith(message: _nextMessage(error.message, error: true)));
+      emit(
+        state.copyWith(
+          message: _nextMessage(t.profileTransferInvalidFile, error: true),
+        ),
+      );
     } catch (error) {
       _log(
         LogLevel.warning,
@@ -404,10 +404,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       );
       emit(
         state.copyWith(
-          message: _nextMessage(
-            AppText.pick('Couldn\'t import profile', 'پروفایل وارد نشد'),
-            error: true,
-          ),
+          message: _nextMessage(t.couldNotImportProfile, error: true),
         ),
       );
     }
@@ -418,16 +415,13 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     Emitter<ProfilesState> emit,
   ) async {
     if (event.transfers.isEmpty) return;
+    final t = AppL10n.current;
     try {
       final envelopes = <ProfileTransferEnvelope>[];
       for (final transfer in event.transfers) {
         if (transfer.isError) {
           throw FormatException(
-            transfer.message ??
-                AppText.pick(
-                  'Couldn\'t open the incoming profile',
-                  'پروفایل دریافتی باز نشد',
-                ),
+            transfer.message ?? t.couldNotOpenIncomingProfile,
           );
         }
         envelopes.add(ProfileTransferEnvelope.fromIncomingTransfer(transfer));
@@ -453,15 +447,21 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         state.copyWith(
           message: _nextMessage(
             count == 1
-                ? AppText.pick(
-                    'Imported profile "${imported.single.displayName}" from the clipboard',
-                    'پروفایل «${imported.single.displayName}» از کلیپ‌بورد وارد شد',
+                ? t.importedProfileNamedFromClipboard(
+                    imported.single.displayName,
                   )
-                : AppText.pick(
-                    'Imported $count profiles from the clipboard',
-                    '$count پروفایل از کلیپ‌بورد وارد شد',
-                  ),
+                : t.importedProfilesCountFromClipboard(count),
           ),
+        ),
+      );
+    } on ProfileTransferFormatException catch (error) {
+      _log(
+        LogLevel.warning,
+        'Profile batch import failed origin=clipboard count=${event.transfers.length} reason=${error.runtimeType}',
+      );
+      emit(
+        state.copyWith(
+          message: _nextMessage(error.localizedMessage(t), error: true),
         ),
       );
     } on FormatException catch (error) {
@@ -469,7 +469,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         LogLevel.warning,
         'Profile batch import failed origin=clipboard count=${event.transfers.length} reason=${error.runtimeType}',
       );
-      emit(state.copyWith(message: _nextMessage(error.message, error: true)));
+      emit(
+        state.copyWith(
+          message: _nextMessage(t.profileTransferInvalidFile, error: true),
+        ),
+      );
     } catch (error) {
       _log(
         LogLevel.warning,
@@ -477,10 +481,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       );
       emit(
         state.copyWith(
-          message: _nextMessage(
-            AppText.pick('Couldn\'t import profiles', 'پروفایل‌ها وارد نشدند'),
-            error: true,
-          ),
+          message: _nextMessage(t.couldNotImportProfiles, error: true),
         ),
       );
     }
@@ -519,15 +520,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         add(ProfilesSelectionChanged(state.profiles.first.id));
       }
       final count = uniqueIds.length;
+      final t = AppL10n.current;
       emit(
         state.copyWith(
           message: _nextMessage(
-            count == 1
-                ? AppText.pick('Profile removed', 'پروفایل حذف شد')
-                : AppText.pick(
-                    '$count profiles removed',
-                    '$count پروفایل حذف شد',
-                  ),
+            count == 1 ? t.profileRemoved : t.profilesRemovedCount(count),
           ),
         ),
       );
@@ -537,15 +534,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         'Delete profiles failed count=${uniqueIds.length} error=${error.runtimeType}',
       );
       final count = uniqueIds.length;
+      final t = AppL10n.current;
       emit(
         state.copyWith(
           message: _nextMessage(
-            count == 1
-                ? AppText.pick('Couldn\'t delete profile', 'پروفایل حذف نشد')
-                : AppText.pick(
-                    'Couldn\'t delete profiles',
-                    'پروفایل‌ها حذف نشدند',
-                  ),
+            count == 1 ? t.couldNotDeleteProfile : t.couldNotDeleteProfiles,
             error: true,
           ),
         ),
@@ -578,6 +571,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     Emitter<ProfilesState> emit,
   ) async {
     if (ids.isEmpty) return;
+    final t = AppL10n.current;
     try {
       await _profilesRepository.copyProfileShareLinks(ids);
       _log(LogLevel.debug, 'Copied share links count=${ids.length}');
@@ -585,12 +579,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            count == 1
-                ? AppText.pick('Share link copied', 'پیوند اشتراک کپی شد')
-                : AppText.pick(
-                    '$count share links copied',
-                    '$count پیوند اشتراک کپی شد',
-                  ),
+            count == 1 ? t.shareLinkCopied : t.shareLinksCopiedCount(count),
           ),
         ),
       );
@@ -599,7 +588,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         LogLevel.warning,
         'Copy share links failed count=${ids.length} reason=repository_exception',
       );
-      emit(state.copyWith(message: _nextMessage(error.message, error: true)));
+      emit(
+        state.copyWith(
+          message: _nextMessage(error.localizedMessage(t), error: true),
+        ),
+      );
     } catch (error) {
       _log(
         LogLevel.warning,
@@ -609,15 +602,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            count == 1
-                ? AppText.pick(
-                    'Couldn\'t copy share link',
-                    'پیوند اشتراک کپی نشد',
-                  )
-                : AppText.pick(
-                    'Couldn\'t copy share links',
-                    'پیوندهای اشتراک کپی نشدند',
-                  ),
+            count == 1 ? t.couldNotCopyShareLink : t.couldNotCopyShareLinks,
             error: true,
           ),
         ),
@@ -641,6 +626,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     bool combined = false,
   }) async {
     if (ids.isEmpty) return;
+    final t = AppL10n.current;
     try {
       await _profilesRepository.exportProfileFiles(ids, combined: combined);
       _log(
@@ -652,14 +638,8 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         state.copyWith(
           message: _nextMessage(
             count == 1 || combined
-                ? AppText.pick(
-                    'Profile file ready to save or share',
-                    'فایل پروفایل برای ذخیره یا اشتراک آماده است',
-                  )
-                : AppText.pick(
-                    '$count profile files ready to save or share',
-                    '$count فایل پروفایل برای ذخیره یا اشتراک آماده است',
-                  ),
+                ? t.profileFileReady
+                : t.profileFilesReadyCount(count),
           ),
         ),
       );
@@ -668,7 +648,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         LogLevel.warning,
         'Export profile files failed count=${ids.length} combined=$combined reason=repository_exception',
       );
-      emit(state.copyWith(message: _nextMessage(error.message, error: true)));
+      emit(
+        state.copyWith(
+          message: _nextMessage(error.localizedMessage(t), error: true),
+        ),
+      );
     } catch (error) {
       _log(
         LogLevel.warning,
@@ -679,14 +663,8 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         state.copyWith(
           message: _nextMessage(
             count == 1 || combined
-                ? AppText.pick(
-                    'Couldn\'t export .tfp file',
-                    'خروجی .tfp ساخته نشد',
-                  )
-                : AppText.pick(
-                    'Couldn\'t export .tfp files',
-                    'فایل‌های خروجی .tfp ساخته نشدند',
-                  ),
+                ? t.couldNotExportTfpFile
+                : t.couldNotExportTfpFiles,
             error: true,
           ),
         ),
@@ -719,7 +697,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         emit(
           state.copyWith(
             message: _nextMessage(
-              AppText.current.favoriteLimitReached(Profile.maxFavorites),
+              AppL10n.current.favoriteLimitReached(Profile.maxFavorites),
             ),
           ),
         );
@@ -760,10 +738,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick(
-              'Couldn\'t update favorite profile',
-              'وضعیت برگزیده پروفایل به‌روز نشد',
-            ),
+            AppL10n.current.couldNotUpdateFavoriteProfile,
             error: true,
           ),
         ),
@@ -808,10 +783,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       emit(
         state.copyWith(
           message: _nextMessage(
-            AppText.pick(
-              'Couldn\'t save profile order',
-              'ترتیب پروفایل‌ها ذخیره نشد',
-            ),
+            AppL10n.current.couldNotSaveProfileOrder,
             error: true,
           ),
         ),

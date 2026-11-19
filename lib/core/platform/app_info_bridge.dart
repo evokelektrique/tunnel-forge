@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'package:tunnel_forge/core/platform/app_info_contract.dart';
@@ -17,5 +18,17 @@ class AppInfoBridge {
       versionName: raw?[AppInfoContract.argVersionName]?.toString(),
       buildNumber: raw?[AppInfoContract.argBuildNumber]?.toString(),
     );
+  }
+
+  Future<void> setAppLocale(String? languageTag) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>(
+        AppInfoContract.setAppLocale,
+        languageTag,
+      );
+    } on MissingPluginException {
+      // The native app-info channel is unavailable in widget tests.
+    }
   }
 }

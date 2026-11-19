@@ -1,0 +1,711 @@
+{
+  "@@locale": "en",
+  "languageNativeName": "English",
+  "@languageNativeName": {
+    "description": "Endonym of this language shown in the language selector."
+  },
+  "systemDefaultLanguage": "System default",
+  "@systemDefaultLanguage": {
+    "description": "Option to follow the device system language."
+  },
+  "systemDefaultLanguageSubtitle": "Follow device language",
+  "systemDefaultLanguageSummary": "System default · {language}",
+  "@systemDefaultLanguageSummary": {
+    "placeholders": {
+      "language": {
+        "type": "String"
+      }
+    }
+  },
+  "searchLanguages": "Search languages",
+  "noLanguagesMatch": "No matching languages.",
+  "appTitle": "TunnelForge",
+  "vpn": "VPN",
+  "logs": "Logs",
+  "settings": "Settings",
+  "cancel": "Cancel",
+  "delete": "Delete",
+  "close": "Close",
+  "save": "Save",
+  "done": "Done",
+  "continueLabel": "Continue",
+  "confirm": "Confirm",
+  "confirmInSeconds": "Confirm in {seconds}s",
+  "@confirmInSeconds": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "dismiss": "Dismiss",
+  "noLabel": "No",
+  "yesLabel": "Yes",
+  "languageLabel": "Language",
+  "chooseLanguage": "Choose your language",
+  "languageSubtitle": "Set the language for every screen before you continue.",
+  "languageBody": "This choice updates the app immediately. You can change it later from Settings.",
+  "notice": "Notice",
+  "onboardingIntroSubtitle": "Legacy L2TP support for modern Android, with setup and connection management in one place.",
+  "onboardingIntroP1": "Create and organize profiles, switch between connections, and keep the essentials close at hand.",
+  "onboardingIntroP2": "Designed for environments that still depend on L2TP, without forcing an outdated setup experience.",
+  "onboardingIntroP3": "A focused way to manage legacy VPN access on current Android devices.",
+  "securityNoticeTitle": "Review security notice",
+  "securityNoticeSubtitle": "L2TP/IPsec is provided for legacy compatibility, is not considered secure by modern standards, and should only be used when stronger protocols are not available.",
+  "securityReadOnlySubtitle": "L2TP should only be used when no stronger option is available.",
+  "securityP1": "This protocol remains available to support older infrastructure, not as a recommended default for new deployments.",
+  "securityP2": "It should be treated as easier to decrypt than modern VPN protocols. If your network supports WireGuard, OpenVPN, or another modern alternative, that should be the preferred choice.",
+  "securityReadOnlyP1": "L2TP/IPsec no longer meets modern security expectations for sensitive traffic.",
+  "securityReadOnlyP2": "Use this option only when compatibility is required and no stronger protocol is available.",
+  "introCheckbox": "Keep VPN profiles organized.",
+  "riskCheckbox": "I understand the L2TP risk.",
+  "compatibilityOnly": "Use only when compatibility requires it",
+  "compatibilityBody": "Proceed only if this connection depends on L2TP/IPsec, you understand that it is not a secure modern protocol, and no stronger option is available for the same service.",
+  "appearance": "Appearance",
+  "system": "System",
+  "light": "Light",
+  "dark": "Dark",
+  "connectionMode": "Connection mode",
+  "localProxy": "Local proxy",
+  "splitTunneling": "Split tunneling",
+  "enableSplitTunneling": "Enable split tunneling",
+  "splitTunnelApply": "Apply the selected app list using {mode} mode.",
+  "@splitTunnelApply": {
+    "placeholders": {
+      "mode": {
+        "type": "String"
+      }
+    }
+  },
+  "splitTunnelRouteAll": "Route all apps through the VPN and keep both app lists saved for later.",
+  "mode": "Mode",
+  "inclusive": "Inclusive",
+  "exclusive": "Exclusive",
+  "inclusiveDescription": "Inclusive routes only the apps you choose through the VPN.",
+  "exclusiveDescription": "Exclusive routes all apps through the VPN except the apps you choose.",
+  "selectAppsUsingVpn": "Select apps using VPN",
+  "selectAppsOutsideVpn": "Select apps outside VPN",
+  "noAppsUseVpn": "No apps selected. Choose at least one app to use the VPN.",
+  "appsWillUseVpn": "{count, plural, =1{{count} app will use the VPN.} other{{count} apps will use the VPN.}}",
+  "@appsWillUseVpn": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "noAppsBypassVpn": "No apps selected. All apps will continue using the VPN.",
+  "appsWillBypassVpn": "{count, plural, =1{{count} app will bypass the VPN.} other{{count} apps will bypass the VPN.}}",
+  "@appsWillBypassVpn": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "httpPort": "HTTP port",
+  "socksPort": "SOCKS5 port",
+  "allowLan": "Allow connections from LAN",
+  "allowLanOn": "Detect a shareable local IPv4 and expose both listeners to devices on the same Wi-Fi or hotspot when available.",
+  "allowLanOff": "Keep both listeners on this device only.",
+  "proxyPortsDifferent": "HTTP and SOCKS5 ports must be different before connecting.",
+  "proxyPortsDifferentShort": "HTTP and SOCKS5 ports must be different",
+  "proxyPortInvalidFormat": "Enter a port number between 1024 and 65535.",
+  "proxyPortPrivileged": "Ports 1–1023 are reserved by Android and require system privileges. Use 1024–65535.",
+  "proxyPortReserved": "Port {port} is reserved on Android ({service}) and cannot be used.",
+  "@proxyPortReserved": {
+    "placeholders": {
+      "port": {
+        "type": "int"
+      },
+      "service": {
+        "type": "String"
+      }
+    }
+  },
+  "proxyPortInUse": "Port {port} is currently in use by another app or service.",
+  "@proxyPortInUse": {
+    "placeholders": {
+      "port": {
+        "type": "int"
+      }
+    }
+  },
+  "proxyPortLimitsNote": "Android restricts ports 1–1023 (system privileged) and reserves critical ports such as 1701 (L2TP), 4500 (IPsec), 5037 (ADB), 5353 (mDNS), and 5554–5555 (Emulator/ADB). Allowed range: 1024–65535.",
+  "proxyPortsInvalidRange": "Local proxy ports must be 1024–65535 and not reserved on Android.",
+  "proxyEndpoints": "Proxy endpoints",
+  "lanClientsCanUse": "LAN clients on the same Wi-Fi or hotspot can use this address.",
+  "lanSharingEnabled": "LAN sharing is enabled for this session.",
+  "connectToDetectLan": "Connect to detect the current LAN IP for other devices.",
+  "lanDisabled": "LAN access is disabled.",
+  "connectivityCheck": "Connectivity check",
+  "batteryOptimization": "Battery optimization",
+  "batteryOptimizationAllowed": "Allowed for background use.",
+  "batteryOptimizationRestricted": "Restricted in the background.",
+  "batteryOptimizationUnsupported": "Not required on this device.",
+  "batteryOptimizationUnknown": "Status unavailable.",
+  "allowBackgroundVpn": "Allow",
+  "batteryOptimizationDisabled": "Battery optimization disabled for TunnelForge.",
+  "batteryOptimizationUnsupportedDevice": "Battery optimization settings are not available on this device.",
+  "batteryOptimizationAlreadyDisabled": "Battery optimization is already disabled for TunnelForge.",
+  "batteryOptimizationRequestOpened": "Battery optimization request opened.",
+  "batterySettingsOpened": "Battery settings opened.",
+  "batterySettingsOpenFailed": "Could not open battery settings.",
+  "statusCheckUrl": "Status check URL",
+  "statusCheckHelp": "Used for the status check after you connect. Tap the badge anytime to refresh.",
+  "connectivityUrl": "Connectivity URL",
+  "connectivityTimeout": "Connectivity timeout (ms)",
+  "timeoutHelp": "Maximum time to wait before marking the check unreachable.",
+  "connectivityUrlInvalid": "Enter a valid absolute HTTP or HTTPS URL",
+  "connectivityUrlUnsupportedScheme": "Only HTTP and HTTPS URLs are supported",
+  "connectivityTimeoutWholeNumber": "Enter a whole number of milliseconds",
+  "connectivityTimeoutPositive": "Enter a timeout greater than 0 ms",
+  "l2tpSecurityNotice": "L2TP security notice",
+  "reviewL2tpNotice": "Review the L2TP/IPsec compatibility notice.",
+  "updates": "Updates",
+  "refresh": "Refresh",
+  "openReleasePage": "Open release page",
+  "versionUnavailable": "Version unavailable",
+  "version": "Version {value}",
+  "@version": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "about": "About",
+  "aboutText": "TunnelForge keeps L2TP/IPsec usable on modern Android, with profile management, local proxy access, per-app routing, and clear connection logs in one place.",
+  "telegramTitle": "Telegram",
+  "githubTitle": "GitHub",
+  "checkingUpdates": "Checking for updates",
+  "updateAvailable": "Update available",
+  "buildNewer": "Installed build is newer",
+  "updateCheckUnavailable": "Update check unavailable",
+  "appUpToDate": "App is up to date",
+  "checkForUpdates": "Check for updates",
+  "lookingUpRelease": "Looking up the latest published GitHub release.",
+  "updateCheckConsentTitle": "Check GitHub releases?",
+  "updateCheckConsentMessage": "TunnelForge will contact GitHub Releases to compare your installed version with the latest published build. This is used only when you request an update check.",
+  "updateCheckConsentAllow": "Check releases",
+  "latestReleaseRunning": "Latest release: {latest}. You are running {installed}.",
+  "@latestReleaseRunning": {
+    "placeholders": {
+      "latest": {
+        "type": "String"
+      },
+      "installed": {
+        "type": "String"
+      }
+    }
+  },
+  "latestPublished": "You are running the latest published release: {latest}.",
+  "@latestPublished": {
+    "placeholders": {
+      "latest": {
+        "type": "String"
+      }
+    }
+  },
+  "buildNewerThanLatest": "This build is newer than the latest GitHub release ({latest}).",
+  "@buildNewerThanLatest": {
+    "placeholders": {
+      "latest": {
+        "type": "String"
+      }
+    }
+  },
+  "latestCannotCompare": "Latest release: {latest}. {reason}",
+  "@latestCannotCompare": {
+    "placeholders": {
+      "latest": {
+        "type": "String"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "unknownBuild": "an unknown build",
+  "couldNotCheckUpdates": "Couldn't check for updates right now.",
+  "checkGithubReleases": "Check GitHub releases to see whether a newer build is available.",
+  "installedVersionUnavailableCompare": "Installed version unavailable, so this build cannot be compared.",
+  "updateErrorHttp": "GitHub Releases returned HTTP {statusCode}.",
+  "@updateErrorHttp": {
+    "placeholders": {
+      "statusCode": {
+        "type": "int"
+      }
+    }
+  },
+  "updateErrorNetwork": "Network error while contacting GitHub Releases.",
+  "updateErrorTimeout": "GitHub Releases request timed out.",
+  "updateErrorTls": "Secure connection to GitHub Releases failed.",
+  "updateErrorMalformed": "GitHub Releases returned malformed data.",
+  "updateErrorNoReleases": "GitHub Releases returned no usable releases.",
+  "updateErrorUnexpected": "Unexpected error while checking GitHub Releases.",
+  "activeProfile": "Active profile",
+  "noSavedProfile": "No saved profile",
+  "quickConnect": "Quick connect",
+  "createFirstProfile": "Create your first profile",
+  "selectSavedProfile": "Select a saved profile",
+  "selectProfile": "Select profile",
+  "ready": "Ready",
+  "connected": "Connected",
+  "proxyReady": "Proxy ready",
+  "working": "Working...",
+  "connectingTapCancel": "Connecting... tap to cancel",
+  "waitingForNetwork": "Waiting for network",
+  "waitingForNetworkBlocking": "Waiting for network · blocking internet",
+  "reconnectingTapCancel": "Reconnecting... tap to cancel",
+  "disconnecting": "Disconnecting...",
+  "canceling": "Canceling...",
+  "tapToCheck": "Tap to check",
+  "checking": "Checking...",
+  "unreachable": "Unreachable",
+  "logLevel": "Log level",
+  "wordWrapOff": "Turn off word wrap (wide lines scroll sideways)",
+  "wordWrapOn": "Turn on word wrap",
+  "shareDebugLogs": "Share debug logs",
+  "clear": "Clear",
+  "noLogsMatch": "No logs match this level",
+  "noActivityYet": "No activity yet",
+  "differentLogLevel": "Try a different log level to see more entries.",
+  "logsWillAppear": "Connection events and diagnostics will appear here.",
+  "latest": "Latest",
+  "profiles": "Profiles",
+  "selectedCount": "{count} selected",
+  "@selectedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "addProfile": "Add profile",
+  "createNewProfile": "Create new profile",
+  "importFromFile": "Import from file",
+  "importFromClipboard": "Import from clipboard",
+  "noProfilesYet": "No profiles yet. Tap + to create or import your first profile.",
+  "profileActions": "Profile actions",
+  "addToFavorites": "Add to favorites",
+  "removeFromFavorites": "Remove from favorites",
+  "favoriteLimitReached": "You can favorite up to {max} profiles",
+  "@favoriteLimitReached": {
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "copyShareLink": "Copy share link",
+  "copyShareLinks": "Copy share links",
+  "exportTfp": "Export .tfp",
+  "chooseExportFormat": "Choose how to export the selected profiles.",
+  "combinedTfpFile": "Combined file ({fileName})",
+  "@combinedTfpFile": {
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  },
+  "separateTfpFiles": "Separate .tfp files ({count})",
+  "@separateTfpFiles": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "editProfile": "Edit profile",
+  "deleteProfile": "Delete profile",
+  "deleteProfileQuestion": "Delete profile?",
+  "deleteProfileBody": "This will remove the server and saved credentials from this device.",
+  "deleteProfilesQuestion": "{count, plural, =1{Delete profile?} other{Delete {count} profiles?}}",
+  "@deleteProfilesQuestion": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "deleteProfilesBody": "{count, plural, =1{This will remove the server and saved credentials from this device.} other{This will remove {count} servers and their saved credentials from this device.}}",
+  "@deleteProfilesBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileSaved": "Profile saved",
+  "profileRefreshTimedOut": "Profile list refresh timed out",
+  "profileImportTimedOut": "Profile import timed out",
+  "couldNotReadSelectedFile": "Couldn't read the selected file",
+  "couldNotImportTfp": "Couldn't import .tfp file",
+  "clipboardEmpty": "Clipboard is empty",
+  "clipboardInvalidProfile": "Clipboard does not contain a valid TunnelForge profile",
+  "couldNotImportClipboard": "Couldn't import a profile from the clipboard",
+  "profileDetails": "Profile details",
+  "name": "Name",
+  "nameHint": "e.g. Office VPN",
+  "server": "Server",
+  "serverHint": "Hostname or IP address",
+  "username": "Username",
+  "password": "Password",
+  "showPassword": "Show password",
+  "hidePassword": "Hide password",
+  "ipsecPsk": "IPsec PSK",
+  "showIpsecPsk": "Show IPsec PSK",
+  "hideIpsecPsk": "Hide IPsec PSK",
+  "ipsecPskHint": "Optional",
+  "automatic": "Automatic",
+  "automaticDnsHelp": "Receive DNS configuration automatically from the VPN server during PPP negotiation.",
+  "dnsServers": "DNS servers",
+  "dnsHelp": "DNS 1 is primary. DNS 2 is fallback.",
+  "mtuHelper": "Range {min}-{max}. Use {defaultValue} unless you need a smaller MTU.",
+  "@mtuHelper": {
+    "placeholders": {
+      "min": {
+        "type": "int"
+      },
+      "max": {
+        "type": "int"
+      },
+      "defaultValue": {
+        "type": "int"
+      }
+    }
+  },
+  "mtuRequired": "Enter an MTU value",
+  "mtuWholeNumber": "MTU must be a whole number",
+  "mtuOutOfRange": "MTU must be between {min} and {max}",
+  "@mtuOutOfRange": {
+    "placeholders": {
+      "min": {
+        "type": "int"
+      },
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "newProfileDefaultName": "New profile",
+  "profileNoLongerExists": "This profile no longer exists.",
+  "enterServerAddress": "Enter a server address",
+  "enterDnsOrEnableAutomatic": "Enter at least one DNS server or enable Automatic",
+  "couldNotSaveChanges": "Could not save changes",
+  "resetSecureStorageTitle": "Reset secure storage?",
+  "resetSecureStorageBody": "Android could not save credentials. Resetting secure storage deletes the saved passwords and PSKs for all profiles. Profiles themselves are kept.",
+  "resetAndSave": "Reset and save",
+  "dnsRequirementHostnameOrIpv4": "hostname or IPv4",
+  "dnsRequirementHostname": "hostname",
+  "dnsRequirementHostnameOrHttpsUrl": "hostname or HTTPS URL",
+  "dnsValidationError": "{label}: use {requirement}",
+  "@dnsValidationError": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "requirement": {
+        "type": "String"
+      }
+    }
+  },
+  "selectAll": "Select all",
+  "clearAll": "Clear all",
+  "searchApps": "Search by name or package",
+  "noLaunchableApps": "No launchable apps found. If this is wrong, check that the app can query other packages on your Android version.",
+  "noMatches": "No matches.",
+  "appsUsingVpn": "Apps using VPN",
+  "appsOutsideVpn": "Apps outside VPN",
+  "onlySelectedAppsVpn": "Only the selected apps will use the VPN.",
+  "selectedAppsBypass": "Selected apps will bypass the VPN and use the normal network.",
+  "errorDetailsCopied": "Error details copied",
+  "couldNotCopyErrorDetails": "Could not copy error details",
+  "preparingLogs": "Preparing logs...",
+  "couldNotExportLogs": "Could not export logs",
+  "errorDetails": "Error details",
+  "copyErrorDetails": "Copy error details",
+  "exportLogs": "Export logs",
+  "releasePageUrlInvalid": "Release page URL is invalid.",
+  "couldNotOpenReleasePage": "Could not open the release page.",
+  "telegramLinkInvalid": "Telegram link is invalid.",
+  "couldNotOpenTelegram": "Could not open Telegram.",
+  "githubLinkInvalid": "GitHub link is invalid.",
+  "couldNotOpenGithub": "Could not open GitHub.",
+  "createProfileBeforeConnecting": "Create a profile first. You will need a server, username, and tunnel settings before connecting.",
+  "selectProfileBeforeConnecting": "Choose one of your saved profiles before connecting.",
+  "savedSecretsUnreadableForProfile": "Saved password/PSK for \"{profileName}\" could not be read. Re-enter them.",
+  "@savedSecretsUnreadableForProfile": {
+    "placeholders": {
+      "profileName": {
+        "type": "String"
+      }
+    }
+  },
+  "includeNativeCrashDumpTitle": "Include native crash dump?",
+  "includeNativeCrashDumpBody": "Include native crash dump? It may contain memory contents from the crashed process.",
+  "noDebugLogsToShare": "No debug logs to share",
+  "shareDebugLogsTitle": "Share TunnelForge debug logs",
+  "preparedDebugLogArchive": "Prepared debug log archive for sharing",
+  "couldNotShareDebugLogs": "Could not share debug logs",
+  "logsCleared": "Logs cleared",
+  "enterServerHostname": "Enter a server hostname or address",
+  "selectSavedProfileForProxy": "Select a saved profile to start local proxy",
+  "selectAppsForInclusiveSplitTunnel": "Open \"Select apps\" and choose at least one app for inclusive split tunneling.",
+  "vpnPermissionRequired": "VPN permission is required",
+  "startingProxy": "Starting proxy...",
+  "connecting": "Connecting...",
+  "vpnConnected": "VPN connected",
+  "couldNotEstablishTunnel": "Couldn't establish the tunnel",
+  "couldNotOpenIncomingProfile": "Couldn't open the incoming profile",
+  "importSourceClipboardLink": "a clipboard share link",
+  "importSourceClipboard": "the clipboard",
+  "importSourceShareLink": "a share link",
+  "importSourceTfpFile": "a .tfp file",
+  "importedProfileNamedFromSource": "Imported profile \"{name}\" from {source}",
+  "@importedProfileNamedFromSource": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "importedProfilesCountFromSource": "Imported {count} profiles from {source}",
+  "@importedProfilesCountFromSource": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "couldNotImportProfile": "Couldn't import profile",
+  "importedProfileNamedFromClipboard": "Imported profile \"{name}\" from the clipboard",
+  "@importedProfileNamedFromClipboard": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "importedProfilesCountFromClipboard": "Imported {count} profiles from the clipboard",
+  "@importedProfilesCountFromClipboard": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "couldNotImportProfiles": "Couldn't import profiles",
+  "profileRemoved": "Profile removed",
+  "profilesRemovedCount": "{count} profiles removed",
+  "@profilesRemovedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "couldNotDeleteProfile": "Couldn't delete profile",
+  "couldNotDeleteProfiles": "Couldn't delete profiles",
+  "shareLinkCopied": "Share link copied",
+  "shareLinksCopiedCount": "{count} share links copied",
+  "@shareLinksCopiedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "couldNotCopyShareLink": "Couldn't copy share link",
+  "couldNotCopyShareLinks": "Couldn't copy share links",
+  "profileFileReady": "Profile file ready to save or share",
+  "profileFilesReadyCount": "{count} profile files ready to save or share",
+  "@profileFilesReadyCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "couldNotExportTfpFile": "Couldn't export .tfp file",
+  "couldNotExportTfpFiles": "Couldn't export .tfp files",
+  "couldNotUpdateFavoriteProfile": "Couldn't update favorite profile",
+  "couldNotSaveProfileOrder": "Couldn't save profile order",
+  "exportProfileShareTitle": "{count, plural, =1{Export TunnelForge profile} other{Export TunnelForge profiles}}",
+  "@exportProfileShareTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileRepoMissingSingle": "This profile no longer exists.",
+  "profileRepoMissingMultiple": "One or more selected profiles no longer exist.",
+  "profileRepoSecretsMissingSingle": "Saved password/PSK could not be read. Re-enter them before sharing.",
+  "profileRepoSecretsMissingMultiple": "Saved password/PSK could not be read for: {names}. Re-enter them before sharing.",
+  "@profileRepoSecretsMissingMultiple": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTransferMultipleProfiles": "Transfer contains multiple profiles",
+  "profileTransferEmpty": "Incoming profile transfer is empty",
+  "profileTransferUnsupported": "Unsupported transfer",
+  "profileTransferNotJsonObject": "Profile file must contain a JSON object",
+  "profileTransferUnsupportedVersion": "Unsupported profile transfer version: {version}",
+  "@profileTransferUnsupportedVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTransferBundleEmpty": "Profile bundle contains no profiles",
+  "profileTransferEntryNotJsonObject": "Profile entry must be a JSON object",
+  "profileTransferInvalidShareLink": "Invalid TunnelForge share link",
+  "profileTransferMissingPayload": "Share link payload is missing",
+  "profileTransferServerRequired": "Profile transfer server is required",
+  "profileTransferManualDnsRequired": "Manual DNS requires at least one DNS server",
+  "profileTransferInvalidIntField": "Invalid integer field: {field}",
+  "@profileTransferInvalidIntField": {
+    "placeholders": {
+      "field": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTransferMissingField": "Missing required field: {field}",
+  "@profileTransferMissingField": {
+    "placeholders": {
+      "field": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTransferInvalidFile": "Profile file could not be read as a valid TunnelForge profile",
+  "tunnelFailureAuthTitle": "Authentication failed",
+  "tunnelFailureAuthExplanation": "The server didn't accept your login. Check your username and password. If they're correct, ask the administrator to check your account permissions.",
+  "tunnelFailureMschap646Title": "Restricted logon hours",
+  "tunnelFailureMschap646Explanation": "Your account can only connect at certain times. Ask the administrator to check your allowed sign-in hours.",
+  "tunnelFailureMschap647Title": "Account disabled",
+  "tunnelFailureMschap647Explanation": "Your account is disabled. Ask the administrator to enable it.",
+  "tunnelFailureMschap648Title": "Password expired",
+  "tunnelFailureMschap648Explanation": "Your password has expired. Change it using the method your VPN provider supports.",
+  "tunnelFailureMschap649Title": "Account not permitted",
+  "tunnelFailureMschap649Explanation": "Your account isn't allowed to connect. Ask the administrator to check your remote access permissions.",
+  "tunnelFailureMschap709Title": "Password change failed",
+  "tunnelFailureMschap709Explanation": "The server couldn't change your password. Try changing it through your account provider, or contact the administrator.",
+  "tunnelFailureMschapUnknownTitle": "Unknown authentication error",
+  "tunnelFailureMschapUnknownExplanation": "The server returned an authentication error the app doesn't recognize. Check the server logs or contact the administrator.",
+  "tunnelFailureChapUnknownTitle": "Unknown CHAP error",
+  "tunnelFailurePapUnknownTitle": "Unknown PAP error",
+  "tunnelFailureStopCcn1Title": "Server closed the control connection",
+  "tunnelFailureStopCcn2Title": "General error",
+  "tunnelFailureStopCcn3Title": "Control connection already exists",
+  "tunnelFailureStopCcn4Title": "Control connection not authorized",
+  "tunnelFailureStopCcn5Title": "Unsupported protocol version",
+  "tunnelFailureStopCcn6Title": "Server shutting down",
+  "tunnelFailureStopCcn7Title": "Protocol state error",
+  "tunnelFailureStopCcn8Title": "Mismatching CCDS value",
+  "tunnelFailureStopCcnUnknownTitle": "Unknown control connection result",
+  "tunnelFailureCdn1Title": "Carrier lost",
+  "tunnelFailureCdn2Title": "Session error",
+  "tunnelFailureCdn3Title": "Session administratively disconnected",
+  "tunnelFailureCdn4Title": "Server resources temporarily unavailable",
+  "tunnelFailureCdn5Title": "Required server facilities unavailable",
+  "tunnelFailureCdn6Title": "Invalid destination",
+  "tunnelFailureCdn7Title": "No carrier detected",
+  "tunnelFailureCdn8Title": "Destination busy",
+  "tunnelFailureCdn9Title": "No dial tone",
+  "tunnelFailureCdn10Title": "Session establishment timed out",
+  "tunnelFailureCdn11Title": "No appropriate framing detected",
+  "tunnelFailureCdn12Title": "Mismatching SDS value",
+  "tunnelFailureCdnUnknownTitle": "Unknown session result",
+  "tunnelFailureGeneral1": "No control connection exists",
+  "tunnelFailureGeneral2": "Invalid message length",
+  "tunnelFailureGeneral3": "Invalid field value",
+  "tunnelFailureGeneral4": "Insufficient server resources",
+  "tunnelFailureGeneral5": "Invalid session ID",
+  "tunnelFailureGeneral6": "Vendor-specific error",
+  "tunnelFailureGeneral7": "Try another server",
+  "tunnelFailureGeneral8": "Unsupported mandatory attribute",
+  "tunnelFailureGeneral9": "Try another directed server",
+  "tunnelFailureGeneral10": "Next hop unreachable",
+  "tunnelFailureGeneral11": "Next hop busy",
+  "tunnelFailureGeneral12": "Tunnel switching aggregator busy",
+  "tunnelFailureGeneralUnknown": "Unknown general error",
+  "tunnelFailureWithGeneralError": "{base}: {detail}",
+  "@tunnelFailureWithGeneralError": {
+    "placeholders": {
+      "base": {
+        "type": "String"
+      },
+      "detail": {
+        "type": "String"
+      }
+    }
+  },
+  "tunnelFailureL2tpControlExplanation": "The L2TP server closed the control connection. {advice}",
+  "@tunnelFailureL2tpControlExplanation": {
+    "placeholders": {
+      "advice": {
+        "type": "String"
+      }
+    }
+  },
+  "tunnelFailureL2tpSessionExplanation": "The L2TP server closed the session. {advice}",
+  "@tunnelFailureL2tpSessionExplanation": {
+    "placeholders": {
+      "advice": {
+        "type": "String"
+      }
+    }
+  },
+  "tunnelFailureL2tpAdviceRetryLater": "Wait a moment, then try again.",
+  "tunnelFailureL2tpAdviceCheckServer": "Check the server logs, access rules and supported protocol settings.",
+  "tunnelFailureEngine1Title": "IPsec negotiation failed",
+  "tunnelFailureEngine1Explanation": "Check the server address, shared secret (PSK) and IPsec settings. Make sure the server is reachable on UDP ports 500 and 4500. A timeout doesn't necessarily mean the shared secret is wrong.",
+  "tunnelFailureEngine2Title": "L2TP handshake failed",
+  "tunnelFailureEngine2Explanation": "The connection couldn't complete L2TP setup after IPsec. Check the server's L2TP settings and logs.",
+  "tunnelFailureEngine3Title": "PPP negotiation failed",
+  "tunnelFailureEngine3Explanation": "The connection couldn't finish PPP setup. Check the server logs for problems with login methods, account settings or IP address assignment.",
+  "tunnelFailureEngine4Title": "Tunnel I/O error",
+  "tunnelFailureEngine4Explanation": "The tunnel couldn't keep sending or receiving data. Check your network connection and try connecting again.",
+  "tunnelFailureEngine10Title": "Invalid tunnel settings",
+  "tunnelFailureEngine10Explanation": "Check the server address and tunnel settings in your profile, then try connecting again.",
+  "tunnelFailureEngine11Title": "Proxy transport unavailable",
+  "tunnelFailureEngine11Explanation": "This version of the app doesn't support the requested proxy transport. Use VPN mode or a version that supports it.",
+  "tunnelFailureEngine13Title": "Connection lost",
+  "tunnelFailureEngine13Explanation": "The underlying network connection was lost.",
+  "tunnelFailureEngine14Title": "Server unreachable",
+  "tunnelFailureEngine14Explanation": "The VPN server stopped responding to keepalive probes.",
+  "tunnelFailureEngine15Title": "Disconnected by server",
+  "tunnelFailureEngine15Explanation": "The VPN server closed the connection.",
+  "tunnelFailureEngineUnknownTitle": "Unknown tunnel engine error",
+  "tunnelFailureEngineUnknownExplanation": "The tunnel stopped with an error the app doesn't recognize. Export the logs to help find the cause.",
+  "tunnelFailureAndroid1Title": "VPN revoked",
+  "tunnelFailureAndroid1Explanation": "Android stopped the VPN because another VPN started, system VPN was turned off, or Always-on VPN revoked access.",
+  "tunnelFailureAndroid2Title": "Stopped by Android system",
+  "tunnelFailureAndroid2Explanation": "Android terminated the background tunnel service. Allow unrestricted battery usage for TunnelForge if this happens while idle.",
+  "tunnelFailureAndroid3Title": "App removed from recents",
+  "tunnelFailureAndroid3Explanation": "The tunnel service stopped after the app was dismissed from recent apps.",
+  "tunnelFailureAndroid4Title": "VPN permission revoked",
+  "tunnelFailureAndroid4Explanation": "VPN permission is no longer granted. Grant VPN permission again to reconnect.",
+  "tunnelFailureAndroid5Title": "Local proxy startup failed",
+  "tunnelFailureAndroid5Explanation": "The local HTTP/SOCKS proxy listeners could not start after tunnel negotiation.",
+  "tunnelFailureAndroid6Title": "Tunnel disconnected unexpectedly",
+  "tunnelFailureAndroid6Explanation": "The tunnel closed without a user disconnect request. Export the logs if this keeps happening.",
+  "tunnelFailureAndroidUnknownTitle": "Android platform error",
+  "tunnelFailureGenericTitle": "Connection error",
+  "tunnelFailureGenericExplanation": "Check the error details for more information. If it keeps happening, export the logs to help find the cause."
+}

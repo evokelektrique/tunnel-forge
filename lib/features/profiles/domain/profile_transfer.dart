@@ -5,6 +5,77 @@ import 'package:archive/archive.dart';
 
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_contract.dart';
+import 'package:tunnel_forge/l10n/app_localizations.dart';
+
+enum ProfileTransferErrorCode {
+  multipleProfiles,
+  emptyTransfer,
+  unsupportedTransfer,
+  notJsonObject,
+  unsupportedVersion,
+  bundleEmpty,
+  entryNotJsonObject,
+  invalidShareLink,
+  missingSharePayload,
+  serverRequired,
+  invalidDns,
+  manualDnsRequired,
+  invalidIntField,
+  missingField,
+}
+
+class ProfileTransferFormatException extends FormatException {
+  const ProfileTransferFormatException(
+    super.message, {
+    required this.code,
+    this.field,
+    this.version,
+    this.dnsHost,
+    this.dnsProtocol,
+  });
+
+  final ProfileTransferErrorCode code;
+  final String? field;
+  final String? version;
+  final String? dnsHost;
+  final DnsProtocol? dnsProtocol;
+
+  String localizedMessage(AppLocalizations t) {
+    return switch (code) {
+      ProfileTransferErrorCode.multipleProfiles =>
+        t.profileTransferMultipleProfiles,
+      ProfileTransferErrorCode.emptyTransfer => t.profileTransferEmpty,
+      ProfileTransferErrorCode.unsupportedTransfer =>
+        t.profileTransferUnsupported,
+      ProfileTransferErrorCode.notJsonObject => t.profileTransferNotJsonObject,
+      ProfileTransferErrorCode.unsupportedVersion =>
+        t.profileTransferUnsupportedVersion(version ?? ''),
+      ProfileTransferErrorCode.bundleEmpty => t.profileTransferBundleEmpty,
+      ProfileTransferErrorCode.entryNotJsonObject =>
+        t.profileTransferEntryNotJsonObject,
+      ProfileTransferErrorCode.invalidShareLink =>
+        t.profileTransferInvalidShareLink,
+      ProfileTransferErrorCode.missingSharePayload =>
+        t.profileTransferMissingPayload,
+      ProfileTransferErrorCode.serverRequired =>
+        t.profileTransferServerRequired,
+      ProfileTransferErrorCode.invalidDns =>
+        Profile.validationMessageForDnsServer(
+          field ?? 'DNS',
+          dnsHost ?? '',
+          dnsProtocol ?? DnsProtocol.dnsOverUdp,
+          l10n: t,
+        ),
+      ProfileTransferErrorCode.manualDnsRequired =>
+        t.profileTransferManualDnsRequired,
+      ProfileTransferErrorCode.invalidIntField =>
+        t.profileTransferInvalidIntField(field ?? ''),
+      ProfileTransferErrorCode.missingField => t.profileTransferMissingField(
+        field ?? '',
+      ),
+    };
+  }
+}
 
 class ProfileTransferEnvelope {
   const ProfileTransferEnvelope({
@@ -112,7 +183,10 @@ class ProfileTransferEnvelope {
   ) {
     final list = fromIncomingTransferList(transfer);
     if (list.length != 1) {
-      throw const FormatException('Transfer contains multiple profiles');
+      throw const ProfileTransferFormatException(
+        'Transfer contains multiple profiles',
+        code: ProfileTransferErrorCode.multipleProfiles,
+      );
     }
     return list.single;
   }
@@ -122,19 +196,28 @@ class ProfileTransferEnvelope {
   ) {
     final data = transfer.data;
     if (data == null || data.isEmpty) {
-      throw const FormatException('Incoming profile transfer is empty');
+      throw const ProfileTransferFormatException(
+        'Incoming profile transfer is empty',
+        code: ProfileTransferErrorCode.emptyTransfer,
+      );
     }
     return switch (transfer.type) {
       ProfileTransferContract.typeTfpJson => fromFileJsonList(data),
       ProfileTransferContract.typeTfUri => [fromTfUri(data)],
-      _ => throw FormatException(transfer.message ?? 'Unsupported transfer'),
+      _ => throw ProfileTransferFormatException(
+        transfer.message ?? 'Unsupported transfer',
+        code: ProfileTransferErrorCode.unsupportedTransfer,
+      ),
     };
   }
 
   static ProfileTransferEnvelope fromFileJson(String text) {
     final list = fromFileJsonList(text);
     if (list.length != 1) {
-      throw const FormatException('Profile file contains multiple profiles');
+      throw const ProfileTransferFormatException(
+        'Profile file contains multiple profiles',
+        code: ProfileTransferErrorCode.multipleProfiles,
+      );
     }
     return list.single;
   }
@@ -142,24 +225,37 @@ class ProfileTransferEnvelope {
   static List<ProfileTransferEnvelope> fromFileJsonList(String text) {
     final decoded = jsonDecode(text);
     if (decoded is! Map) {
-      throw const FormatException('Profile file must contain a JSON object');
+      throw const ProfileTransferFormatException(
+        'Profile file must contain a JSON object',
+        code: ProfileTransferErrorCode.notJsonObject,
+      );
     }
     final map = Map<String, Object?>.from(decoded);
     if (map.containsKey('profiles')) {
       final version = map['v'];
       if (version is! int || version != currentVersion) {
-        throw FormatException('Unsupported profile transfer version: $version');
+        throw ProfileTransferFormatException(
+          'Unsupported profile transfer version: $version',
+          code: ProfileTransferErrorCode.unsupportedVersion,
+          version: '$version',
+        );
       }
       final rawProfiles = map['profiles'];
       if (rawProfiles is! List || rawProfiles.isEmpty) {
-        throw const FormatException('Profile bundle contains no profiles');
+        throw const ProfileTransferFormatException(
+          'Profile bundle contains no profiles',
+          code: ProfileTransferErrorCode.bundleEmpty,
+        );
       }
       return [
         for (final entry in rawProfiles)
           if (entry is Map)
             fromJsonMap(Map<String, Object?>.from(entry))
           else
-            throw const FormatException('Profile entry must be a JSON object'),
+            throw const ProfileTransferFormatException(
+              'Profile entry must be a JSON object',
+              code: ProfileTransferErrorCode.entryNotJsonObject,
+            ),
       ];
     }
     return [fromJsonMap(map)];
@@ -168,10 +264,16 @@ class ProfileTransferEnvelope {
   static ProfileTransferEnvelope fromTfUri(String text) {
     final uri = Uri.tryParse(text.trim());
     if (uri == null || uri.scheme != uriScheme || uri.host != uriHost) {
-      throw const FormatException('Invalid TunnelForge share link');
+      throw const ProfileTransferFormatException(
+        'Invalid TunnelForge share link',
+        code: ProfileTransferErrorCode.invalidShareLink,
+      );
     }
     if (uri.pathSegments.isEmpty) {
-      throw const FormatException('Share link payload is missing');
+      throw const ProfileTransferFormatException(
+        'Share link payload is missing',
+        code: ProfileTransferErrorCode.missingSharePayload,
+      );
     }
     final payload = uri.pathSegments.join('');
     final normalized = base64Url.normalize(payload);
@@ -183,7 +285,11 @@ class ProfileTransferEnvelope {
   static ProfileTransferEnvelope fromJsonMap(Map<String, Object?> map) {
     final version = map['v'];
     if (version is! int || version != currentVersion) {
-      throw FormatException('Unsupported profile transfer version: $version');
+      throw ProfileTransferFormatException(
+        'Unsupported profile transfer version: $version',
+        code: ProfileTransferErrorCode.unsupportedVersion,
+        version: '$version',
+      );
     }
     final displayName = _requireString(map, 'displayName');
     final server = _requireString(map, 'server');
@@ -201,18 +307,37 @@ class ProfileTransferEnvelope {
     );
     final mtu = _requireInt(map, 'mtu');
     if (server.trim().isEmpty) {
-      throw const FormatException('Profile transfer server is required');
+      throw const ProfileTransferFormatException(
+        'Profile transfer server is required',
+        code: ProfileTransferErrorCode.serverRequired,
+      );
     }
     final invalidDns1 = Profile.invalidDnsServer(dns1Host, dns1Protocol);
     if (invalidDns1 != null) {
-      throw FormatException(
-        Profile.validationMessageForDnsServer('DNS 1', dns1Host, dns1Protocol),
+      throw ProfileTransferFormatException(
+        Profile.englishValidationMessageForDnsServer(
+          'DNS 1',
+          dns1Host,
+          dns1Protocol,
+        ),
+        code: ProfileTransferErrorCode.invalidDns,
+        field: 'DNS 1',
+        dnsHost: dns1Host,
+        dnsProtocol: dns1Protocol,
       );
     }
     final invalidDns2 = Profile.invalidDnsServer(dns2Host, dns2Protocol);
     if (invalidDns2 != null) {
-      throw FormatException(
-        Profile.validationMessageForDnsServer('DNS 2', dns2Host, dns2Protocol),
+      throw ProfileTransferFormatException(
+        Profile.englishValidationMessageForDnsServer(
+          'DNS 2',
+          dns2Host,
+          dns2Protocol,
+        ),
+        code: ProfileTransferErrorCode.invalidDns,
+        field: 'DNS 2',
+        dnsHost: dns2Host,
+        dnsProtocol: dns2Protocol,
       );
     }
     if (!dnsAutomatic &&
@@ -222,8 +347,9 @@ class ProfileTransferEnvelope {
           dns2Host: dns2Host,
           dns2Protocol: dns2Protocol,
         ).isEmpty) {
-      throw const FormatException(
+      throw const ProfileTransferFormatException(
         'Manual DNS requires at least one DNS server',
+        code: ProfileTransferErrorCode.manualDnsRequired,
       );
     }
     return ProfileTransferEnvelope(
@@ -290,15 +416,27 @@ class ProfileTransferEnvelope {
       num v => v.toInt(),
       String v =>
         int.tryParse(v.trim()) ??
-            (throw FormatException('Invalid integer field: $key')),
-      _ => throw FormatException('Missing integer field: $key'),
+            (throw ProfileTransferFormatException(
+              'Invalid integer field: $key',
+              code: ProfileTransferErrorCode.invalidIntField,
+              field: key,
+            )),
+      _ => throw ProfileTransferFormatException(
+        'Missing integer field: $key',
+        code: ProfileTransferErrorCode.missingField,
+        field: key,
+      ),
     };
   }
 
   static bool _requireBool(Map<String, Object?> map, String key) {
     final value = map[key];
     if (value is! bool) {
-      throw FormatException('Missing bool field: $key');
+      throw ProfileTransferFormatException(
+        'Missing bool field: $key',
+        code: ProfileTransferErrorCode.missingField,
+        field: key,
+      );
     }
     return value;
   }
@@ -306,7 +444,11 @@ class ProfileTransferEnvelope {
   static String _requireString(Map<String, Object?> map, String key) {
     final value = map[key];
     if (value is! String) {
-      throw FormatException('Missing string field: $key');
+      throw ProfileTransferFormatException(
+        'Missing string field: $key',
+        code: ProfileTransferErrorCode.missingField,
+        field: key,
+      );
     }
     return value;
   }

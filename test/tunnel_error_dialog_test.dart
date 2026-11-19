@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tunnel_forge/features/home/presentation/widgets/tunnel_error_dialog.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_failure.dart';
+import 'package:tunnel_forge/l10n/app_localizations.dart';
 
 void main() {
   testWidgets('copies error details, exports immediately, and closes', (
@@ -115,5 +116,68 @@ void main() {
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
     expect(find.byType(TunnelErrorDialog), findsNothing);
+  });
+
+  testWidgets('renders localized Persian UI while copying English details', (
+    tester,
+  ) async {
+    const failure = TunnelFailure(
+      namespace: 'mschap',
+      code: '691',
+      detail: 'PPP failed',
+    );
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    final persianL10n = lookupAppLocalizations(const Locale('fa'));
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('fa'),
+        supportedLocales: AppLocalizations.supportedLocales,
+        localizationsDelegates: AppL10n.localizationsDelegates,
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (_) => TunnelErrorDialog(
+                failure: failure,
+                onExportLogs: () async {},
+              ),
+            ),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text(failure.localizedLabel(persianL10n)), findsOneWidget);
+    expect(
+      find.text(failure.localizedExplanation(persianL10n)),
+      findsOneWidget,
+    );
+    expect(find.text(failure.label), findsNothing);
+
+    await tester.tap(find.byTooltip(persianL10n.copyErrorDetails));
+    await tester.pumpAndSettle();
+
+    expect(copied, failure.copyText);
+    expect(copied, isNot(matches(r'[\u0600-\u06FF]')));
   });
 }
