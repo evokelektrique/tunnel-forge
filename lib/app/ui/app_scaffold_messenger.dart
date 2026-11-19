@@ -39,7 +39,6 @@ void showAppSnackBar(
 }
 
 class _AppToastOverlay extends StatelessWidget {
-  static const double _kBottomNavHeight = 72;
   static const double _kEdgePadding = 16;
 
   const _AppToastOverlay({
@@ -54,16 +53,16 @@ class _AppToastOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final safeTop = MediaQuery.paddingOf(context).top;
     return IgnorePointer(
       child: Stack(
         children: [
           Positioned(
             left: _kEdgePadding,
             right: _kEdgePadding,
-            bottom: safeBottom + _kBottomNavHeight + _kEdgePadding,
+            top: safeTop + _kEdgePadding,
             child: Align(
-              alignment: Alignment.bottomCenter,
+              alignment: Alignment.topCenter,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 560),
                 child: Material(
