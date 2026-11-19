@@ -1,8 +1,10 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
+import 'package:tunnel_forge/l10n/app_localizations.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -39,9 +41,39 @@ void main() {
       expect(decoded.mtu, 1400);
     });
 
-    test('round-trips through tf uri payload', () {
-      final envelope = ProfileTransferEnvelope(
-        displayName: 'Office',
+    test('emits minimal server-only tf uri when defaults are used', () {
+      const envelope = ProfileTransferEnvelope(
+        displayName: '',
+        server: ' vpn.example.com ',
+        user: '',
+        password: '',
+        psk: '',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: Profile.defaultVpnMtu,
+      );
+
+      final uri = envelope.toTfUri();
+      expect(uri, 'tf://vpn.example.com');
+
+      final decoded = ProfileTransferEnvelope.fromTfUri(uri);
+      expect(decoded.displayName, isEmpty);
+      expect(decoded.server, 'vpn.example.com');
+      expect(decoded.user, isEmpty);
+      expect(decoded.password, isEmpty);
+      expect(decoded.psk, isEmpty);
+      expect(decoded.dnsAutomatic, isTrue);
+      expect(decoded.dns1Host, isEmpty);
+      expect(decoded.dns2Host, isEmpty);
+      expect(decoded.mtu, Profile.defaultVpnMtu);
+    });
+
+    test('emits readable plaintext tf uri with non-default fields', () {
+      const envelope = ProfileTransferEnvelope(
+        displayName: 'Office VPN',
         server: 'vpn.example.com',
         user: 'alice',
         password: 'pw',
@@ -49,17 +81,240 @@ void main() {
         dnsAutomatic: false,
         dns1Host: '1.1.1.1',
         dns1Protocol: DnsProtocol.dnsOverUdp,
-        dns2Host: '',
-        dns2Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: 'dns.quad9.net',
+        dns2Protocol: DnsProtocol.dnsOverTls,
         mtu: 1400,
       );
 
-      final decoded = ProfileTransferEnvelope.fromTfUri(envelope.toTfUri());
+      final uri = envelope.toTfUri();
+      expect(uri, isNot(contains('tf://p/')));
+      expect(
+        uri,
+        'tf://vpn.example.com?displayName=Office%20VPN&user=alice&password=pw&psk=psk&dns=1.1.1.1&dns=tls://dns.quad9.net&mtu=1400',
+      );
 
-      expect(decoded.displayName, 'Office');
+      final decoded = ProfileTransferEnvelope.fromTfUri(uri);
+      expect(decoded.displayName, 'Office VPN');
       expect(decoded.server, 'vpn.example.com');
+      expect(decoded.user, 'alice');
       expect(decoded.password, 'pw');
       expect(decoded.psk, 'psk');
+      expect(decoded.dnsAutomatic, isFalse);
+      expect(decoded.dns1Host, '1.1.1.1');
+      expect(decoded.dns1Protocol, DnsProtocol.dnsOverUdp);
+      expect(decoded.dns2Host, 'dns.quad9.net');
+      expect(decoded.dns2Protocol, DnsProtocol.dnsOverTls);
+      expect(decoded.mtu, 1400);
+    });
+
+    test('round-trips all DNS protocols and DoH URL forms via tf uri', () {
+      const tcpAndTls = ProfileTransferEnvelope(
+        displayName: 'TCP TLS',
+        server: 'vpn.example.com',
+        user: '',
+        password: '',
+        psk: '',
+        dnsAutomatic: false,
+        dns1Host: '9.9.9.9',
+        dns1Protocol: DnsProtocol.dnsOverTcp,
+        dns2Host: 'dns.quad9.net',
+        dns2Protocol: DnsProtocol.dnsOverTls,
+        mtu: Profile.defaultVpnMtu,
+      );
+      final tcpTlsUri = tcpAndTls.toTfUri();
+      expect(tcpTlsUri, contains('dns=tcp://9.9.9.9&dns=tls://dns.quad9.net'));
+      final decodedTcpTls = ProfileTransferEnvelope.fromTfUri(tcpTlsUri);
+      expect(decodedTcpTls.dns1Protocol, DnsProtocol.dnsOverTcp);
+      expect(decodedTcpTls.dns1Host, '9.9.9.9');
+      expect(decodedTcpTls.dns2Protocol, DnsProtocol.dnsOverTls);
+      expect(decodedTcpTls.dns2Host, 'dns.quad9.net');
+
+      // Bare DoH hostname preserves bare form so /dns-query default stays intact.
+      const bareDoh = ProfileTransferEnvelope(
+        displayName: 'Bare DoH',
+        server: 'vpn.example.com',
+        user: '',
+        password: '',
+        psk: '',
+        dnsAutomatic: false,
+        dns1Host: 'dns.google',
+        dns1Protocol: DnsProtocol.dnsOverHttps,
+        dns2Host: 'wikimedia-dns.org/dns-query',
+        dns2Protocol: DnsProtocol.dnsOverHttps,
+        mtu: Profile.defaultVpnMtu,
+      );
+      final bareDohUri = bareDoh.toTfUri();
+      expect(
+        bareDohUri,
+        contains(
+          'dns=https://dns.google&dns=https://wikimedia-dns.org/dns-query',
+        ),
+      );
+      final decodedBareDoh = ProfileTransferEnvelope.fromTfUri(bareDohUri);
+      expect(decodedBareDoh.dns1Protocol, DnsProtocol.dnsOverHttps);
+      expect(decodedBareDoh.dns1Host, 'dns.google');
+      expect(decodedBareDoh.dns2Protocol, DnsProtocol.dnsOverHttps);
+      expect(decodedBareDoh.dns2Host, 'https://wikimedia-dns.org/dns-query');
+
+      // Explicit root path, port, and query remain intact.
+      const explicitDoh = ProfileTransferEnvelope(
+        displayName: 'Explicit DoH',
+        server: 'vpn.example.com',
+        user: '',
+        password: '',
+        psk: '',
+        dnsAutomatic: false,
+        dns1Host: 'https://dns.google/',
+        dns1Protocol: DnsProtocol.dnsOverHttps,
+        dns2Host: 'https://dns.example.com:8443/doh?k=v&x=1',
+        dns2Protocol: DnsProtocol.dnsOverHttps,
+        mtu: Profile.defaultVpnMtu,
+      );
+      final explicitDohUri = explicitDoh.toTfUri();
+      final decodedExplicit = ProfileTransferEnvelope.fromTfUri(explicitDohUri);
+      expect(decodedExplicit.dns1Host, 'https://dns.google/');
+      expect(
+        decodedExplicit.dns2Host,
+        'https://dns.example.com:8443/doh?k=v&x=1',
+      );
+    });
+
+    test('preserves special characters and UTF-8 across tf uri', () {
+      const envelope = ProfileTransferEnvelope(
+        displayName: 'دفتر مرکزی & Branch #1',
+        server: 'vpn.example.com',
+        user: ' alice+vpn@corp ',
+        password: ' p@ss=&?#%+word ',
+        psk: ' abc+123== ',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: Profile.defaultVpnMtu,
+      );
+
+      final uri = envelope.toTfUri();
+      expect(uri, isNot(contains('دفتر')));
+      expect(uri, contains('%20'));
+      expect(uri, contains('%26'));
+      expect(uri, contains('%3D'));
+      expect(uri, contains('%23'));
+      expect(uri, contains('%3F'));
+      expect(uri, contains('%25'));
+      expect(uri, contains('%2B'));
+
+      final decoded = ProfileTransferEnvelope.fromTfUri(uri);
+      expect(decoded.displayName, 'دفتر مرکزی & Branch #1');
+      expect(decoded.user, ' alice+vpn@corp ');
+      expect(decoded.password, ' p@ss=&?#%+word ');
+      expect(decoded.psk, ' abc+123== ');
+
+      // Raw hand-typed UTF-8 and literal +/= in query values are accepted verbatim.
+      final handTyped = ProfileTransferEnvelope.fromTfUri(
+        'tf://vpn.example.com?displayName=دفتر&psk=abc+123==',
+      );
+      expect(handTyped.displayName, 'دفتر');
+      expect(handTyped.psk, 'abc+123==');
+    });
+
+    test(
+      'applies defaults, ignores unknown keys, clamps mtu, and dedupes dns',
+      () {
+        final decoded = ProfileTransferEnvelope.fromTfUri(
+          'TF://vpn.example.com/?futureFlag=1&displayName=&dns=&dns=UDP://1.1.1.1&dns=1.1.1.1&dns=TLS://dns.quad9.net&mtu=9999',
+        );
+
+        expect(decoded.displayName, isEmpty);
+        expect(decoded.server, 'vpn.example.com');
+        expect(decoded.user, isEmpty);
+        expect(decoded.password, isEmpty);
+        expect(decoded.psk, isEmpty);
+        expect(decoded.dnsAutomatic, isFalse);
+        expect(decoded.dns1Host, '1.1.1.1');
+        expect(decoded.dns1Protocol, DnsProtocol.dnsOverUdp);
+        expect(decoded.dns2Host, 'dns.quad9.net');
+        expect(decoded.dns2Protocol, DnsProtocol.dnsOverTls);
+        expect(decoded.mtu, Profile.maxVpnMtu);
+
+        final minClamped = ProfileTransferEnvelope.fromTfUri(
+          'tf://vpn.example.com?mtu=100',
+        );
+        expect(minClamped.mtu, Profile.minVpnMtu);
+      },
+    );
+
+    test('rejects invalid tf uris and legacy tf://p/ links', () {
+      void expectErrorCode(String uri, ProfileTransferErrorCode expected) {
+        expect(
+          () => ProfileTransferEnvelope.fromTfUri(uri),
+          throwsA(
+            isA<ProfileTransferFormatException>().having(
+              (e) => e.code,
+              'code',
+              expected,
+            ),
+          ),
+        );
+      }
+
+      expectErrorCode(
+        'tf://p/H4sIAAAAAAAAA6vmUlBQKi1OLcpMUVBKSixSqgUAg3xX1hIAAAA',
+        ProfileTransferErrorCode.invalidShareLink,
+      );
+      expectErrorCode(
+        'https://vpn.example.com',
+        ProfileTransferErrorCode.invalidShareLink,
+      );
+      expectErrorCode(
+        'tf://user@vpn.example.com',
+        ProfileTransferErrorCode.invalidShareLink,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com:8443',
+        ProfileTransferErrorCode.invalidShareLink,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com/extra/path',
+        ProfileTransferErrorCode.invalidShareLink,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com#frag',
+        ProfileTransferErrorCode.invalidShareLink,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com?user=%ZZ',
+        ProfileTransferErrorCode.invalidShareLink,
+      );
+      expectErrorCode('tf://', ProfileTransferErrorCode.serverRequired);
+      expectErrorCode(
+        'tf://?user=alice',
+        ProfileTransferErrorCode.serverRequired,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com?mtu=abc',
+        ProfileTransferErrorCode.invalidIntField,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com?dns=http://1.1.1.1',
+        ProfileTransferErrorCode.invalidDns,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com?dns=tls://',
+        ProfileTransferErrorCode.invalidDns,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com?dns=tls://1.1.1.1',
+        ProfileTransferErrorCode.invalidDns,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com?dns=bad host',
+        ProfileTransferErrorCode.invalidDns,
+      );
+      expectErrorCode(
+        'tf://vpn.example.com?dns=1.1.1.1&dns=8.8.8.8&dns=9.9.9.9',
+        ProfileTransferErrorCode.tooManyDnsServers,
+      );
     });
 
     test('rejects unsupported version', () {
@@ -211,6 +466,10 @@ void main() {
       store = ProfileStore(prefsOverride: prefs, secretsOverride: secrets);
     });
 
+    tearDown(() {
+      AppL10n.syncLocale(const Locale('en'));
+    });
+
     test('saveImportedProfile creates a new row and secrets', () async {
       const existing = Profile(
         id: 'existing',
@@ -292,6 +551,66 @@ void main() {
         isNull,
       );
       expect(await secrets.read(ProfileStore.pskKey(imported.last.id)), isNull);
+    });
+
+    test('assigns lowest unused Profile #N fallback names on import', () async {
+      ProfileTransferEnvelope unnamed(String server) => ProfileTransferEnvelope(
+        displayName: '',
+        server: server,
+        user: '',
+        password: '',
+        psk: '',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: Profile.defaultVpnMtu,
+      );
+
+      // Non-matching existing name leaves Profile #1 available.
+      await store.upsertProfile(
+        const Profile(
+          id: 'office',
+          displayName: 'Office',
+          server: 'office.example.com',
+          user: '',
+        ),
+        password: '',
+        psk: '',
+      );
+
+      final first = await store.saveImportedProfile(unnamed('a.example.com'));
+      expect(first.displayName, 'Profile #1');
+
+      // Gap filling: with #1 and #3 present, next unnamed gets #2.
+      await store.upsertProfile(
+        const Profile(
+          id: 'p3',
+          displayName: 'Profile #3',
+          server: 'c.example.com',
+          user: '',
+        ),
+        password: '',
+        psk: '',
+      );
+      final batch = await store.saveImportedProfiles([
+        unnamed('b.example.com'),
+        unnamed('d.example.com'),
+        unnamed('e.example.com'),
+      ]);
+      expect(batch.map((p) => p.displayName), [
+        'Profile #2',
+        'Profile #4',
+        'Profile #5',
+      ]);
+
+      // Localized Persian fallback naming.
+      AppL10n.syncLocale(const Locale('fa'));
+      final persian = await store.saveImportedProfile(
+        unnamed('fa.example.com'),
+      );
+      expect(persian.displayName, 'پروفایل #1');
     });
   });
 }

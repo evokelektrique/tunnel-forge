@@ -390,7 +390,14 @@
       }
     }
   },
-  "newProfileDefaultName": "New profile",
+  "defaultProfileName": "Profile #{number}",
+  "@defaultProfileName": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  },
   "profileNoLongerExists": "This profile no longer exists.",
   "enterServerAddress": "Enter a server address",
   "enterDnsOrEnableAutomatic": "Enter at least one DNS server or enable Automatic",
@@ -573,7 +580,7 @@
   "profileTransferBundleEmpty": "Profile bundle contains no profiles",
   "profileTransferEntryNotJsonObject": "Profile entry must be a JSON object",
   "profileTransferInvalidShareLink": "Invalid TunnelForge share link",
-  "profileTransferMissingPayload": "Share link payload is missing",
+  "profileTransferTooManyDnsServers": "Share link can include at most 2 DNS servers",
   "profileTransferServerRequired": "Profile transfer server is required",
   "profileTransferManualDnsRequired": "Manual DNS requires at least one DNS server",
   "profileTransferInvalidIntField": "Invalid integer field: {field}",

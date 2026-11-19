@@ -329,7 +329,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
           .map((line) => line.trim())
           .where((line) => line.isNotEmpty)
           .toList();
-      if (lines.length > 1 && lines.first.startsWith(uriPrefix)) {
+      if (lines.length > 1 && lines.first.toLowerCase().startsWith(uriPrefix)) {
         await _importTransferBatch([
           for (final line in lines)
             IncomingProfileTransfer(
@@ -341,7 +341,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         return;
       }
       final IncomingProfileTransfer transfer;
-      if (text.startsWith(uriPrefix)) {
+      if (text.toLowerCase().startsWith(uriPrefix)) {
         transfer = IncomingProfileTransfer(
           type: ProfileTransferContract.typeTfUri,
           data: text,

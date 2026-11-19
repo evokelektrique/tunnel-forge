@@ -1097,11 +1097,11 @@ void main() {
 
     final profiles = await store.loadProfiles();
     expect(profiles, hasLength(1));
-    expect(profiles.single.displayName, 'New profile');
+    expect(profiles.single.displayName, 'Profile #1');
     expect(profiles.single.server, 'vpn.example.com');
     expect(find.text('Profiles'), findsOneWidget);
     expect(find.text('Profile saved'), findsOneWidget);
-    expect(find.text('New profile'), findsWidgets);
+    expect(find.text('Profile #1'), findsWidgets);
     expect(find.text('vpn.example.com'), findsWidgets);
   });
 

@@ -13,7 +13,6 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   intl: any
-  archive: ^4.7.1
   bloc: ^9.2.1
   cross_file: ^0.3.5+5
   cupertino_icons: ^2.0.0

@@ -130,7 +130,13 @@ void main() {
     await tester.tap(find.text('Copy share link').last);
     await tester.pumpAndSettle();
 
-    expect(clipboardText, startsWith('tf://p/'));
+    expect(clipboardText, startsWith('tf://vpn.example.com?'));
+    expect(clipboardText, contains('displayName=Office'));
+    expect(clipboardText, contains('user=alice'));
+    expect(clipboardText, contains('password=pw'));
+    expect(clipboardText, contains('psk=psk'));
+    expect(clipboardText, contains('dns=1.1.1.1'));
+    expect(clipboardText, isNot(contains('mtu=')));
     expect(find.text('Share link copied'), findsOneWidget);
   });
 
@@ -704,6 +710,139 @@ void main() {
     expect(profiles.map((p) => p.displayName), ['Alpha', 'Beta']);
     expect(find.text('Imported 2 profiles from a .tfp file'), findsOneWidget);
   });
+
+  testWidgets(
+    'clipboard import accepts minimal server-only tf link with Profile #1 fallback',
+    (tester) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: MemorySecretStore(),
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.getData') {
+              return const <String, Object?>{'text': 'tf://vpn.example.com'};
+            }
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpApp(tester, store);
+
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Import from clipboard').last);
+      await tester.pumpAndSettle();
+
+      final profiles = await store.loadProfiles();
+      expect(profiles, hasLength(1));
+      final imported = profiles.single;
+      expect(imported.displayName, 'Profile #1');
+      expect(imported.server, 'vpn.example.com');
+      expect(imported.user, isEmpty);
+      expect(imported.dnsAutomatic, isTrue);
+      expect(imported.mtu, Profile.defaultVpnMtu);
+      final secretsRow = await store.loadProfileWithSecrets(imported.id);
+      expect(secretsRow!.password, isEmpty);
+      expect(secretsRow.psk, isEmpty);
+      expect(
+        find.text('Imported profile "Profile #1" from a clipboard share link'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'clipboard import assigns sequential Profile #N names for multi-line unnamed links',
+    (tester) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: MemorySecretStore(),
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.getData') {
+              return const <String, Object?>{
+                'text': 'TF://one.example.com\ntf://two.example.com',
+              };
+            }
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpApp(tester, store);
+
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Import from clipboard').last);
+      await tester.pumpAndSettle();
+
+      final profiles = await store.loadProfiles();
+      expect(profiles.map((p) => p.displayName), ['Profile #1', 'Profile #2']);
+      expect(
+        find.text('Imported 2 profiles from the clipboard'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'invalid clipboard import displays error toast at top away from bottom system prompt',
+    (tester) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: MemorySecretStore(),
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.getData') {
+              return const <String, Object?>{'text': 'tf://p/legacy'};
+            }
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpApp(tester, store);
+
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Import from clipboard').last);
+      await tester.pumpAndSettle();
+
+      final toastFinder = find.byKey(const Key('app_toast'));
+      expect(toastFinder, findsOneWidget);
+      expect(find.text('Invalid TunnelForge share link'), findsOneWidget);
+
+      final screenHeight =
+          tester.view.physicalSize.height / tester.view.devicePixelRatio;
+      final toastRect = tester.getRect(toastFinder);
+      expect(toastRect.bottom, lessThan(screenHeight / 2));
+    },
+  );
 }
 
 class TestProfileTransferBridge extends ProfileTransferBridge {

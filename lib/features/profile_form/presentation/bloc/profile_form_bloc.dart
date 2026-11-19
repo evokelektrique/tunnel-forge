@@ -3,6 +3,7 @@ import 'package:equatable/equatable.dart';
 
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
+import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import '../../../home/domain/home_repositories.dart';
 import '../../../home/domain/log_redaction.dart';
@@ -346,12 +347,16 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     final profileId = event.profileId;
     _isNewProfile = profileId == null;
     if (profileId == null) {
+      final existing = await _profilesRepository.loadProfiles();
+      final defaultName = ProfileStore.nextDefaultProfileName(
+        existing.map((p) => p.displayName),
+      );
       emit(
         state.copyWith(
           profileId: _profilesRepository.newProfileId(),
           loading: false,
           clearLoadError: true,
-          displayName: AppL10n.current.newProfileDefaultName,
+          displayName: defaultName,
           server: 'vpn.example.com',
           user: '',
           password: '',
@@ -401,7 +406,10 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     );
   }
 
-  Profile? _validateAndBuildProfile(Emitter<ProfileFormState> emit) {
+  Profile? _validateAndBuildProfile(
+    Emitter<ProfileFormState> emit, {
+    String? fallbackDisplayName,
+  }) {
     final serverTrim = state.server.trim();
     if (serverTrim.isEmpty) {
       _log(LogLevel.debug, 'Profile save blocked: empty server');
@@ -462,11 +470,15 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       }
     }
 
+    final trimmedDisplayName = state.displayName.trim();
+    final trimmedFallback = fallbackDisplayName?.trim() ?? '';
+    final resolvedDisplayName = trimmedDisplayName.isNotEmpty
+        ? trimmedDisplayName
+        : (trimmedFallback.isNotEmpty ? trimmedFallback : serverTrim);
+
     return Profile(
       id: state.profileId,
-      displayName: state.displayName.trim().isEmpty
-          ? serverTrim
-          : state.displayName.trim(),
+      displayName: resolvedDisplayName,
       server: serverTrim,
       user: state.user,
       dnsAutomatic: state.dnsAutomatic,
@@ -485,11 +497,23 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     );
   }
 
+  Future<String?> _resolveFallbackDisplayName() async {
+    if (state.displayName.trim().isNotEmpty) return null;
+    final existing = await _profilesRepository.loadProfiles();
+    return ProfileStore.nextDefaultProfileName(
+      existing.where((p) => p.id != state.profileId).map((p) => p.displayName),
+    );
+  }
+
   Future<void> _onSaveRequested(
     ProfileFormSaveRequested event,
     Emitter<ProfileFormState> emit,
   ) async {
-    final profile = _validateAndBuildProfile(emit);
+    final fallbackDisplayName = await _resolveFallbackDisplayName();
+    final profile = _validateAndBuildProfile(
+      emit,
+      fallbackDisplayName: fallbackDisplayName,
+    );
     if (profile == null) return;
 
     emit(
@@ -527,7 +551,11 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     ProfileFormSecureStorageResetRequested event,
     Emitter<ProfileFormState> emit,
   ) async {
-    final profile = _validateAndBuildProfile(emit);
+    final fallbackDisplayName = await _resolveFallbackDisplayName();
+    final profile = _validateAndBuildProfile(
+      emit,
+      fallbackDisplayName: fallbackDisplayName,
+    );
     if (profile == null) return;
 
     emit(

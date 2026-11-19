@@ -267,4 +267,147 @@ void main() {
       );
     },
   );
+
+  test(
+    'ProfileFormBloc assigns lowest unused Profile #N and falls back on blank save',
+    () async {
+      final firstBloc = ProfileFormBloc(
+        profilesRepository,
+        logsRepository: logsRepository,
+      );
+      addTearDown(firstBloc.close);
+
+      firstBloc.add(const ProfileFormStarted(null));
+      await Future<void>.delayed(Duration.zero);
+      expect(firstBloc.state.displayName, 'Profile #1');
+
+      firstBloc.add(const ProfileFormServerChanged('one.example.com'));
+      firstBloc.add(const ProfileFormDisplayNameChanged('   '));
+      firstBloc.add(const ProfileFormSaveRequested());
+      await Future<void>.delayed(Duration.zero);
+      expect(firstBloc.state.saved, isTrue);
+
+      final afterFirst = await store.loadProfiles();
+      expect(afterFirst.map((p) => p.displayName), ['Profile #1']);
+      final firstId = afterFirst.single.id;
+
+      final secondBloc = ProfileFormBloc(
+        profilesRepository,
+        logsRepository: logsRepository,
+      );
+      addTearDown(secondBloc.close);
+
+      secondBloc.add(const ProfileFormStarted(null));
+      await Future<void>.delayed(Duration.zero);
+      expect(secondBloc.state.displayName, 'Profile #2');
+
+      secondBloc.add(const ProfileFormServerChanged('two.example.com'));
+      secondBloc.add(const ProfileFormSaveRequested());
+      await Future<void>.delayed(Duration.zero);
+      expect(secondBloc.state.saved, isTrue);
+
+      // Editing Profile #1 with a blank name keeps Profile #1 instead of bumping to #3.
+      final editFirstBloc = ProfileFormBloc(
+        profilesRepository,
+        logsRepository: logsRepository,
+      );
+      addTearDown(editFirstBloc.close);
+
+      editFirstBloc.add(ProfileFormStarted(firstId));
+      await Future<void>.delayed(Duration.zero);
+      editFirstBloc.add(const ProfileFormDisplayNameChanged(''));
+      editFirstBloc.add(const ProfileFormSaveRequested());
+      await Future<void>.delayed(Duration.zero);
+      expect(editFirstBloc.state.saved, isTrue);
+
+      final profiles = await store.loadProfiles();
+      expect(profiles.map((p) => p.displayName), ['Profile #1', 'Profile #2']);
+
+      // Delete Profile #1, then edit Profile #2 with blank name -> reuses Profile #1.
+      await store.deleteProfile(firstId);
+      final secondId = profiles.last.id;
+      final editSecondBloc = ProfileFormBloc(
+        profilesRepository,
+        logsRepository: logsRepository,
+      );
+      addTearDown(editSecondBloc.close);
+
+      editSecondBloc.add(ProfileFormStarted(secondId));
+      await Future<void>.delayed(Duration.zero);
+      editSecondBloc.add(const ProfileFormDisplayNameChanged('  '));
+      editSecondBloc.add(const ProfileFormSaveRequested());
+      await Future<void>.delayed(Duration.zero);
+      expect(editSecondBloc.state.saved, isTrue);
+
+      expect((await store.loadProfiles()).map((p) => p.displayName), [
+        'Profile #1',
+      ]);
+    },
+  );
+
+  test(
+    'ProfilesBloc redacts plaintext tf:// share links during import and copy',
+    () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') return null;
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      final bloc = ProfilesBloc(
+        profilesRepository,
+        transferRepository,
+        logsRepository: logsRepository,
+      );
+      addTearDown(bloc.close);
+
+      bloc.add(const ProfilesStarted());
+      await Future<void>.delayed(Duration.zero);
+
+      const envelope = ProfileTransferEnvelope(
+        displayName: 'TopSecret',
+        server: 'hidden-gw.example.net',
+        user: 'secret-user',
+        password: 'secret-password',
+        psk: 'secret-psk',
+        dnsAutomatic: false,
+        dns1Host: '1.1.1.1',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: 1400,
+      );
+
+      bloc.add(
+        ProfilesImportRequested(
+          ImportTransferRequest(
+            transfer: IncomingProfileTransfer(
+              type: ProfileTransferContract.typeTfUri,
+              data: envelope.toTfUri(),
+              source: 'link',
+            ),
+            selectAsLastProfile: true,
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final savedId = (await store.loadProfiles()).single.id;
+      bloc.add(ProfilesCopyShareLinkRequested(savedId));
+      await Future<void>.delayed(Duration.zero);
+
+      for (final entry in logsRepository.entries) {
+        expect(entry.message, isNot(contains('tf://')));
+        expect(entry.message, isNot(contains('TopSecret')));
+        expect(entry.message, isNot(contains('hidden-gw.example.net')));
+        expect(entry.message, isNot(contains('secret-user')));
+        expect(entry.message, isNot(contains('secret-password')));
+        expect(entry.message, isNot(contains('secret-psk')));
+      }
+    },
+  );
 }

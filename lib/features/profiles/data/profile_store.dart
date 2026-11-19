@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
+import 'package:tunnel_forge/l10n/app_localizations.dart';
 
 /// Persists sensitive strings (password, PSK) outside [SharedPreferences].
 abstract class SecretStore {
@@ -185,6 +186,23 @@ class ProfileStore {
       List<int>.generate(16, (_) => Random.secure().nextInt(256)),
     );
     return base64UrlEncode(b).replaceAll('=', '');
+  }
+
+  static String nextDefaultProfileName(
+    Iterable<String> existingNames, {
+    String Function(int number)? formatter,
+  }) {
+    final used = existingNames
+        .map((name) => name.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final formatName = formatter ?? AppL10n.current.defaultProfileName;
+    for (var n = 1; ; n++) {
+      final candidate = formatName(n).trim();
+      if (!used.contains(candidate.toLowerCase())) {
+        return candidate;
+      }
+    }
   }
 
   Future<void> checkUpgradeStatusOnce() async {
@@ -499,9 +517,20 @@ class ProfileStore {
     if (envelopes.isEmpty) return Future.value(const []);
     return _runSerialized(() async {
       final list = await loadProfiles();
+      final usedNames = list
+          .map((p) => p.displayName.trim().toLowerCase())
+          .where((name) => name.isNotEmpty)
+          .toSet();
       final imported = <Profile>[];
       for (final envelope in envelopes) {
-        final profile = envelope.toProfile(newProfileId());
+        final fallbackName = envelope.displayName.trim().isEmpty
+            ? nextDefaultProfileName(usedNames)
+            : null;
+        final profile = envelope.toProfile(
+          newProfileId(),
+          fallbackDisplayName: fallbackName,
+        );
+        usedNames.add(profile.displayName.trim().toLowerCase());
         await _secrets.write(_passwordKey(profile.id), envelope.password);
         await _secrets.write(_pskKey(profile.id), envelope.psk);
         list.add(profile);

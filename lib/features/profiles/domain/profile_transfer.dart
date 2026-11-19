@@ -1,7 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
-
-import 'package:archive/archive.dart';
 
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_contract.dart';
@@ -16,7 +13,7 @@ enum ProfileTransferErrorCode {
   bundleEmpty,
   entryNotJsonObject,
   invalidShareLink,
-  missingSharePayload,
+  tooManyDnsServers,
   serverRequired,
   invalidDns,
   manualDnsRequired,
@@ -55,8 +52,8 @@ class ProfileTransferFormatException extends FormatException {
         t.profileTransferEntryNotJsonObject,
       ProfileTransferErrorCode.invalidShareLink =>
         t.profileTransferInvalidShareLink,
-      ProfileTransferErrorCode.missingSharePayload =>
-        t.profileTransferMissingPayload,
+      ProfileTransferErrorCode.tooManyDnsServers =>
+        t.profileTransferTooManyDnsServers,
       ProfileTransferErrorCode.serverRequired =>
         t.profileTransferServerRequired,
       ProfileTransferErrorCode.invalidDns =>
@@ -97,7 +94,16 @@ class ProfileTransferEnvelope {
   static const String fileExtension = 'tfp';
   static const String mimeType = 'application/vnd.tunnelforge.profile+json';
   static const String uriScheme = 'tf';
-  static const String uriHost = 'p';
+  static const int maxDnsServers = 2;
+  static final RegExp _malformedPercentEscapePattern = RegExp(
+    r'%(?![0-9A-Fa-f]{2})',
+  );
+  static const Map<String, DnsProtocol> _dnsUriSchemes = <String, DnsProtocol>{
+    'udp': DnsProtocol.dnsOverUdp,
+    'tcp': DnsProtocol.dnsOverTcp,
+    'tls': DnsProtocol.dnsOverTls,
+    'https': DnsProtocol.dnsOverHttps,
+  };
 
   final int version;
   final String displayName;
@@ -112,10 +118,15 @@ class ProfileTransferEnvelope {
   final DnsProtocol dns2Protocol;
   final int mtu;
 
-  Profile toProfile(String id) {
+  Profile toProfile(String id, {String? fallbackDisplayName}) {
+    final trimmedName = displayName.trim();
+    final trimmedFallback = fallbackDisplayName?.trim() ?? '';
+    final resolvedName = trimmedName.isNotEmpty
+        ? trimmedName
+        : (trimmedFallback.isNotEmpty ? trimmedFallback : server.trim());
     return Profile(
       id: id,
-      displayName: displayName.trim().isEmpty ? server.trim() : displayName,
+      displayName: resolvedName,
       server: server.trim(),
       user: user,
       dnsAutomatic: dnsAutomatic,
@@ -152,10 +163,41 @@ class ProfileTransferEnvelope {
   }
 
   String toTfUri() {
-    final jsonBytes = utf8.encode(jsonEncode(toJson()));
-    final compressed = GZipEncoder().encode(jsonBytes);
-    final payload = base64UrlEncode(compressed).replaceAll('=', '');
-    return '$uriScheme://$uriHost/$payload';
+    final params = <String>[];
+    void addParam(String key, String value) {
+      params.add('$key=${_encodeQueryValue(value)}');
+    }
+
+    final trimmedName = displayName.trim();
+    if (trimmedName.isNotEmpty) {
+      addParam('displayName', trimmedName);
+    }
+    if (user.isNotEmpty) {
+      addParam('user', user);
+    }
+    if (password.isNotEmpty) {
+      addParam('password', password);
+    }
+    if (psk.isNotEmpty) {
+      addParam('psk', psk);
+    }
+    if (!dnsAutomatic) {
+      final servers = Profile.orderedDnsServers(
+        dns1Host: dns1Host,
+        dns1Protocol: dns1Protocol,
+        dns2Host: dns2Host,
+        dns2Protocol: dns2Protocol,
+      );
+      for (final entry in servers) {
+        addParam('dns', _formatDnsUriValue(entry));
+      }
+    }
+    final normalizedMtu = Profile.normalizeMtu(mtu);
+    if (normalizedMtu != Profile.defaultVpnMtu) {
+      addParam('mtu', '$normalizedMtu');
+    }
+    final base = '$uriScheme://${server.trim()}';
+    return params.isEmpty ? base : '$base?${params.join('&')}';
   }
 
   static ProfileTransferEnvelope fromProfile({
@@ -262,24 +304,245 @@ class ProfileTransferEnvelope {
   }
 
   static ProfileTransferEnvelope fromTfUri(String text) {
-    final uri = Uri.tryParse(text.trim());
-    if (uri == null || uri.scheme != uriScheme || uri.host != uriHost) {
+    final trimmed = text.trim();
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null ||
+        uri.scheme != uriScheme ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasPort ||
+        (uri.path.isNotEmpty && uri.path != '/') ||
+        uri.fragment.isNotEmpty) {
       throw const ProfileTransferFormatException(
         'Invalid TunnelForge share link',
         code: ProfileTransferErrorCode.invalidShareLink,
       );
     }
-    if (uri.pathSegments.isEmpty) {
+    final server = uri.host.trim();
+    if (server.isEmpty) {
       throw const ProfileTransferFormatException(
-        'Share link payload is missing',
-        code: ProfileTransferErrorCode.missingSharePayload,
+        'Profile transfer server is required',
+        code: ProfileTransferErrorCode.serverRequired,
       );
     }
-    final payload = uri.pathSegments.join('');
-    final normalized = base64Url.normalize(payload);
-    final compressed = base64Url.decode(normalized);
-    final jsonBytes = Uint8List.fromList(GZipDecoder().decodeBytes(compressed));
-    return fromFileJson(utf8.decode(jsonBytes));
+
+    final rawQuery = _extractRawQuery(trimmed);
+    if (_malformedPercentEscapePattern.hasMatch(rawQuery)) {
+      throw const ProfileTransferFormatException(
+        'Invalid TunnelForge share link',
+        code: ProfileTransferErrorCode.invalidShareLink,
+      );
+    }
+    final queryPairs = _parseRawQuery(uri.query);
+    var displayName = '';
+    var user = '';
+    var password = '';
+    var psk = '';
+    String? rawMtu;
+    final rawDnsValues = <String>[];
+
+    for (final pair in queryPairs) {
+      switch (pair.key) {
+        case 'displayName':
+          displayName = pair.value.trim();
+        case 'user':
+          user = pair.value;
+        case 'password':
+          password = pair.value;
+        case 'psk':
+          psk = pair.value;
+        case 'mtu':
+          rawMtu = pair.value;
+        case 'dns':
+          final trimmedDns = pair.value.trim();
+          if (trimmedDns.isNotEmpty) {
+            rawDnsValues.add(trimmedDns);
+          }
+      }
+    }
+
+    final int mtu;
+    if (rawMtu == null || rawMtu.trim().isEmpty) {
+      mtu = Profile.defaultVpnMtu;
+    } else {
+      final parsedMtu = int.tryParse(rawMtu.trim());
+      if (parsedMtu == null) {
+        throw const ProfileTransferFormatException(
+          'Invalid integer field: mtu',
+          code: ProfileTransferErrorCode.invalidIntField,
+          field: 'mtu',
+        );
+      }
+      mtu = Profile.normalizeMtu(parsedMtu);
+    }
+
+    final dnsEntries = <DnsServerConfig>[];
+    final seenDns = <String>{};
+    for (final rawDns in rawDnsValues) {
+      final label = dnsEntries.length < 2
+          ? 'DNS ${dnsEntries.length + 1}'
+          : 'DNS';
+      final parsed = _parseDnsUriValue(rawDns, label: label);
+      final invalid = Profile.invalidDnsServer(parsed.host, parsed.protocol);
+      if (invalid != null) {
+        throw ProfileTransferFormatException(
+          Profile.englishValidationMessageForDnsServer(
+            label,
+            parsed.host,
+            parsed.protocol,
+          ),
+          code: ProfileTransferErrorCode.invalidDns,
+          field: label,
+          dnsHost: parsed.host,
+          dnsProtocol: parsed.protocol,
+        );
+      }
+      final normalizedHost = Profile.normalizeDnsServerForProtocol(
+        parsed.host,
+        parsed.protocol,
+      );
+      final fingerprint = '${parsed.protocol.jsonValue}:$normalizedHost';
+      if (!seenDns.add(fingerprint)) continue;
+      if (dnsEntries.length >= maxDnsServers) {
+        throw const ProfileTransferFormatException(
+          'Share link can include at most 2 DNS servers',
+          code: ProfileTransferErrorCode.tooManyDnsServers,
+        );
+      }
+      dnsEntries.add(
+        DnsServerConfig(host: normalizedHost, protocol: parsed.protocol),
+      );
+    }
+
+    final dnsAutomatic = dnsEntries.isEmpty;
+    final dns1 = dnsEntries.isNotEmpty ? dnsEntries[0] : null;
+    final dns2 = dnsEntries.length > 1 ? dnsEntries[1] : null;
+
+    return ProfileTransferEnvelope(
+      displayName: displayName,
+      server: server,
+      user: user,
+      password: password,
+      psk: psk,
+      dnsAutomatic: dnsAutomatic,
+      dns1Host: dns1?.host ?? '',
+      dns1Protocol: dns1?.protocol ?? DnsProtocol.dnsOverUdp,
+      dns2Host: dns2?.host ?? '',
+      dns2Protocol: dns2?.protocol ?? DnsProtocol.dnsOverUdp,
+      mtu: mtu,
+    );
+  }
+
+  static String _formatDnsUriValue(DnsServerConfig entry) {
+    return switch (entry.protocol) {
+      DnsProtocol.dnsOverUdp => entry.host,
+      DnsProtocol.dnsOverTcp => 'tcp://${entry.host}',
+      DnsProtocol.dnsOverTls => 'tls://${entry.host}',
+      DnsProtocol.dnsOverHttps =>
+        entry.host.toLowerCase().startsWith('https://')
+            ? entry.host
+            : 'https://${entry.host}',
+    };
+  }
+
+  static DnsServerConfig _parseDnsUriValue(
+    String raw, {
+    required String label,
+  }) {
+    final schemeIndex = raw.indexOf('://');
+    if (schemeIndex < 0) {
+      return DnsServerConfig(host: raw, protocol: DnsProtocol.dnsOverUdp);
+    }
+    final scheme = raw.substring(0, schemeIndex).toLowerCase();
+    final remainder = raw.substring(schemeIndex + 3);
+    final protocol = _dnsUriSchemes[scheme];
+    if (protocol == null || remainder.isEmpty) {
+      final effectiveProtocol = protocol ?? DnsProtocol.dnsOverUdp;
+      throw ProfileTransferFormatException(
+        Profile.englishValidationMessageForDnsServer(
+          label,
+          raw,
+          effectiveProtocol,
+        ),
+        code: ProfileTransferErrorCode.invalidDns,
+        field: label,
+        dnsHost: raw,
+        dnsProtocol: effectiveProtocol,
+      );
+    }
+    final host =
+        protocol == DnsProtocol.dnsOverHttps &&
+            !remainder.contains('/') &&
+            !remainder.contains('?') &&
+            !remainder.contains(':')
+        ? remainder
+        : (protocol == DnsProtocol.dnsOverHttps
+              ? 'https://$remainder'
+              : remainder);
+    return DnsServerConfig(host: host, protocol: protocol);
+  }
+
+  static String _extractRawQuery(String uriText) {
+    final queryStart = uriText.indexOf('?');
+    if (queryStart < 0) return '';
+    final afterQuestion = uriText.substring(queryStart + 1);
+    final hashIndex = afterQuestion.indexOf('#');
+    return hashIndex < 0
+        ? afterQuestion
+        : afterQuestion.substring(0, hashIndex);
+  }
+
+  static List<({String key, String value})> _parseRawQuery(String rawQuery) {
+    if (rawQuery.isEmpty) return const [];
+    final out = <({String key, String value})>[];
+    for (final part in rawQuery.split('&')) {
+      if (part.isEmpty) continue;
+      final eqIndex = part.indexOf('=');
+      final rawKey = eqIndex < 0 ? part : part.substring(0, eqIndex);
+      final rawValue = eqIndex < 0 ? '' : part.substring(eqIndex + 1);
+      try {
+        out.add((
+          key: Uri.decodeComponent(rawKey),
+          value: Uri.decodeComponent(rawValue),
+        ));
+      } on ArgumentError {
+        throw const ProfileTransferFormatException(
+          'Invalid TunnelForge share link',
+          code: ProfileTransferErrorCode.invalidShareLink,
+        );
+      } on FormatException {
+        throw const ProfileTransferFormatException(
+          'Invalid TunnelForge share link',
+          code: ProfileTransferErrorCode.invalidShareLink,
+        );
+      }
+    }
+    return out;
+  }
+
+  static String _encodeQueryValue(String value) {
+    final bytes = utf8.encode(value);
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      if (_isUnencodedQueryByte(byte)) {
+        buffer.writeCharCode(byte);
+      } else {
+        buffer.write('%');
+        buffer.write(byte.toRadixString(16).toUpperCase().padLeft(2, '0'));
+      }
+    }
+    return buffer.toString();
+  }
+
+  static bool _isUnencodedQueryByte(int byte) {
+    return (byte >= 0x41 && byte <= 0x5A) ||
+        (byte >= 0x61 && byte <= 0x7A) ||
+        (byte >= 0x30 && byte <= 0x39) ||
+        byte == 0x2D ||
+        byte == 0x2E ||
+        byte == 0x5F ||
+        byte == 0x7E ||
+        byte == 0x3A ||
+        byte == 0x2F;
   }
 
   static ProfileTransferEnvelope fromJsonMap(Map<String, Object?> map) {
