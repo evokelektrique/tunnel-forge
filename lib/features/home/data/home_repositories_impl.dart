@@ -599,6 +599,7 @@ class TunnelRepositoryImpl implements TunnelRepository {
       attemptId: request.attemptId,
       server: request.server,
       profileName: request.profileName,
+      protocol: request.protocol,
       connectionMode: request.connectionMode,
       user: request.user,
       password: request.password,

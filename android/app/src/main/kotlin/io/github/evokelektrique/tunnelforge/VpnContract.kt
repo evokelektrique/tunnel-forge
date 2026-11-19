@@ -30,6 +30,7 @@ object VpnContract {
     const val ARG_USER = "user"
     const val ARG_PASSWORD = "password"
     const val ARG_PSK = "psk"
+    const val ARG_PROTOCOL = "protocol"
     const val ARG_DNS_AUTOMATIC = "dnsAutomatic"
     const val ARG_DNS_SERVERS = "dnsServers"
     const val ARG_DNS_SERVER_HOST = "host"
@@ -54,6 +55,8 @@ object VpnContract {
 
     const val MODE_VPN_TUNNEL = "vpnTunnel"
     const val MODE_PROXY_ONLY = "proxyOnly"
+    const val PROTOCOL_L2TP = "l2tp"
+    const val PROTOCOL_PPTP = "pptp"
     const val SPLIT_TUNNEL_MODE_INCLUSIVE = "inclusive"
     const val SPLIT_TUNNEL_MODE_EXCLUSIVE = "exclusive"
 

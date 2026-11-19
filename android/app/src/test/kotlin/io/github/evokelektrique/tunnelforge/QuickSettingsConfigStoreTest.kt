@@ -93,6 +93,7 @@ class QuickSettingsConfigStoreTest {
                 proxyHttpPort = 8888,
                 proxySocksPort = 1888,
                 proxyAllowLan = true,
+                protocol = VpnContract.PROTOCOL_PPTP,
             )
 
         store.save(input)
@@ -103,6 +104,40 @@ class QuickSettingsConfigStoreTest {
         val loaded = store.load()
         assertNotNull(loaded)
         assertEquals(input, loaded)
+    }
+
+    @Test
+    fun missingStoredProtocolDefaultsToL2tp() {
+        val backing = InMemoryKeyValueStore()
+        val store = QuickSettingsConfigStore(backing, XorTestCipher())
+        store.save(
+            TunnelLaunchConfig(
+                profileId = "p-legacy",
+                profileName = "Legacy",
+                server = "legacy.example",
+                user = "bob",
+                password = "pw",
+                psk = "psk",
+                secretsMissing = false,
+                dnsAutomatic = true,
+                dnsServers = emptyList(),
+                mtu = TunnelVpnService.DEFAULT_TUN_MTU,
+                connectionMode = VpnContract.MODE_VPN_TUNNEL,
+                splitTunnelEnabled = false,
+                splitTunnelMode = VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE,
+                inclusivePackages = emptyList(),
+                exclusivePackages = emptyList(),
+                proxyHttpPort = ProxyTunnelService.DEFAULT_HTTP_PORT,
+                proxySocksPort = ProxyTunnelService.DEFAULT_SOCKS_PORT,
+                proxyAllowLan = false,
+                protocol = VpnContract.PROTOCOL_PPTP,
+            ),
+        )
+        backing.values.remove("protocol")
+
+        val loaded = store.load()
+        assertNotNull(loaded)
+        assertEquals(VpnContract.PROTOCOL_L2TP, loaded!!.protocol)
     }
 
     @Test

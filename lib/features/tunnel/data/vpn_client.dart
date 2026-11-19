@@ -267,6 +267,7 @@ class VpnClient {
   Map<String, Object?> _buildTunnelConfigPayload({
     required String server,
     String? profileName,
+    required TunnelProtocol protocol,
     required ConnectionMode connectionMode,
     required String user,
     required String password,
@@ -294,9 +295,10 @@ class VpnClient {
       VpnContract.argServer: server,
       if (profileName != null && profileName.isNotEmpty)
         VpnContract.argProfileName: profileName,
+      VpnContract.argProtocol: protocol.jsonValue,
       VpnContract.argUser: user,
       VpnContract.argPassword: password,
-      VpnContract.argPsk: psk,
+      VpnContract.argPsk: protocol.isPptp ? '' : psk,
       VpnContract.argDnsAutomatic: dnsAutomatic,
       VpnContract.argDnsServers: normalizedDnsServers,
       VpnContract.argMtu: mtuClamped,
@@ -325,6 +327,7 @@ class VpnClient {
     String attemptId = '',
     required String server,
     String? profileName,
+    TunnelProtocol protocol = TunnelProtocol.l2tp,
     ConnectionMode connectionMode = ConnectionMode.vpnTunnel,
     String user = '',
     String password = '',
@@ -340,6 +343,7 @@ class VpnClient {
       ..._buildTunnelConfigPayload(
         server: server,
         profileName: profileName,
+        protocol: protocol,
         connectionMode: connectionMode,
         user: user,
         password: password,
@@ -366,6 +370,7 @@ class VpnClient {
               ..._buildTunnelConfigPayload(
                 server: config.server,
                 profileName: config.profileName,
+                protocol: config.protocol,
                 connectionMode: config.connectionMode,
                 user: config.user,
                 password: config.password,

@@ -48,6 +48,18 @@ add_executable(test_ipv4_dataplane test_ipv4_dataplane.c
 target_include_directories(test_ipv4_dataplane PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME ipv4_dataplane COMMAND test_ipv4_dataplane)
 
+add_executable(test_pptp_gre test_pptp_gre.c
+ ../../android/app/src/main/cpp/pptp_gre.c
+ ../../android/app/src/main/cpp/util_endian.c)
+target_include_directories(test_pptp_gre PRIVATE ../../android/app/src/main/cpp)
+add_test(NAME pptp_gre COMMAND test_pptp_gre)
+
+add_executable(test_pptp_control test_pptp_control.c
+ ../../android/app/src/main/cpp/pptp_wire.c
+ ../../android/app/src/main/cpp/util_endian.c)
+target_include_directories(test_pptp_control PRIVATE ../../android/app/src/main/cpp)
+add_test(NAME pptp_control COMMAND test_pptp_control)
+
 # Optional production-source checks use mbedTLS headers from an Android build.
 if(TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR)
   foreach(protocol ppp ike l2tp)
@@ -64,8 +76,22 @@ if(TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR)
   set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
   set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
   add_subdirectory("${mbedtls_test_source}" "${CMAKE_CURRENT_BINARY_DIR}/mbedtls" EXCLUDE_FROM_ALL)
+  if(TARGET mbedcrypto)
+    target_compile_definitions(mbedcrypto PRIVATE MBEDTLS_MD4_C)
+  endif()
   target_link_libraries(test_ike_production PRIVATE mbedcrypto)
   target_link_libraries(test_ppp_production PRIVATE mbedcrypto)
-  target_sources(test_ppp_production PRIVATE ../../android/app/src/main/cpp/nat_t_keepalive.c)
+  target_sources(test_ppp_production PRIVATE
+    ../../android/app/src/main/cpp/nat_t_keepalive.c
+    ../../android/app/src/main/cpp/ppp_mschap.c
+    ../../android/app/src/main/cpp/ppp_mppe.c)
   target_sources(test_l2tp_production PRIVATE ../../android/app/src/main/cpp/l2tp_avps.c ../../android/app/src/main/cpp/nat_t_keepalive.c)
+
+  add_executable(test_ppp_mppe test_ppp_mppe.c
+    ../../android/app/src/main/cpp/ppp_mppe.c
+    ../../android/app/src/main/cpp/ppp_mschap.c
+    ../../android/app/src/main/cpp/util_endian.c)
+  target_include_directories(test_ppp_mppe PRIVATE ../../android/app/src/main/cpp ${TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR})
+  target_link_libraries(test_ppp_mppe PRIVATE mbedcrypto)
+  add_test(NAME ppp_mppe COMMAND test_ppp_mppe)
 endif()

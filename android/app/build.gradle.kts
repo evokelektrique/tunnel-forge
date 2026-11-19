@@ -294,6 +294,10 @@ android {
     }
 
     packaging {
+        jniLibs {
+            // Extract libpptp_gre_helper.so to nativeLibraryDir with executable permissions for su.
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "META-INF/INDEX.LIST"
             excludes += "META-INF/io.netty.versions.properties"

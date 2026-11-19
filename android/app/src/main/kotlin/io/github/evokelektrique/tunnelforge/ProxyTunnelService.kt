@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -117,6 +118,12 @@ class ProxyTunnelService : Service() {
                 val user = intent.getStringExtra(EXTRA_USER) ?: ""
                 val password = intent.getStringExtra(EXTRA_PASSWORD) ?: ""
                 val psk = intent.getStringExtra(EXTRA_PSK) ?: ""
+                val protocol =
+                    if (intent.getStringExtra(EXTRA_PROTOCOL) == VpnContract.PROTOCOL_PPTP) {
+                        VpnContract.PROTOCOL_PPTP
+                    } else {
+                        VpnContract.PROTOCOL_L2TP
+                    }
                 val dnsAutomatic = intent.getBooleanExtra(EXTRA_DNS_AUTOMATIC, true)
                 val dnsServers = TunnelVpnService.manualDnsServersFromIntent(intent)
                 val profileName = intent.getStringExtra(EXTRA_PROFILE_NAME)?.trim().orEmpty()
@@ -127,7 +134,7 @@ class ProxyTunnelService : Service() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$proxyMtu http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$proxyMtu http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"}",
                 )
                 if (server.isNullOrBlank()) {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Invalid proxy arguments from the app.", attemptId)
@@ -167,6 +174,7 @@ class ProxyTunnelService : Service() {
                             user = user,
                             password = password,
                             psk = psk,
+                            protocol = protocol,
                             dnsAutomatic = dnsAutomatic,
                             dnsServers = dnsServers,
                             profileName = profileName,
@@ -293,6 +301,7 @@ class ProxyTunnelService : Service() {
         user: String,
         password: String,
         psk: String,
+        protocol: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         profileName: String,
@@ -399,6 +408,7 @@ class ProxyTunnelService : Service() {
                         user = user,
                         password = password,
                         psk = psk,
+                        protocol = protocol,
                         dnsAutomatic = dnsAutomatic,
                         dnsServers = dnsServers,
                         proxyConfig = proxyConfig,
@@ -526,6 +536,7 @@ class ProxyTunnelService : Service() {
         user: String,
         password: String,
         psk: String,
+        protocol: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         proxyConfig: ProxyRuntimeConfig,
@@ -548,6 +559,10 @@ class ProxyTunnelService : Service() {
 
         try {
             VpnBridge.nativeSetSocketProtectionEnabled(false)
+            if (protocol == VpnContract.PROTOCOL_PPTP) {
+                val helperPath = File(applicationInfo.nativeLibraryDir, TunnelVpnService.PPTP_GRE_HELPER_LIB_NAME).absolutePath
+                VpnBridge.nativeSetPptpRuntimeConfig(helperPath, "")
+            }
             val negotiatedClientIp = IntArray(4)
             val negotiatedPrimaryDns = IntArray(4)
             val negotiatedSecondaryDns = IntArray(4)
@@ -558,6 +573,7 @@ class ProxyTunnelService : Service() {
                     password,
                     psk,
                     proxyMtu,
+                    VpnBridge.protocolCode(protocol),
                     negotiatedClientIp,
                     negotiatedPrimaryDns,
                     negotiatedSecondaryDns,
@@ -1174,6 +1190,11 @@ class ProxyTunnelService : Service() {
             2 -> "L2TP handshake failed."
             3 -> "PPP negotiation failed."
             4 -> "Tunnel poll I/O error."
+            5 -> "PPTP control handshake failed."
+            6 -> "Root (su) is not available on this device. PPTP requires superuser access."
+            7 -> "Superuser (root) permission was denied. Grant root access to TunnelForge to use PPTP."
+            8 -> "Failed to open raw GRE socket for PPTP."
+            9 -> "PPTP MPPE encryption negotiation failed."
             10 -> "Invalid proxy arguments from the app."
             11 -> "Proxy transport is not implemented yet."
             13 -> "Network connection lost."
@@ -1191,6 +1212,7 @@ class ProxyTunnelService : Service() {
         const val EXTRA_USER = "user"
         const val EXTRA_PASSWORD = "password"
         const val EXTRA_PSK = "psk"
+        const val EXTRA_PROTOCOL = "protocol"
         const val EXTRA_DNS_AUTOMATIC = "dnsAutomatic"
         const val EXTRA_DNS_SERVER_1_HOST = TunnelVpnService.EXTRA_DNS_SERVER_1_HOST
         const val EXTRA_DNS_SERVER_1_PROTOCOL = TunnelVpnService.EXTRA_DNS_SERVER_1_PROTOCOL

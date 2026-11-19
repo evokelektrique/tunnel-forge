@@ -57,9 +57,10 @@ void main() {
       );
 
       final uri = envelope.toTfUri();
-      expect(uri, 'tf://vpn.example.com');
+      expect(uri, 'tf://vpn.example.com?protocol=l2tp');
 
       final decoded = ProfileTransferEnvelope.fromTfUri(uri);
+      expect(decoded.protocol, TunnelProtocol.l2tp);
       expect(decoded.displayName, isEmpty);
       expect(decoded.server, 'vpn.example.com');
       expect(decoded.user, isEmpty);
@@ -90,7 +91,7 @@ void main() {
       expect(uri, isNot(contains('tf://p/')));
       expect(
         uri,
-        'tf://vpn.example.com?displayName=Office%20VPN&user=alice&password=pw&psk=psk&dns=1.1.1.1&dns=tls://dns.quad9.net&mtu=1400',
+        'tf://vpn.example.com?protocol=l2tp&displayName=Office%20VPN&user=alice&password=pw&psk=psk&dns=1.1.1.1&dns=tls://dns.quad9.net&mtu=1400',
       );
 
       final decoded = ProfileTransferEnvelope.fromTfUri(uri);
@@ -340,6 +341,7 @@ void main() {
     test('preserves dns-over-https endpoint path on import', () {
       final decoded = ProfileTransferEnvelope.fromJsonMap({
         'v': ProfileTransferEnvelope.currentVersion,
+        'protocol': 'l2tp',
         'displayName': 'Office',
         'server': 'vpn.example.com',
         'user': 'alice',
@@ -355,6 +357,188 @@ void main() {
 
       expect(decoded.dns1Host, 'wikimedia-dns.org/dns-query');
       expect(decoded.dns1Protocol, DnsProtocol.dnsOverHttps);
+    });
+
+    test('round-trips PPTP profiles through .tfp v4 and tf:// links', () {
+      const pptpEnvelope = ProfileTransferEnvelope(
+        protocol: TunnelProtocol.pptp,
+        displayName: 'Legacy PPTP',
+        server: 'pptp.example.com',
+        user: 'alice',
+        password: 'pw',
+        psk: 'ignored-secret',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: 1400,
+      );
+
+      final jsonMap = pptpEnvelope.toJson();
+      expect(jsonMap['v'], 4);
+      expect(jsonMap['protocol'], 'pptp');
+      expect(jsonMap.containsKey('psk'), isFalse);
+
+      final decodedJson = ProfileTransferEnvelope.fromFileJson(
+        pptpEnvelope.toFileJson(),
+      );
+      expect(decodedJson.protocol, TunnelProtocol.pptp);
+      expect(decodedJson.psk, isEmpty);
+      expect(decodedJson.toProfile('p-pptp').protocol, TunnelProtocol.pptp);
+
+      final uri = pptpEnvelope.toTfUri();
+      expect(
+        uri,
+        'tf://pptp.example.com?protocol=pptp&displayName=Legacy%20PPTP&user=alice&password=pw&mtu=1400',
+      );
+      expect(uri, isNot(contains('psk=')));
+
+      final decodedUri = ProfileTransferEnvelope.fromTfUri(uri);
+      expect(decodedUri.protocol, TunnelProtocol.pptp);
+      expect(decodedUri.psk, isEmpty);
+      expect(decodedUri.displayName, 'Legacy PPTP');
+      expect(decodedUri.mtu, 1400);
+
+      // PPTP link with an extraneous psk param still normalizes psk to empty.
+      final withExtraPsk = ProfileTransferEnvelope.fromTfUri(
+        'tf://pptp.example.com?protocol=PPTP&user=alice&psk=stale',
+      );
+      expect(withExtraPsk.protocol, TunnelProtocol.pptp);
+      expect(withExtraPsk.psk, isEmpty);
+    });
+
+    test('imports legacy v3 .tfp single and bundle files as L2TP', () {
+      final legacySingle = ProfileTransferEnvelope.fromJsonMap({
+        'v': 3,
+        'displayName': 'Old L2TP',
+        'server': 'old.example.com',
+        'user': 'bob',
+        'password': 'pw',
+        'psk': 'shared',
+        'dnsAutomatic': true,
+        'dns1Host': '',
+        'dns1Protocol': 'dnsOverUdp',
+        'dns2Host': '',
+        'dns2Protocol': 'dnsOverUdp',
+        'mtu': 1400,
+      });
+      expect(legacySingle.protocol, TunnelProtocol.l2tp);
+      expect(legacySingle.psk, 'shared');
+
+      final legacyBundle = ProfileTransferEnvelope.fromFileJsonList('''
+{
+  "v": 3,
+  "profiles": [
+    {
+      "v": 3,
+      "displayName": "Legacy One",
+      "server": "one.example.com",
+      "user": "u",
+      "password": "p",
+      "psk": "k",
+      "dnsAutomatic": true,
+      "dns1Host": "",
+      "dns1Protocol": "dnsOverUdp",
+      "dns2Host": "",
+      "dns2Protocol": "dnsOverUdp",
+      "mtu": 1400
+    }
+  ]
+}
+''');
+      expect(legacyBundle, hasLength(1));
+      expect(legacyBundle.single.protocol, TunnelProtocol.l2tp);
+      expect(legacyBundle.single.displayName, 'Legacy One');
+
+      // Legacy tf:// without protocol query parameter defaults to L2TP.
+      final legacyUri = ProfileTransferEnvelope.fromTfUri(
+        'tf://old.example.com?user=bob&psk=shared',
+      );
+      expect(legacyUri.protocol, TunnelProtocol.l2tp);
+      expect(legacyUri.psk, 'shared');
+    });
+
+    test('rejects unrecognized protocol in tf:// and .tfp v4', () {
+      expect(
+        () => ProfileTransferEnvelope.fromTfUri(
+          'tf://vpn.example.com?protocol=wireguard',
+        ),
+        throwsA(
+          isA<ProfileTransferFormatException>()
+              .having(
+                (e) => e.code,
+                'code',
+                ProfileTransferErrorCode.unsupportedProtocol,
+              )
+              .having((e) => e.protocol, 'protocol', 'wireguard'),
+        ),
+      );
+
+      expect(
+        () => ProfileTransferEnvelope.fromJsonMap({
+          'v': 4,
+          'protocol': 'sstp',
+          'displayName': 'Bad',
+          'server': 'vpn.example.com',
+          'user': 'u',
+          'password': 'p',
+          'dnsAutomatic': true,
+          'dns1Host': '',
+          'dns1Protocol': 'dnsOverUdp',
+          'dns2Host': '',
+          'dns2Protocol': 'dnsOverUdp',
+          'mtu': 1400,
+        }),
+        throwsA(
+          isA<ProfileTransferFormatException>()
+              .having(
+                (e) => e.code,
+                'code',
+                ProfileTransferErrorCode.unsupportedProtocol,
+              )
+              .having((e) => e.protocol, 'protocol', 'sstp'),
+        ),
+      );
+    });
+
+    test('round-trips mixed L2TP and PPTP combined v4 bundle', () {
+      const l2tp = ProfileTransferEnvelope(
+        protocol: TunnelProtocol.l2tp,
+        displayName: 'L2TP Site',
+        server: 'l2tp.example.com',
+        user: 'alice',
+        password: 'pw1',
+        psk: 'psk1',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: 1400,
+      );
+      const pptp = ProfileTransferEnvelope(
+        protocol: TunnelProtocol.pptp,
+        displayName: 'PPTP Site',
+        server: 'pptp.example.com',
+        user: 'bob',
+        password: 'pw2',
+        psk: '',
+        dnsAutomatic: true,
+        dns1Host: '',
+        dns1Protocol: DnsProtocol.dnsOverUdp,
+        dns2Host: '',
+        dns2Protocol: DnsProtocol.dnsOverUdp,
+        mtu: 1400,
+      );
+      final decoded = ProfileTransferEnvelope.fromFileJsonList(
+        ProfileTransferEnvelope.toBundleFileJson([l2tp, pptp]),
+      );
+      expect(decoded, hasLength(2));
+      expect(decoded[0].protocol, TunnelProtocol.l2tp);
+      expect(decoded[0].psk, 'psk1');
+      expect(decoded[1].protocol, TunnelProtocol.pptp);
+      expect(decoded[1].psk, isEmpty);
     });
 
     test('exportFileNamesFor deduplicates colliding names', () {

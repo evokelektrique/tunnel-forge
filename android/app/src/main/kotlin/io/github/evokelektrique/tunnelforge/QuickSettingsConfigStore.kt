@@ -171,6 +171,7 @@ internal class QuickSettingsConfigStore(
             putString(KEY_DNS2_HOST, dns2?.host.orEmpty())
             putString(KEY_DNS2_PROTOCOL, dns2?.protocol?.wireValue.orEmpty())
             putInt(KEY_MTU, config.mtu)
+            putString(KEY_PROTOCOL, config.protocol)
             putString(KEY_CONNECTION_MODE, config.connectionMode)
             putBoolean(KEY_SPLIT_TUNNEL_ENABLED, config.splitTunnelEnabled)
             putString(KEY_SPLIT_TUNNEL_MODE, config.splitTunnelMode)
@@ -204,6 +205,12 @@ internal class QuickSettingsConfigStore(
                     readDnsEntry(KEY_DNS2_HOST, KEY_DNS2_PROTOCOL),
                 ),
             )
+        val protocol =
+            if (store.getString(KEY_PROTOCOL) == VpnContract.PROTOCOL_PPTP) {
+                VpnContract.PROTOCOL_PPTP
+            } else {
+                VpnContract.PROTOCOL_L2TP
+            }
         val connectionMode =
             if (store.getString(KEY_CONNECTION_MODE) == VpnContract.MODE_PROXY_ONLY) {
                 VpnContract.MODE_PROXY_ONLY
@@ -243,6 +250,7 @@ internal class QuickSettingsConfigStore(
                 ProxyTunnelService.DEFAULT_SOCKS_PORT,
             ),
             proxyAllowLan = store.getBoolean(KEY_PROXY_ALLOW_LAN, false),
+            protocol = protocol,
         )
     }
 
@@ -315,6 +323,7 @@ internal class QuickSettingsConfigStore(
         private const val KEY_DNS2_HOST = "dns2_host"
         private const val KEY_DNS2_PROTOCOL = "dns2_protocol"
         private const val KEY_MTU = "mtu"
+        private const val KEY_PROTOCOL = "protocol"
         private const val KEY_CONNECTION_MODE = "connection_mode"
         private const val KEY_SPLIT_TUNNEL_ENABLED = "split_tunnel_enabled"
         private const val KEY_SPLIT_TUNNEL_MODE = "split_tunnel_mode"

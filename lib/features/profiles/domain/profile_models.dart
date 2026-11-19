@@ -1,6 +1,44 @@
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/l10n/generated/app_localizations_en.dart';
 
+/// VPN tunneling protocol selected per saved profile.
+enum TunnelProtocol {
+  l2tp('l2tp', 'L2TP'),
+  pptp('pptp', 'PPTP');
+
+  const TunnelProtocol(this.jsonValue, this.shortLabel);
+
+  final String jsonValue;
+  final String shortLabel;
+
+  bool get isPptp => this == TunnelProtocol.pptp;
+
+  static const List<TunnelProtocol> orderedValues = <TunnelProtocol>[
+    TunnelProtocol.l2tp,
+    TunnelProtocol.pptp,
+  ];
+
+  String localizedDropdownLabel(AppLocalizations t) {
+    return switch (this) {
+      TunnelProtocol.l2tp => t.protocolL2tp,
+      TunnelProtocol.pptp => t.protocolPptpRoot,
+    };
+  }
+
+  static TunnelProtocol fromJson(Object? raw) {
+    return tryParseWire(raw) ?? TunnelProtocol.l2tp;
+  }
+
+  static TunnelProtocol? tryParseWire(Object? raw) {
+    if (raw is! String) return null;
+    return switch (raw.trim().toLowerCase()) {
+      'l2tp' => TunnelProtocol.l2tp,
+      'pptp' => TunnelProtocol.pptp,
+      _ => null,
+    };
+  }
+}
+
 /// Connection surface: Android VPN/TUN vs. local proxy listeners only.
 enum ConnectionMode {
   vpnTunnel('vpnTunnel'),
@@ -449,6 +487,7 @@ class Profile {
     required this.displayName,
     required this.server,
     required this.user,
+    this.protocol = TunnelProtocol.l2tp,
     this.dnsAutomatic = true,
     this.dns1Host = '',
     this.dns1Protocol = DnsProtocol.dnsOverUdp,
@@ -471,6 +510,7 @@ class Profile {
   final String displayName;
   final String server;
   final String user;
+  final TunnelProtocol protocol;
   final bool dnsAutomatic;
   final String dns1Host;
   final DnsProtocol dns1Protocol;
@@ -481,12 +521,13 @@ class Profile {
   final int mtu;
   final bool favorite;
 
-  Profile copyWith({bool? favorite}) {
+  Profile copyWith({bool? favorite, TunnelProtocol? protocol}) {
     return Profile(
       id: id,
       displayName: displayName,
       server: server,
       user: user,
+      protocol: protocol ?? this.protocol,
       dnsAutomatic: dnsAutomatic,
       dns1Host: dns1Host,
       dns1Protocol: dns1Protocol,
@@ -672,6 +713,7 @@ class Profile {
     'displayName': displayName,
     'server': server,
     'user': user,
+    'protocol': protocol.jsonValue,
     'dnsAutomatic': dnsAutomatic,
     'dns1Host': normalizeDnsServerForProtocol(dns1Host, dns1Protocol),
     'dns1Protocol': dns1Protocol.jsonValue,
@@ -717,11 +759,13 @@ class Profile {
       mtu = mtuFromText(mtuRaw, fallback: defaultVpnMtu);
     }
     final favorite = m['favorite'] is bool ? m['favorite'] as bool : false;
+    final protocol = TunnelProtocol.fromJson(m['protocol']);
     return Profile(
       id: id,
       displayName: displayName,
       server: server,
       user: user,
+      protocol: protocol,
       dnsAutomatic: dnsAutomatic,
       dns1Host: normalizeDnsServerForProtocol(dns1Host, parsedDns1Protocol),
       dns1Protocol: parsedDns1Protocol,

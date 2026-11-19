@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/app/theme/app_theme.dart';
 
@@ -23,6 +24,7 @@ class _ProfilePickerTile extends StatefulWidget {
     required this.enabled,
     required this.title,
     required this.subtitle,
+    this.protocol,
     required this.activeProfileLabel,
     required this.onTap,
     required this.colorScheme,
@@ -32,6 +34,7 @@ class _ProfilePickerTile extends StatefulWidget {
   final bool enabled;
   final String title;
   final String subtitle;
+  final TunnelProtocol? protocol;
   final String activeProfileLabel;
   final FutureOr<void> Function() onTap;
   final ColorScheme colorScheme;
@@ -86,13 +89,44 @@ class _ProfilePickerTileState extends State<_ProfilePickerTile> {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      widget.title,
-                      style: textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            widget.title,
+                            style: textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (widget.protocol != null) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            key: const Key('active_profile_protocol_badge'),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: widget.protocol!.isPptp
+                                  ? colorScheme.secondaryContainer
+                                  : colorScheme.surfaceContainerHigh,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              widget.protocol!.shortLabel,
+                              style: textTheme.labelSmall?.copyWith(
+                                color: widget.protocol!.isPptp
+                                    ? colorScheme.onSecondaryContainer
+                                    : colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -133,6 +167,7 @@ class ConnectionPanel extends StatelessWidget {
     required this.profilesLoading,
     required this.profileSummaryTitle,
     required this.profileSummarySubtitle,
+    this.activeProfileProtocol,
     required this.onOpenProfilePicker,
     required this.busy,
     required this.tunnelUp,
@@ -153,6 +188,7 @@ class ConnectionPanel extends StatelessWidget {
   final bool profilesLoading;
   final String profileSummaryTitle;
   final String profileSummarySubtitle;
+  final TunnelProtocol? activeProfileProtocol;
   final FutureOr<void> Function() onOpenProfilePicker;
   final bool busy;
   final bool tunnelUp;
@@ -212,6 +248,7 @@ class ConnectionPanel extends StatelessWidget {
                   enabled: pickerEnabled,
                   title: profileSummaryTitle,
                   subtitle: profileSummarySubtitle,
+                  protocol: activeProfileProtocol,
                   activeProfileLabel: t.activeProfile,
                   onTap: onOpenProfilePicker,
                   colorScheme: colorScheme,

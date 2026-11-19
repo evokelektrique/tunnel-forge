@@ -446,6 +446,44 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                             ),
                           ),
                           const SizedBox(height: 12),
+                          InputDecorator(
+                            isEmpty: false,
+                            decoration: _deco(context, label: t.protocol)
+                                .copyWith(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 4,
+                                  ),
+                                ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<TunnelProtocol>(
+                                key: const Key('protocol_dropdown'),
+                                value: state.protocol,
+                                isExpanded: true,
+                                borderRadius: BorderRadius.circular(12),
+                                onChanged: state.loading || state.saving
+                                    ? null
+                                    : (value) =>
+                                          context.read<ProfileFormBloc>().add(
+                                            ProfileFormProtocolChanged(
+                                              value ?? TunnelProtocol.l2tp,
+                                            ),
+                                          ),
+                                items: TunnelProtocol.orderedValues
+                                    .map(
+                                      (value) =>
+                                          DropdownMenuItem<TunnelProtocol>(
+                                            value: value,
+                                            child: Text(
+                                              value.localizedDropdownLabel(t),
+                                            ),
+                                          ),
+                                    )
+                                    .toList(growable: false),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
                           TextField(
                             controller: _serverController,
                             textInputAction: TextInputAction.next,
@@ -483,21 +521,23 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                                 .read<ProfileFormBloc>()
                                 .add(ProfileFormPasswordChanged(value)),
                           ),
-                          const SizedBox(height: 12),
-                          _secretField(
-                            context: context,
-                            controller: _pskController,
-                            label: t.ipsecPsk,
-                            hint: t.ipsecPskHint,
-                            visible: _pskVisible,
-                            showTooltip: t.showIpsecPsk,
-                            hideTooltip: t.hideIpsecPsk,
-                            onToggle: () =>
-                                setState(() => _pskVisible = !_pskVisible),
-                            onChanged: (value) => context
-                                .read<ProfileFormBloc>()
-                                .add(ProfileFormPskChanged(value)),
-                          ),
+                          if (!state.protocol.isPptp) ...[
+                            const SizedBox(height: 12),
+                            _secretField(
+                              context: context,
+                              controller: _pskController,
+                              label: t.ipsecPsk,
+                              hint: t.ipsecPskHint,
+                              visible: _pskVisible,
+                              showTooltip: t.showIpsecPsk,
+                              hideTooltip: t.hideIpsecPsk,
+                              onToggle: () =>
+                                  setState(() => _pskVisible = !_pskVisible),
+                              onChanged: (value) => context
+                                  .read<ProfileFormBloc>()
+                                  .add(ProfileFormPskChanged(value)),
+                            ),
+                          ],
                           const SizedBox(height: 12),
                           CheckboxListTile(
                             value: state.dnsAutomatic,

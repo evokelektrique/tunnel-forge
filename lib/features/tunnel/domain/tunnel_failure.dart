@@ -114,6 +114,26 @@ class TunnelFailure extends Equatable {
       'Tunnel I/O error',
       'The tunnel couldn\'t keep sending or receiving data. Check your network connection and try connecting again.',
     ),
+    '5': (
+      'PPTP handshake failed',
+      'The connection couldn\'t complete PPTP control setup on TCP port 1723. Check the server address, firewall rules, and server logs.',
+    ),
+    '6': (
+      'Root access unavailable',
+      'PPTP requires superuser (root) access to open raw GRE sockets on Android, and no su binary was found on this device. Use L2TP instead or run on a rooted device.',
+    ),
+    '7': (
+      'Root permission denied',
+      'Superuser access was denied or timed out. Grant root permission to TunnelForge in your root manager (Magisk, KernelSU, or APatch) and try connecting again.',
+    ),
+    '8': (
+      'GRE socket setup failed',
+      'The root helper could not open or connect the raw GRE socket to the PPTP server. Check that your kernel supports GRE and that the network allows protocol 47.',
+    ),
+    '9': (
+      'MPPE encryption failed',
+      'The PPTP server rejected or could not negotiate MPPE-128 encryption. Check the server\'s MPPE and MS-CHAPv2 authentication settings.',
+    ),
     '10': (
       'Invalid tunnel settings',
       'Check the server address and tunnel settings in your profile, then try connecting again.',
@@ -168,6 +188,9 @@ class TunnelFailure extends Equatable {
       'pap' => code == '3' ? _authentication.$1 : 'Unknown PAP error',
       'l2tp-stopccn' => _stop[code] ?? 'Unknown control connection result',
       'l2tp-cdn' => _cdn[code] ?? 'Unknown session result',
+      'pptp-ctrl' => 'PPTP control connection rejected',
+      'pptp-call' => 'PPTP outgoing call rejected',
+      'pptp-cdn' => 'PPTP call disconnected',
       'engine' => _engine[code]?.$1 ?? 'Unknown tunnel engine error',
       'android' => _android[code]?.$1 ?? 'Android platform error',
       _ => 'Connection error',
@@ -187,6 +210,8 @@ class TunnelFailure extends Equatable {
           'The tunnel stopped with an error the app doesn\'t recognize. Export the logs to help find the cause.',
     'l2tp-stopccn' || 'l2tp-cdn' =>
       'The L2TP server closed the ${namespace == 'l2tp-stopccn' ? 'control connection' : 'session'}. ${_hasGeneralError && generalError == 4 || code == '6' && namespace == 'l2tp-stopccn' || code == '4' && namespace == 'l2tp-cdn' ? 'Wait a moment, then try again.' : 'Check the server logs, access rules and supported protocol settings.'}',
+    'pptp-ctrl' || 'pptp-call' || 'pptp-cdn' =>
+      'The PPTP server closed or rejected the tunnel. Check the server logs, access rules, and supported PPTP settings.',
     'android' =>
       _android[code]?.$2 ??
           'Check the error details for more information. If it keeps happening, export the logs to help find the cause.',
@@ -246,11 +271,19 @@ class TunnelFailure extends Equatable {
         '12' => t.tunnelFailureCdn12Title,
         _ => t.tunnelFailureCdnUnknownTitle,
       },
+      'pptp-ctrl' => t.tunnelFailurePptpCtrlTitle,
+      'pptp-call' => t.tunnelFailurePptpCallTitle,
+      'pptp-cdn' => t.tunnelFailurePptpCdnTitle,
       'engine' => switch (code) {
         '1' => t.tunnelFailureEngine1Title,
         '2' => t.tunnelFailureEngine2Title,
         '3' => t.tunnelFailureEngine3Title,
         '4' => t.tunnelFailureEngine4Title,
+        '5' => t.tunnelFailureEngine5Title,
+        '6' => t.tunnelFailureEngine6Title,
+        '7' => t.tunnelFailureEngine7Title,
+        '8' => t.tunnelFailureEngine8Title,
+        '9' => t.tunnelFailureEngine9Title,
         '10' => t.tunnelFailureEngine10Title,
         '11' => t.tunnelFailureEngine11Title,
         '13' => t.tunnelFailureEngine13Title,
@@ -301,11 +334,19 @@ class TunnelFailure extends Equatable {
         _ => t.tunnelFailureMschapUnknownExplanation,
       },
       'chap' || 'pap' => t.tunnelFailureAuthExplanation,
+      'pptp-ctrl' ||
+      'pptp-call' ||
+      'pptp-cdn' => t.tunnelFailurePptpExplanation,
       'engine' => switch (code) {
         '1' => t.tunnelFailureEngine1Explanation,
         '2' => t.tunnelFailureEngine2Explanation,
         '3' => t.tunnelFailureEngine3Explanation,
         '4' => t.tunnelFailureEngine4Explanation,
+        '5' => t.tunnelFailureEngine5Explanation,
+        '6' => t.tunnelFailureEngine6Explanation,
+        '7' => t.tunnelFailureEngine7Explanation,
+        '8' => t.tunnelFailureEngine8Explanation,
+        '9' => t.tunnelFailureEngine9Explanation,
         '10' => t.tunnelFailureEngine10Explanation,
         '11' => t.tunnelFailureEngine11Explanation,
         '13' => t.tunnelFailureEngine13Explanation,

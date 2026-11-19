@@ -20,6 +20,7 @@ internal data class TunnelLaunchConfig(
     val proxyHttpPort: Int,
     val proxySocksPort: Int,
     val proxyAllowLan: Boolean,
+    val protocol: String = VpnContract.PROTOCOL_L2TP,
 ) {
     val displayLabel: String
         get() = profileName.ifBlank { server }
@@ -66,6 +67,12 @@ internal data class TunnelLaunchConfig(
                 }
             val inclusivePackages = parsePackageList(args[VpnContract.ARG_SPLIT_TUNNEL_INCLUSIVE_PACKAGES])
             val exclusivePackages = parsePackageList(args[VpnContract.ARG_SPLIT_TUNNEL_EXCLUSIVE_PACKAGES])
+            val protocol =
+                if ((args[VpnContract.ARG_PROTOCOL] as? String) == VpnContract.PROTOCOL_PPTP) {
+                    VpnContract.PROTOCOL_PPTP
+                } else {
+                    VpnContract.PROTOCOL_L2TP
+                }
             val proxyHttpPort = sanitizePort(args[VpnContract.ARG_PROXY_HTTP_PORT], ProxyTunnelService.DEFAULT_HTTP_PORT)
             val proxySocksPort = sanitizePort(args[VpnContract.ARG_PROXY_SOCKS_PORT], ProxyTunnelService.DEFAULT_SOCKS_PORT)
             val proxyAllowLan = args[VpnContract.ARG_PROXY_ALLOW_LAN] as? Boolean ?: false
@@ -88,6 +95,7 @@ internal data class TunnelLaunchConfig(
                 proxyHttpPort = proxyHttpPort,
                 proxySocksPort = proxySocksPort,
                 proxyAllowLan = proxyAllowLan,
+                protocol = protocol,
             )
         }
 

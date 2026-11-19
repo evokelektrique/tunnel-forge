@@ -10,6 +10,7 @@ enum ProfileTransferErrorCode {
   unsupportedTransfer,
   notJsonObject,
   unsupportedVersion,
+  unsupportedProtocol,
   bundleEmpty,
   entryNotJsonObject,
   invalidShareLink,
@@ -27,6 +28,7 @@ class ProfileTransferFormatException extends FormatException {
     required this.code,
     this.field,
     this.version,
+    this.protocol,
     this.dnsHost,
     this.dnsProtocol,
   });
@@ -34,6 +36,7 @@ class ProfileTransferFormatException extends FormatException {
   final ProfileTransferErrorCode code;
   final String? field;
   final String? version;
+  final String? protocol;
   final String? dnsHost;
   final DnsProtocol? dnsProtocol;
 
@@ -47,6 +50,8 @@ class ProfileTransferFormatException extends FormatException {
       ProfileTransferErrorCode.notJsonObject => t.profileTransferNotJsonObject,
       ProfileTransferErrorCode.unsupportedVersion =>
         t.profileTransferUnsupportedVersion(version ?? ''),
+      ProfileTransferErrorCode.unsupportedProtocol =>
+        t.profileTransferUnsupportedProtocol(protocol ?? ''),
       ProfileTransferErrorCode.bundleEmpty => t.profileTransferBundleEmpty,
       ProfileTransferErrorCode.entryNotJsonObject =>
         t.profileTransferEntryNotJsonObject,
@@ -87,10 +92,12 @@ class ProfileTransferEnvelope {
     required this.dns2Host,
     required this.dns2Protocol,
     required this.mtu,
+    this.protocol = TunnelProtocol.l2tp,
     this.version = currentVersion,
   });
 
-  static const int currentVersion = 3;
+  static const int legacyVersion = 3;
+  static const int currentVersion = 4;
   static const String fileExtension = 'tfp';
   static const String mimeType = 'application/vnd.tunnelforge.profile+json';
   static const String uriScheme = 'tf';
@@ -106,6 +113,7 @@ class ProfileTransferEnvelope {
   };
 
   final int version;
+  final TunnelProtocol protocol;
   final String displayName;
   final String server;
   final String user;
@@ -129,6 +137,7 @@ class ProfileTransferEnvelope {
       displayName: resolvedName,
       server: server.trim(),
       user: user,
+      protocol: protocol,
       dnsAutomatic: dnsAutomatic,
       dns1Host: Profile.normalizeDnsServerForProtocol(dns1Host, dns1Protocol),
       dns1Protocol: dns1Protocol,
@@ -140,11 +149,12 @@ class ProfileTransferEnvelope {
 
   Map<String, Object?> toJson() => <String, Object?>{
     'v': version,
+    'protocol': protocol.jsonValue,
     'displayName': displayName,
     'server': server,
     'user': user,
     'password': password,
-    'psk': psk,
+    if (!protocol.isPptp) 'psk': psk,
     'dnsAutomatic': dnsAutomatic,
     'dns1Host': Profile.normalizeDnsServerForProtocol(dns1Host, dns1Protocol),
     'dns1Protocol': dns1Protocol.jsonValue,
@@ -168,6 +178,7 @@ class ProfileTransferEnvelope {
       params.add('$key=${_encodeQueryValue(value)}');
     }
 
+    addParam('protocol', protocol.jsonValue);
     final trimmedName = displayName.trim();
     if (trimmedName.isNotEmpty) {
       addParam('displayName', trimmedName);
@@ -178,7 +189,7 @@ class ProfileTransferEnvelope {
     if (password.isNotEmpty) {
       addParam('password', password);
     }
-    if (psk.isNotEmpty) {
+    if (!protocol.isPptp && psk.isNotEmpty) {
       addParam('psk', psk);
     }
     if (!dnsAutomatic) {
@@ -206,11 +217,12 @@ class ProfileTransferEnvelope {
     required String psk,
   }) {
     return ProfileTransferEnvelope(
+      protocol: profile.protocol,
       displayName: profile.displayName,
       server: profile.server,
       user: profile.user,
       password: password,
-      psk: psk,
+      psk: profile.protocol.isPptp ? '' : psk,
       dnsAutomatic: profile.dnsAutomatic,
       dns1Host: profile.dns1Host,
       dns1Protocol: profile.dns1Protocol,
@@ -275,7 +287,8 @@ class ProfileTransferEnvelope {
     final map = Map<String, Object?>.from(decoded);
     if (map.containsKey('profiles')) {
       final version = map['v'];
-      if (version is! int || version != currentVersion) {
+      if (version is! int ||
+          (version != legacyVersion && version != currentVersion)) {
         throw ProfileTransferFormatException(
           'Unsupported profile transfer version: $version',
           code: ProfileTransferErrorCode.unsupportedVersion,
@@ -337,11 +350,14 @@ class ProfileTransferEnvelope {
     var user = '';
     var password = '';
     var psk = '';
+    String? rawProtocol;
     String? rawMtu;
     final rawDnsValues = <String>[];
 
     for (final pair in queryPairs) {
       switch (pair.key) {
+        case 'protocol':
+          rawProtocol = pair.value;
         case 'displayName':
           displayName = pair.value.trim();
         case 'user':
@@ -358,6 +374,25 @@ class ProfileTransferEnvelope {
             rawDnsValues.add(trimmedDns);
           }
       }
+    }
+
+    final TunnelProtocol protocol;
+    if (rawProtocol == null || rawProtocol.trim().isEmpty) {
+      protocol = TunnelProtocol.l2tp;
+    } else {
+      final parsedProtocol = TunnelProtocol.tryParseWire(rawProtocol);
+      if (parsedProtocol == null) {
+        final badProtocol = rawProtocol.trim();
+        throw ProfileTransferFormatException(
+          'Unsupported protocol: $badProtocol',
+          code: ProfileTransferErrorCode.unsupportedProtocol,
+          protocol: badProtocol,
+        );
+      }
+      protocol = parsedProtocol;
+    }
+    if (protocol.isPptp) {
+      psk = '';
     }
 
     final int mtu;
@@ -418,6 +453,7 @@ class ProfileTransferEnvelope {
     final dns2 = dnsEntries.length > 1 ? dnsEntries[1] : null;
 
     return ProfileTransferEnvelope(
+      protocol: protocol,
       displayName: displayName,
       server: server,
       user: user,
@@ -547,18 +583,48 @@ class ProfileTransferEnvelope {
 
   static ProfileTransferEnvelope fromJsonMap(Map<String, Object?> map) {
     final version = map['v'];
-    if (version is! int || version != currentVersion) {
+    if (version is! int ||
+        (version != legacyVersion && version != currentVersion)) {
       throw ProfileTransferFormatException(
         'Unsupported profile transfer version: $version',
         code: ProfileTransferErrorCode.unsupportedVersion,
         version: '$version',
       );
     }
+    final TunnelProtocol protocol;
+    if (version == legacyVersion && !map.containsKey('protocol')) {
+      protocol = TunnelProtocol.l2tp;
+    } else {
+      final rawProtocol = _requireString(map, 'protocol');
+      final parsedProtocol = TunnelProtocol.tryParseWire(rawProtocol);
+      if (parsedProtocol == null) {
+        final badProtocol = rawProtocol.trim();
+        throw ProfileTransferFormatException(
+          'Unsupported protocol: $badProtocol',
+          code: ProfileTransferErrorCode.unsupportedProtocol,
+          protocol: badProtocol,
+        );
+      }
+      protocol = parsedProtocol;
+    }
     final displayName = _requireString(map, 'displayName');
     final server = _requireString(map, 'server');
     final user = _requireString(map, 'user');
     final password = _requireString(map, 'password');
-    final psk = _requireString(map, 'psk');
+    final String psk;
+    if (protocol.isPptp) {
+      final rawPsk = map['psk'];
+      if (rawPsk != null && rawPsk is! String) {
+        throw const ProfileTransferFormatException(
+          'Missing string field: psk',
+          code: ProfileTransferErrorCode.missingField,
+          field: 'psk',
+        );
+      }
+      psk = '';
+    } else {
+      psk = _requireString(map, 'psk');
+    }
     final dnsAutomatic = _requireBool(map, 'dnsAutomatic');
     final dns1Host = _requireString(map, 'dns1Host');
     final dns1Protocol = DnsProtocol.fromJson(
@@ -617,6 +683,7 @@ class ProfileTransferEnvelope {
     }
     return ProfileTransferEnvelope(
       version: version,
+      protocol: protocol,
       displayName: displayName,
       server: server,
       user: user,

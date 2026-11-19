@@ -3,6 +3,7 @@
 
 #include "esp_udp.h"
 #include "packet_endpoint.h"
+#include "ppp_mppe.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -40,6 +41,11 @@ typedef struct {
   /** LCP option 7 (PFC) accepted via peer Configure-Request: if set, compress low-byte PPP protocol fields. */
   int lcp_pfc;
   int tcp_mss_clamp_logged;
+  /** MS-CHAPv2 key derivation inputs for PPTP MPPE (zeroed when session closes). */
+  int mppe_keys_ready;
+  uint8_t mschapv2_hash_hash[16];
+  uint8_t mschapv2_nt_response[24];
+  ppp_mppe_state_t mppe;
 } ppp_session_t;
 
 #define L2TP_DISPATCH_ERROR (-1)

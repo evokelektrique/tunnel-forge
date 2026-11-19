@@ -51,6 +51,22 @@ class TunnelReconnectPolicyTest {
                 null,
             ),
         )
+        assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_ROOT_UNAVAILABLE, null))
+        assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_ROOT_DENIED, null))
+        assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_GRE_SOCKET_FAILED, null))
+        assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_MPPE_FAILED, null))
+        assertTrue(
+            TunnelReconnectPolicy.isTerminalFailure(
+                VpnBridge.EXIT_PPTP_FAILED,
+                mapOf("namespace" to "pptp-ctrl", "code" to 4, "generalError" to 0),
+            ),
+        )
+        assertTrue(
+            TunnelReconnectPolicy.isTerminalFailure(
+                VpnBridge.EXIT_PPTP_FAILED,
+                mapOf("namespace" to "pptp-call", "code" to 7, "generalError" to 0),
+            ),
+        )
     }
 
     @Test
@@ -89,6 +105,22 @@ class TunnelReconnectPolicyTest {
                 hasEverConnected = true,
                 hasUsableNetwork = true,
                 exitCode = VpnBridge.EXIT_IKE_FAILED,
+                failure = null,
+            ),
+        )
+        assertTrue(
+            TunnelReconnectPolicy.shouldFailOnInitialAttempt(
+                hasEverConnected = false,
+                hasUsableNetwork = true,
+                exitCode = VpnBridge.EXIT_PPTP_FAILED,
+                failure = null,
+            ),
+        )
+        assertFalse(
+            TunnelReconnectPolicy.shouldFailOnInitialAttempt(
+                hasEverConnected = false,
+                hasUsableNetwork = false,
+                exitCode = VpnBridge.EXIT_PPTP_FAILED,
                 failure = null,
             ),
         )
@@ -194,6 +226,22 @@ class TunnelReconnectPolicyTest {
             TunnelDisconnectNotification.formatDisconnectMessage(
                 detail = "Disconnected: VPN revoked by Android",
                 failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_VPN_REVOKED),
+                profileLabel = "Work",
+            ),
+        )
+        assertEquals(
+            "Work: Superuser (root) permission was denied. Grant root access to TunnelForge to use PPTP.",
+            TunnelDisconnectNotification.formatDisconnectMessage(
+                detail = "Denied",
+                failure = mapOf("namespace" to "engine", "code" to VpnBridge.EXIT_ROOT_DENIED, "generalError" to 0),
+                profileLabel = "Work",
+            ),
+        )
+        assertEquals(
+            "Work: PPTP control connection rejected (code 4).",
+            TunnelDisconnectNotification.formatDisconnectMessage(
+                detail = "PPTP control handshake failed.",
+                failure = mapOf("namespace" to "pptp-ctrl", "code" to 4, "generalError" to 0),
                 profileLabel = "Work",
             ),
         )

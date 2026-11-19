@@ -17,6 +17,7 @@ import android.os.ParcelFileDescriptor
 import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import java.io.File
 import java.io.IOException
 import java.net.DatagramSocket
 import java.net.Inet4Address
@@ -263,6 +264,12 @@ class TunnelVpnService : VpnService() {
                 val user = intent.getStringExtra(EXTRA_USER) ?: ""
                 val password = intent.getStringExtra(EXTRA_PASSWORD) ?: ""
                 val psk = intent.getStringExtra(EXTRA_PSK) ?: ""
+                val protocol =
+                    if (intent.getStringExtra(EXTRA_PROTOCOL) == VpnContract.PROTOCOL_PPTP) {
+                        VpnContract.PROTOCOL_PPTP
+                    } else {
+                        VpnContract.PROTOCOL_L2TP
+                    }
                 val dnsAutomatic = intent.getBooleanExtra(EXTRA_DNS_AUTOMATIC, true)
                 val dnsServers = manualDnsServersFromIntent(intent)
                 val tunMtu = sanitizeMtu(intent.getIntExtra(EXTRA_MTU, DEFAULT_TUN_MTU))
@@ -339,7 +346,7 @@ class TunnelVpnService : VpnService() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$tunMtu splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$tunMtu splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
                 )
                 // TUN establish() can block; do not hold up onStartCommand after startForeground.
                 val startupThread =
@@ -351,6 +358,7 @@ class TunnelVpnService : VpnService() {
                                 user,
                                 password,
                                 psk,
+                                protocol,
                                 dnsAutomatic,
                                 dnsServers,
                                 tunMtu,
@@ -616,6 +624,7 @@ class TunnelVpnService : VpnService() {
         user: String,
         password: String,
         psk: String,
+        protocol: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         tunMtu: Int,
@@ -643,7 +652,12 @@ class TunnelVpnService : VpnService() {
             connectedEmitted.set(false)
             activeProxyConfig = proxyConfig
             currentTunnelState = VpnContract.TUNNEL_CONNECTING
-            currentTunnelDetail = "Negotiating IKE/L2TP/PPP..."
+            currentTunnelDetail =
+                if (protocol == VpnContract.PROTOCOL_PPTP) {
+                    "Negotiating PPTP/GRE/PPP..."
+                } else {
+                    "Negotiating IKE/L2TP/PPP..."
+                }
 
             val requestedInclusivePkgs =
                 requestedInclusivePackages(
@@ -688,7 +702,7 @@ class TunnelVpnService : VpnService() {
             VpnTunnelEvents.emitEngineLog(
                 Log.INFO,
                 TAG,
-                "${prefixAttempt(attemptId)}Starting native negotiation (IKE/L2TP/PPP)",
+                "${prefixAttempt(attemptId)}Starting native negotiation (${if (protocol == VpnContract.PROTOCOL_PPTP) "PPTP/GRE/PPP" else "IKE/L2TP/PPP"})",
             )
             nativeOwnerAcquired =
                 NativeTunnelSessions.shared.acquire(
@@ -790,6 +804,7 @@ class TunnelVpnService : VpnService() {
                         user = user,
                         password = password,
                         psk = psk,
+                        protocol = protocol,
                         dnsAutomatic = dnsAutomatic,
                         dnsServers = dnsServers,
                         tunMtu = tunMtu,
@@ -902,6 +917,7 @@ class TunnelVpnService : VpnService() {
         user: String,
         password: String,
         psk: String,
+        protocol: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         tunMtu: Int,
@@ -912,6 +928,10 @@ class TunnelVpnService : VpnService() {
         monitor: ActiveNetworkMonitor,
     ): AttemptResult {
         VpnBridge.nativeSetSocketProtectionEnabled(true)
+        if (protocol == VpnContract.PROTOCOL_PPTP) {
+            val helperPath = File(applicationInfo.nativeLibraryDir, PPTP_GRE_HELPER_LIB_NAME).absolutePath
+            VpnBridge.nativeSetPptpRuntimeConfig(helperPath, monitor.activeInterfaceName().orEmpty())
+        }
         val negotiatedClientIp = IntArray(4)
         val negotiatedPrimaryDns = IntArray(4)
         val negotiatedSecondaryDns = IntArray(4)
@@ -922,6 +942,7 @@ class TunnelVpnService : VpnService() {
                 password,
                 psk,
                 tunMtu,
+                VpnBridge.protocolCode(protocol),
                 negotiatedClientIp,
                 negotiatedPrimaryDns,
                 negotiatedSecondaryDns,
@@ -1430,6 +1451,11 @@ class TunnelVpnService : VpnService() {
             2 -> "L2TP handshake failed."
             3 -> "PPP negotiation failed."
             4 -> "Tunnel poll I/O error."
+            5 -> "PPTP control handshake failed."
+            6 -> "Root (su) is not available on this device. PPTP requires superuser access."
+            7 -> "Superuser (root) permission was denied. Grant root access to TunnelForge to use PPTP."
+            8 -> "Failed to open raw GRE socket for PPTP."
+            9 -> "PPTP MPPE encryption negotiation failed."
             10 -> "Invalid tunnel arguments from the app."
             11 -> "Proxy transport is not implemented yet."
             12 -> "Tunnel stopped"
@@ -1459,6 +1485,7 @@ class TunnelVpnService : VpnService() {
         const val EXTRA_USER = "user"
         const val EXTRA_PASSWORD = "password"
         const val EXTRA_PSK = "psk"
+        const val EXTRA_PROTOCOL = "protocol"
         const val EXTRA_DNS_AUTOMATIC = "dnsAutomatic"
         const val EXTRA_DNS_SERVER_1_HOST = "dnsServer1Host"
         const val EXTRA_DNS_SERVER_1_PROTOCOL = "dnsServer1Protocol"
@@ -1487,6 +1514,7 @@ class TunnelVpnService : VpnService() {
         private const val BLOCKING_TUN_IPV6 = "fd00:7466::2"
         internal const val MANUAL_DNS_VIRTUAL_IPV4 = "198.18.0.1"
         internal const val DEFAULT_NATIVE_EXIT_STOPPED = 12
+        internal const val PPTP_GRE_HELPER_LIB_NAME = "libpptp_gre_helper.so"
 
         fun sanitizeMtu(value: Int): Int = value.coerceIn(MIN_TUN_MTU, MAX_TUN_MTU)
 

@@ -411,9 +411,14 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           : request.dnsServers
                 .map((entry) => '${entry.host}[${entry.protocol.shortLabel}]')
                 .join(', ');
+      final pskSummary = request.protocol.isPptp
+          ? 'n/a (PPTP)'
+          : (request.psk.isEmpty
+                ? 'off (cleartext L2TP if server allows)'
+                : 'on');
       _logDebug(
-        'Profile: server=$host user=${request.user.isEmpty ? '(empty)' : request.user} dns=$dnsLog mtu=${request.mtu} '
-        'psk=${request.psk.isEmpty ? 'off (cleartext L2TP if server allows)' : 'on'} '
+        'Profile: protocol=${request.protocol.jsonValue} server=$host user=${request.user.isEmpty ? '(empty)' : request.user} dns=$dnsLog mtu=${request.mtu} '
+        'psk=$pskSummary '
         'mode=${request.connectionMode.jsonValue} splitTunnelEnabled=${splitTunnelSettings.enabled} splitTunnelMode=${splitTunnelSettings.mode.jsonValue} '
         'inclusiveApps=${splitTunnelSettings.inclusivePackages.length} exclusiveApps=${splitTunnelSettings.exclusivePackages.length} '
         'http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort} lan=${request.proxySettings.allowLanConnections ? 'on' : 'off'} '
@@ -427,7 +432,8 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           server: request.server,
           user: request.user,
           password: request.password,
-          psk: request.psk,
+          psk: request.protocol.isPptp ? '' : request.psk,
+          protocol: request.protocol,
           dnsAutomatic: request.dnsAutomatic,
           dnsServers: request.dnsServers,
           mtu: request.mtu,

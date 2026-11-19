@@ -5,11 +5,19 @@ import androidx.annotation.Keep
 /** JNI `tunnel_engine`. TUN fd owned by [TunnelVpnService] (do not close from native). UDP: [TunnelVpnService.protectSocketFd] before I/O. */
 @Keep
 object VpnBridge {
+    const val PROTOCOL_L2TP = 0
+    const val PROTOCOL_PPTP = 1
+
     const val EXIT_OK = 0
     const val EXIT_IKE_FAILED = 1
     const val EXIT_L2TP_FAILED = 2
     const val EXIT_PPP_FAILED = 3
     const val EXIT_POLL_ERROR = 4
+    const val EXIT_PPTP_FAILED = 5
+    const val EXIT_ROOT_UNAVAILABLE = 6
+    const val EXIT_ROOT_DENIED = 7
+    const val EXIT_GRE_SOCKET_FAILED = 8
+    const val EXIT_MPPE_FAILED = 9
     const val EXIT_BAD_ARGS = 10
     const val EXIT_PROXY_NOT_IMPLEMENTED = 11
     const val EXIT_STOPPED = 12
@@ -17,12 +25,23 @@ object VpnBridge {
     const val EXIT_PEER_UNREACHABLE = 14
     const val EXIT_PEER_CLOSED = 15
 
+    fun protocolCode(protocol: String): Int =
+        if (protocol == VpnContract.PROTOCOL_PPTP) PROTOCOL_PPTP else PROTOCOL_L2TP
+
     init {
         System.loadLibrary("tunnel_engine")
     }
 
     @JvmStatic
-    external fun nativeRunTunnel(tunFd: Int, server: String, user: String, password: String, psk: String, tunMtu: Int): Int
+    external fun nativeRunTunnel(
+        tunFd: Int,
+        server: String,
+        user: String,
+        password: String,
+        psk: String,
+        tunMtu: Int,
+        protocol: Int,
+    ): Int
 
     /**
      * On success, fills [outClientIpv4] with four octets 0–255 (PPP IPCP local IPv4) when non-null and length ≥ 4.
@@ -34,6 +53,7 @@ object VpnBridge {
         password: String,
         psk: String,
         tunMtu: Int,
+        protocol: Int,
         outClientIpv4: IntArray?,
         outPrimaryDnsIpv4: IntArray?,
         outSecondaryDnsIpv4: IntArray?,
@@ -41,6 +61,9 @@ object VpnBridge {
 
     @JvmStatic
     external fun nativeSetSocketProtectionEnabled(enabled: Boolean)
+
+    @JvmStatic
+    external fun nativeSetPptpRuntimeConfig(helperPath: String, bindInterface: String)
 
     @JvmStatic
     external fun nativeFailure(): IntArray
@@ -54,6 +77,9 @@ object VpnBridge {
             3 -> "l2tp-cdn"
             4 -> "chap"
             5 -> "pap"
+            6 -> "pptp-ctrl"
+            7 -> "pptp-call"
+            8 -> "pptp-cdn"
             else -> if (exitCode != null) "engine" else return null
         }
         return mapOf(

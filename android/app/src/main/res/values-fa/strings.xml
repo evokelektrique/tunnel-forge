@@ -67,7 +67,14 @@
     <string name="tunnel_reason_engine_2">دست‌دهی L2TP ناموفق بود.</string>
     <string name="tunnel_reason_engine_3">مذاکره PPP ناموفق بود.</string>
     <string name="tunnel_reason_engine_4">خطای ورودی/خروجی تونل.</string>
+    <string name="tunnel_reason_engine_5">دست‌دهی کنترلی PPTP ناموفق بود.</string>
+    <string name="tunnel_reason_engine_6">دسترسی روت (su) در این دستگاه وجود ندارد. PPTP به دسترسی ابرکاربر نیاز دارد.</string>
+    <string name="tunnel_reason_engine_7">دسترسی روت (ابرکاربر) رد شد. برای استفاده از PPTP به TunnelForge مجوز روت بدهید.</string>
+    <string name="tunnel_reason_engine_8">باز کردن سوکت خام GRE برای PPTP ناموفق بود.</string>
+    <string name="tunnel_reason_engine_9">مذاکره رمزگذاری MPPE در PPTP ناموفق بود.</string>
     <string name="tunnel_reason_engine_10">آرگومان‌های تونل از طرف برنامه نامعتبر است.</string>
+    <string name="tunnel_reason_pptp_ctrl">اتصال کنترلی PPTP رد شد (کد %1$d).</string>
+    <string name="tunnel_reason_pptp_call">تماس خروجی PPTP رد شد (کد %1$d).</string>
     <string name="tunnel_reason_engine_11">انتقال پروکسی هنوز پیاده‌سازی نشده است.</string>
     <string name="tunnel_reason_engine_13">اتصال شبکه قطع شد.</string>
     <string name="tunnel_reason_engine_14">سرور وی‌پی‌ان دیگر پاسخ نمی‌دهد.</string>

@@ -86,6 +86,7 @@ void main() {
         displayName: 'Beta',
         server: 'beta.example',
         user: 'bob',
+        protocol: TunnelProtocol.pptp,
       ),
     ];
     SharedPreferences.setMockInitialValues({
@@ -210,6 +211,19 @@ void main() {
         (syncCalls.last.arguments as Map)[VpnContract.argServer],
         'beta.example',
       );
+      expect(
+        (syncCalls.last.arguments as Map)[VpnContract.argProtocol],
+        VpnContract.protocolPptp,
+      );
+
+      // Active profile card shows PPTP protocol badge.
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('active_profile_protocol_badge')),
+          matching: find.text('PPTP'),
+        ),
+        findsOneWidget,
+      );
 
       // Immediately triggered reconnect with Beta (p2).
       final connectCalls = vpnCalls
@@ -219,6 +233,8 @@ void main() {
       final secondArgs = connectCalls.last.arguments as Map;
       expect(secondArgs[VpnContract.argServer], 'beta.example');
       expect(secondArgs[VpnContract.argProfileName], 'Beta');
+      expect(secondArgs[VpnContract.argProtocol], VpnContract.protocolPptp);
+      expect(secondArgs[VpnContract.argPsk], isEmpty);
       expect(secondArgs[VpnContract.argAttemptId], isNot(firstAttemptId));
     },
   );

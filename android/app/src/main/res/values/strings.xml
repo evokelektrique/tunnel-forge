@@ -75,7 +75,14 @@
     <string name="tunnel_reason_engine_2">L2TP handshake failed.</string>
     <string name="tunnel_reason_engine_3">PPP negotiation failed.</string>
     <string name="tunnel_reason_engine_4">Tunnel poll I/O error.</string>
+    <string name="tunnel_reason_engine_5">PPTP control handshake failed.</string>
+    <string name="tunnel_reason_engine_6">Root (su) is not available on this device. PPTP requires superuser access.</string>
+    <string name="tunnel_reason_engine_7">Superuser (root) permission was denied. Grant root access to TunnelForge to use PPTP.</string>
+    <string name="tunnel_reason_engine_8">Failed to open raw GRE socket for PPTP.</string>
+    <string name="tunnel_reason_engine_9">PPTP MPPE encryption negotiation failed.</string>
     <string name="tunnel_reason_engine_10">Invalid tunnel arguments from the app.</string>
+    <string name="tunnel_reason_pptp_ctrl">PPTP control connection rejected (code %1$d).</string>
+    <string name="tunnel_reason_pptp_call">PPTP outgoing call rejected (code %1$d).</string>
     <string name="tunnel_reason_engine_11">Proxy transport is not implemented yet.</string>
     <string name="tunnel_reason_engine_13">Network connection lost.</string>
     <string name="tunnel_reason_engine_14">VPN server stopped responding.</string>

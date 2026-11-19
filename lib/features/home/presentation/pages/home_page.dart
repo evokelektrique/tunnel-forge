@@ -215,6 +215,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
             user: row.profile.user,
             password: row.password,
             psk: row.psk,
+            protocol: row.profile.protocol,
             secretsMissing: row.secretsMissing,
             dnsAutomatic: row.profile.dnsAutomatic,
             dnsServers: row.profile.dnsAutomatic
@@ -545,6 +546,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       user: profile.user,
       password: row.password,
       psk: row.psk,
+      protocol: profile.protocol,
       dnsAutomatic: profile.dnsAutomatic,
       dnsServers: dnsServers,
       mtu: profile.mtu,
@@ -920,6 +922,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                       profilesLoading: profilesState.loading,
                       profileSummaryTitle: profileSummaryTitle,
                       profileSummarySubtitle: profileSummarySubtitle,
+                      activeProfileProtocol: activeProfile?.protocol,
                       onOpenProfilePicker: _openProfilePicker,
                       busy: tunnelState.busy,
                       tunnelUp: tunnelState.tunnelUp,

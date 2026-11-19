@@ -125,8 +125,32 @@ void main() {
       await VpnClient().connect(server: 'x.example');
 
       final args = Map<Object?, Object?>.from(capturedCall?.arguments as Map);
+      expect(args[VpnContract.argProtocol], VpnContract.protocolL2tp);
       expect(args[VpnContract.argDnsAutomatic], isTrue);
       expect(args[VpnContract.argDnsServers], isEmpty);
+    });
+
+    test('sends pptp protocol and clears psk when connecting PPTP', () async {
+      MethodCall? capturedCall;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (
+            call,
+          ) async {
+            capturedCall = call;
+            return null;
+          });
+
+      await VpnClient().connect(
+        server: 'pptp.example',
+        protocol: TunnelProtocol.pptp,
+        user: 'alice',
+        password: 'pw',
+        psk: 'ignored',
+      );
+
+      final args = Map<Object?, Object?>.from(capturedCall?.arguments as Map);
+      expect(args[VpnContract.argProtocol], VpnContract.protocolPptp);
+      expect(args[VpnContract.argPsk], isEmpty);
     });
   });
 }

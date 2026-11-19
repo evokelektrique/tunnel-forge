@@ -132,3 +132,21 @@ int ppp_mschapv2_response_value(const char *username, const char *password, cons
   value49_out[48] = 0;
   return 0;
 }
+
+int ppp_mschapv2_nt_password_hash_hash(const char *password, uint8_t hash_hash_out[16]) {
+  if (password == NULL || hash_hash_out == NULL)
+    return -1;
+  uint8_t phash[16];
+  if (nt_password_hash(password, phash) != 0)
+    return -1;
+  mbedtls_md4_context ctx;
+  mbedtls_md4_init(&ctx);
+  int rc = -1;
+  if (mbedtls_md4_starts_ret(&ctx) == 0 && mbedtls_md4_update_ret(&ctx, phash, sizeof(phash)) == 0 &&
+      mbedtls_md4_finish_ret(&ctx, hash_hash_out) == 0) {
+    rc = 0;
+  }
+  mbedtls_md4_free(&ctx);
+  memset(phash, 0, sizeof(phash));
+  return rc;
+}

@@ -18,6 +18,12 @@
 #define NAT_T_PORT 4500
 /** Classic L2TP data channel port (inner UDP in ESP transport mode). */
 #define L2TP_PORT 1701
+/** PPTP control channel port (RFC 2637 TCP). */
+#define PPTP_CTRL_PORT 1723
+
+/** Tunnel protocol selector passed from Kotlin/JNI. */
+#define TUNNEL_PROTOCOL_L2TP 0
+#define TUNNEL_PROTOCOL_PPTP 1
 
 /** RFC 3948 four-byte prefix value before ISAKMP on UDP 4500 (zero = non-ESP / IKE). */
 #define ESP_UDP_NON_ESP_MARKER 0u
@@ -28,6 +34,11 @@
 #define TUNNEL_EXIT_L2TP_FAILED 2
 #define TUNNEL_EXIT_PPP_FAILED 3
 #define TUNNEL_EXIT_POLL_ERROR 4
+#define TUNNEL_EXIT_PPTP_FAILED 5
+#define TUNNEL_EXIT_ROOT_UNAVAILABLE 6
+#define TUNNEL_EXIT_ROOT_DENIED 7
+#define TUNNEL_EXIT_GRE_SOCKET_FAILED 8
+#define TUNNEL_EXIT_MPPE_FAILED 9
 #define TUNNEL_EXIT_BAD_ARGS 10
 #define TUNNEL_EXIT_PROXY_NOT_IMPLEMENTED 11
 #define TUNNEL_EXIT_STOPPED 12
@@ -35,15 +46,28 @@
 #define TUNNEL_EXIT_PEER_UNREACHABLE 14
 #define TUNNEL_EXIT_PEER_CLOSED 15
 
+/** Structured failure namespaces for tunnel_set_failure(). */
+#define TUNNEL_FAILURE_MSCHAP 1
+#define TUNNEL_FAILURE_L2TP_STOPCCN 2
+#define TUNNEL_FAILURE_L2TP_CDN 3
+#define TUNNEL_FAILURE_CHAP 4
+#define TUNNEL_FAILURE_PAP 5
+#define TUNNEL_FAILURE_PPTP_CTRL 6
+#define TUNNEL_FAILURE_PPTP_CALL 7
+#define TUNNEL_FAILURE_PPTP_CDN 8
+
 /** VpnService.protect(fd) when protection is enabled; no-op if disabled or JNI missing. */
 int util_protect_fd(int fd);
 void engine_set_socket_protection_enabled(int enabled);
+int engine_is_socket_protection_enabled(void);
+void engine_set_pptp_runtime_config(const char *helper_path, const char *bind_iface);
 
 int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char *password, const char *psk,
-                    int tun_mtu);
+                    int tun_mtu, int protocol);
 
-/** Phase 1: IKE + L2TP + PPP negotiation (no TUN fd needed). Call before VPN establish(). */
-int tunnel_negotiate(const char *server, const char *user, const char *password, const char *psk, int tun_mtu);
+/** Phase 1: L2TP (IKE+L2TP+PPP) or PPTP (TCP 1723+GRE+PPP/MPPE) negotiation (no TUN fd needed). */
+int tunnel_negotiate(const char *server, const char *user, const char *password, const char *psk, int tun_mtu,
+                     int protocol);
 
 /* Worker-local failure: kind 1=MS-CHAP, 2=StopCCN, 3=CDN, 4=CHAP, 5=PAP.
  * No peer-provided text or credentials cross this diagnostic boundary. */

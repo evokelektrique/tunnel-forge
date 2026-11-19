@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import java.util.concurrent.ConcurrentHashMap
 
 internal enum class NetworkTransitionEvent {
     NONE,
@@ -31,6 +32,9 @@ internal class PhysicalNetworkTracker {
 
     @Synchronized
     fun hasUsableNetwork(): Boolean = networks.isNotEmpty()
+
+    @Synchronized
+    fun preferredHandle(): Long? = activeHandle ?: selectPreferredHandle()
 
     @Synchronized
     fun markConnected() {
@@ -124,12 +128,14 @@ internal class ActiveNetworkMonitor(
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val tracker = PhysicalNetworkTracker()
+    private val knownNetworks = ConcurrentHashMap<Long, Network>()
     @Volatile
     private var registered = false
 
     private val callback =
         object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                knownNetworks[network.networkHandle] = network
                 val tier = tierFor(connectivityManager.getNetworkCapabilities(network))
                 dispatch(tracker.onNetworkAvailable(network.networkHandle, tier))
             }
@@ -143,11 +149,13 @@ internal class ActiveNetworkMonitor(
                 ) {
                     return
                 }
+                knownNetworks[network.networkHandle] = network
                 val tier = tierFor(networkCapabilities)
                 dispatch(tracker.onCapabilitiesChanged(network.networkHandle, tier))
             }
 
             override fun onLost(network: Network) {
+                knownNetworks.remove(network.networkHandle)
                 dispatch(tracker.onNetworkLost(network.networkHandle))
             }
 
@@ -165,6 +173,7 @@ internal class ActiveNetworkMonitor(
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             ) {
+                knownNetworks[activeNetwork.networkHandle] = activeNetwork
                 tracker.onNetworkAvailable(activeNetwork.networkHandle, tierFor(caps))
             }
         }
@@ -175,6 +184,16 @@ internal class ActiveNetworkMonitor(
                 .build()
         connectivityManager.registerNetworkCallback(request, callback)
         registered = true
+    }
+
+    fun activeInterfaceName(): String? {
+        val preferred = tracker.preferredHandle()?.let { knownNetworks[it] }
+        val network =
+            preferred ?: connectivityManager.activeNetwork?.takeIf { candidate ->
+                val caps = connectivityManager.getNetworkCapabilities(candidate)
+                caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            }
+        return network?.let { connectivityManager.getLinkProperties(it)?.interfaceName }?.takeIf { it.isNotBlank() }
     }
 
     override fun hasUsableNetwork(): Boolean = tracker.hasUsableNetwork()
@@ -190,6 +209,7 @@ internal class ActiveNetworkMonitor(
     override fun stop() {
         if (!registered) return
         registered = false
+        knownNetworks.clear()
         try {
             connectivityManager.unregisterNetworkCallback(callback)
         } catch (_: IllegalArgumentException) {

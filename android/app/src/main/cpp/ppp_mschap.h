@@ -20,6 +20,9 @@ typedef struct {
 int ppp_mschapv2_response_value(const char *username, const char *password, const uint8_t auth_challenge[16],
                                 uint8_t peer_challenge[16], uint8_t value49_out[49]);
 
+/** RFC 2759 NtPasswordHashHash = MD4(MD4(UTF16LE(password))) for RFC 3079 MPPE key derivation. */
+int ppp_mschapv2_nt_password_hash_hash(const char *password, uint8_t hash_hash_out[16]);
+
 /** Consume ASCII digits at *idx; @return 0 and set *out when at least one digit read. */
 static inline int ppp_mschapv2_parse_uint_token(const uint8_t *p, size_t len, size_t *idx, int *out) {
   int value = 0;

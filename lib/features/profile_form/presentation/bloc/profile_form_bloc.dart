@@ -33,6 +33,15 @@ final class ProfileFormDisplayNameChanged extends ProfileFormEvent {
   List<Object?> get props => [value];
 }
 
+final class ProfileFormProtocolChanged extends ProfileFormEvent {
+  const ProfileFormProtocolChanged(this.value);
+
+  final TunnelProtocol value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
 final class ProfileFormServerChanged extends ProfileFormEvent {
   const ProfileFormServerChanged(this.value);
 
@@ -138,6 +147,7 @@ class ProfileFormState extends Equatable {
     this.saving = false,
     this.loadError,
     this.displayName = '',
+    this.protocol = TunnelProtocol.l2tp,
     this.server = '',
     this.user = '',
     this.password = '',
@@ -160,6 +170,7 @@ class ProfileFormState extends Equatable {
   final bool saving;
   final String? loadError;
   final String displayName;
+  final TunnelProtocol protocol;
   final String server;
   final String user;
   final String password;
@@ -189,6 +200,7 @@ class ProfileFormState extends Equatable {
     String? loadError,
     bool clearLoadError = false,
     String? displayName,
+    TunnelProtocol? protocol,
     String? server,
     String? user,
     String? password,
@@ -212,6 +224,7 @@ class ProfileFormState extends Equatable {
       saving: saving ?? this.saving,
       loadError: clearLoadError ? null : (loadError ?? this.loadError),
       displayName: displayName ?? this.displayName,
+      protocol: protocol ?? this.protocol,
       server: server ?? this.server,
       user: user ?? this.user,
       password: password ?? this.password,
@@ -238,6 +251,7 @@ class ProfileFormState extends Equatable {
     saving,
     loadError,
     displayName,
+    protocol,
     server,
     user,
     password,
@@ -280,6 +294,10 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     on<ProfileFormDisplayNameChanged>(
       (event, emit) =>
           emit(state.copyWith(displayName: event.value, saved: false)),
+    );
+    on<ProfileFormProtocolChanged>(
+      (event, emit) =>
+          emit(state.copyWith(protocol: event.value, saved: false)),
     );
     on<ProfileFormServerChanged>(
       (event, emit) => emit(state.copyWith(server: event.value, saved: false)),
@@ -334,6 +352,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     _log(
       LogLevel.debug,
       'Profile $action$suffix profile=${profile.id} '
+      'protocol=${profile.protocol.jsonValue} '
       'name=${quoteLogValue(profile.displayName)} server=${profile.server} '
       'dnsAuto=${profile.dnsAutomatic} mtu=${profile.mtu}',
     );
@@ -357,6 +376,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           loading: false,
           clearLoadError: true,
           displayName: defaultName,
+          protocol: TunnelProtocol.l2tp,
           server: 'vpn.example.com',
           user: '',
           password: '',
@@ -391,6 +411,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         loading: false,
         clearLoadError: true,
         displayName: profile.displayName,
+        protocol: profile.protocol,
         server: profile.server,
         user: profile.user,
         password: row.password,
@@ -481,6 +502,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       displayName: resolvedDisplayName,
       server: serverTrim,
       user: state.user,
+      protocol: state.protocol,
       dnsAutomatic: state.dnsAutomatic,
       dns1Host: Profile.normalizeDnsServerForProtocol(
         state.dns1,
@@ -528,7 +550,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       await _profilesRepository.upsertProfile(
         profile,
         password: state.password,
-        psk: state.psk,
+        psk: state.protocol.isPptp ? '' : state.psk,
       );
       _logSaved(profile);
       emit(state.copyWith(saving: false, saved: true));
@@ -575,7 +597,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       await _profilesRepository.upsertProfile(
         profile,
         password: state.password,
-        psk: state.psk,
+        psk: state.protocol.isPptp ? '' : state.psk,
       );
       _logSaved(profile, afterReset: true);
       emit(state.copyWith(saving: false, saved: true));

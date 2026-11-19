@@ -586,6 +586,8 @@ void engine_notify_tunnel_ready(const char *detail) {
 
 void engine_set_socket_protection_enabled(int enabled) { g_socket_protection_enabled = enabled ? 1 : 0; }
 
+int engine_is_socket_protection_enabled(void) { return g_socket_protection_enabled ? 1 : 0; }
+
 int util_protect_fd(int fd) {
   if (!g_socket_protection_enabled) {
     return 0;

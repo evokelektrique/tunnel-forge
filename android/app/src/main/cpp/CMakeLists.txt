@@ -58,12 +58,28 @@ add_library(
   esp_udp.c
   l2tp_avps.c
   l2tp.c
+  pptp_gre.c
+  pptp_root.c
+  pptp_wire.c
+  pptp.c
   ppp_mschap.c
+  ppp_mppe.c
   ppp.c
+)
+
+add_executable(pptp_gre_helper pptp_gre_helper.c)
+set_target_properties(
+  pptp_gre_helper
+  PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+    PREFIX "lib"
+    OUTPUT_NAME "pptp_gre_helper"
+    SUFFIX ".so"
 )
 
 if(TUNNEL_FORGE_CLANG_TIDY)
   set_property(TARGET tunnel_engine PROPERTY C_CLANG_TIDY "${TUNNEL_FORGE_CLANG_TIDY_COMMAND}")
+  set_property(TARGET pptp_gre_helper PROPERTY C_CLANG_TIDY "${TUNNEL_FORGE_CLANG_TIDY_COMMAND}")
 endif()
 
 target_include_directories(

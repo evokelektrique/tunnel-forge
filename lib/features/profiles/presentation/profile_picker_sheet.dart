@@ -724,6 +724,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
             active: isActive,
             title: profile.displayName,
             subtitle: profile.server,
+            protocol: profile.protocol,
             onHoldTriggered: () => _enterMultiSelect(profile.id),
             onTap: () {
               if (isMultiSelect) {
@@ -983,6 +984,7 @@ class _HoldToSelectTile extends StatefulWidget {
     required this.active,
     required this.title,
     required this.subtitle,
+    required this.protocol,
     required this.onHoldTriggered,
     required this.onTap,
     this.trailing,
@@ -998,6 +1000,7 @@ class _HoldToSelectTile extends StatefulWidget {
   final bool active;
   final String title;
   final String subtitle;
+  final TunnelProtocol protocol;
   final VoidCallback onHoldTriggered;
   final VoidCallback onTap;
   final Widget? trailing;
@@ -1187,12 +1190,42 @@ class _HoldToSelectTileState extends State<_HoldToSelectTile>
                     onChanged: widget.enabled ? (_) => _handleTap() : null,
                   )
                 : null,
-            title: Text(
-              widget.title,
-              style: tt.titleSmall?.copyWith(
-                color: highlightTitle ? cs.primary : null,
-                fontWeight: highlightTitle ? FontWeight.w600 : null,
-              ),
+            title: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    widget.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: tt.titleSmall?.copyWith(
+                      color: highlightTitle ? cs.primary : null,
+                      fontWeight: highlightTitle ? FontWeight.w600 : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: widget.protocol.isPptp
+                        ? cs.secondaryContainer
+                        : cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    widget.protocol.shortLabel,
+                    style: tt.labelSmall?.copyWith(
+                      color: widget.protocol.isPptp
+                          ? cs.onSecondaryContainer
+                          : cs.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ),
             subtitle: Text(
               widget.subtitle,

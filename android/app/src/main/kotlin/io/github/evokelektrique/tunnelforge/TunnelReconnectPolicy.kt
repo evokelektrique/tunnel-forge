@@ -26,6 +26,8 @@ internal object TunnelReconnectPolicy {
 
     private val TERMINAL_AUTH_NAMESPACES = setOf("mschap", "chap", "pap")
     private val TERMINAL_STOPCCN_CODES = setOf(4, 5, 8)
+    private val TERMINAL_PPTP_CTRL_CODES = setOf(4, 5)
+    private const val PPTP_CALL_DO_NOT_ACCEPT = 7
     private const val CDN_ADMIN_DISCONNECT = 3
 
     fun backoffMsForAttempt(attemptIndex: Int): Long {
@@ -38,7 +40,11 @@ internal object TunnelReconnectPolicy {
         exitCode: Int,
         failure: Map<String, Any>?,
     ): Boolean {
-        if (exitCode == VpnBridge.EXIT_BAD_ARGS ||
+        if (exitCode == VpnBridge.EXIT_ROOT_UNAVAILABLE ||
+            exitCode == VpnBridge.EXIT_ROOT_DENIED ||
+            exitCode == VpnBridge.EXIT_GRE_SOCKET_FAILED ||
+            exitCode == VpnBridge.EXIT_MPPE_FAILED ||
+            exitCode == VpnBridge.EXIT_BAD_ARGS ||
             exitCode == VpnBridge.EXIT_PROXY_NOT_IMPLEMENTED ||
             exitCode == VpnBridge.EXIT_STOPPED ||
             exitCode == VpnBridge.EXIT_PEER_CLOSED
@@ -51,6 +57,9 @@ internal object TunnelReconnectPolicy {
             in TERMINAL_AUTH_NAMESPACES -> true
             "l2tp-stopccn" -> code in TERMINAL_STOPCCN_CODES
             "l2tp-cdn" -> code == CDN_ADMIN_DISCONNECT
+            "pptp-ctrl" -> code in TERMINAL_PPTP_CTRL_CODES
+            "pptp-call" -> code == PPTP_CALL_DO_NOT_ACCEPT
+            "pptp-cdn" -> code == CDN_ADMIN_DISCONNECT
             else -> false
         }
     }
@@ -66,7 +75,8 @@ internal object TunnelReconnectPolicy {
             hasUsableNetwork &&
             (exitCode == VpnBridge.EXIT_IKE_FAILED ||
                 exitCode == VpnBridge.EXIT_L2TP_FAILED ||
-                exitCode == VpnBridge.EXIT_PPP_FAILED)
+                exitCode == VpnBridge.EXIT_PPP_FAILED ||
+                exitCode == VpnBridge.EXIT_PPTP_FAILED)
         ) {
             return true
         }

@@ -10,6 +10,9 @@ void main() {
       'engine',
       'l2tp-stopccn',
       'l2tp-cdn',
+      'pptp-ctrl',
+      'pptp-call',
+      'pptp-cdn',
       'app',
     ]) {
       for (final code in [
@@ -17,6 +20,11 @@ void main() {
         '2',
         '3',
         '4',
+        '5',
+        '6',
+        '7',
+        '8',
+        '9',
         '10',
         '11',
         '646',
@@ -121,4 +129,20 @@ void main() {
       expect(platformString.explanation, contains('Check the error details'));
     },
   );
+
+  test('PPTP and root engine failures resolve to specific guidance', () {
+    const noRoot = TunnelFailure(namespace: 'engine', code: '6');
+    const rootDenied = TunnelFailure(namespace: 'engine', code: '7');
+    const greFailed = TunnelFailure(namespace: 'engine', code: '8');
+    const mppeFailed = TunnelFailure(namespace: 'engine', code: '9');
+    const ctrlRejected = TunnelFailure(namespace: 'pptp-ctrl', code: '4');
+
+    expect(noRoot.label, 'Root access unavailable');
+    expect(noRoot.explanation, contains('su binary'));
+    expect(rootDenied.label, 'Root permission denied');
+    expect(rootDenied.explanation, contains('Magisk'));
+    expect(greFailed.label, 'GRE socket setup failed');
+    expect(mppeFailed.label, 'MPPE encryption failed');
+    expect(ctrlRejected.label, 'PPTP control connection rejected');
+  });
 }

@@ -15,7 +15,7 @@ internal object TunnelDisconnectNotification {
     private const val CHANNEL_ID = "tunnel_forge_alerts"
     private const val NOTIFICATION_ID = 7103
     private const val RECONNECT_ALERT_NOTIFICATION_ID = 7104
-    private val PEER_TEARDOWN_NAMESPACES = setOf("l2tp-stopccn", "l2tp-cdn")
+    private val PEER_TEARDOWN_NAMESPACES = setOf("l2tp-stopccn", "l2tp-cdn", "pptp-cdn")
 
     private val MSCHAP_REASONS = mapOf(
         646 to "Restricted logon hours.",
@@ -72,6 +72,11 @@ internal object TunnelDisconnectNotification {
         2 to "L2TP handshake failed.",
         3 to "PPP negotiation failed.",
         4 to "Tunnel poll I/O error.",
+        5 to "PPTP control handshake failed.",
+        6 to "Root (su) is not available on this device. PPTP requires superuser access.",
+        7 to "Superuser (root) permission was denied. Grant root access to TunnelForge to use PPTP.",
+        8 to "Failed to open raw GRE socket for PPTP.",
+        9 to "PPTP MPPE encryption negotiation failed.",
         10 to "Invalid tunnel arguments from the app.",
         11 to "Proxy transport is not implemented yet.",
         13 to "Network connection lost.",
@@ -146,6 +151,9 @@ internal object TunnelDisconnectNotification {
                 "pap" -> return if (code == 3) "Authentication failed." else "PAP authentication failed ($code)."
                 "l2tp-stopccn" -> return formatL2tpReason(STOPCCN_REASONS[code] ?: serverClosedText, code, generalError)
                 "l2tp-cdn" -> return formatL2tpReason(CDN_REASONS[code] ?: serverClosedText, code, generalError)
+                "pptp-ctrl" -> return "PPTP control connection rejected (code $code)."
+                "pptp-call" -> return "PPTP outgoing call rejected (code $code)."
+                "pptp-cdn" -> return serverClosedText
                 "engine" -> return ENGINE_REASONS[code]
                 VpnAndroidFailure.NAMESPACE -> return ANDROID_REASONS[code]
             }
@@ -241,6 +249,9 @@ internal object TunnelDisconnectNotification {
                         }
                     return formatLocalizedL2tpReason(resContext, base, code, generalError)
                 }
+                "pptp-ctrl" -> return resContext.getString(R.string.tunnel_reason_pptp_ctrl, code)
+                "pptp-call" -> return resContext.getString(R.string.tunnel_reason_pptp_call, code)
+                "pptp-cdn" -> return resContext.getString(R.string.vpn_notification_disconnected_server)
                 "engine" -> return localizedEngineReason(resContext, code)
                 VpnAndroidFailure.NAMESPACE -> {
                     val resId =
@@ -270,6 +281,11 @@ internal object TunnelDisconnectNotification {
                 2 -> R.string.tunnel_reason_engine_2
                 3 -> R.string.tunnel_reason_engine_3
                 4 -> R.string.tunnel_reason_engine_4
+                5 -> R.string.tunnel_reason_engine_5
+                6 -> R.string.tunnel_reason_engine_6
+                7 -> R.string.tunnel_reason_engine_7
+                8 -> R.string.tunnel_reason_engine_8
+                9 -> R.string.tunnel_reason_engine_9
                 10 -> R.string.tunnel_reason_engine_10
                 11 -> R.string.tunnel_reason_engine_11
                 13 -> R.string.tunnel_reason_engine_13

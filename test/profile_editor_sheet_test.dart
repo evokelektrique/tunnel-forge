@@ -422,4 +422,59 @@ void main() {
       expect(find.text('Open'), findsOneWidget);
     },
   );
+
+  testWidgets('protocol dropdown switches L2TP and PPTP (root) and hides PSK', (
+    tester,
+  ) async {
+    final store = await buildStore();
+    const profile = Profile(
+      id: 'profile-protocol-toggle',
+      displayName: 'Branch',
+      server: 'vpn.example.com',
+      user: 'alice',
+      protocol: TunnelProtocol.l2tp,
+    );
+    await store.upsertProfile(profile, password: 'pw', psk: 'keep-me');
+
+    await pumpHost(tester, store: store, profileId: profile.id);
+
+    expect(find.byKey(const Key('protocol_dropdown')), findsOneWidget);
+    expect(find.text('L2TP'), findsOneWidget);
+    expect(find.text('IPsec PSK'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('protocol_dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('PPTP (root)').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('IPsec PSK'), findsNothing);
+
+    // Toggling back to L2TP before saving restores the in-memory PSK value.
+    await tester.tap(find.byKey(const Key('protocol_dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('L2TP').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('IPsec PSK'), findsOneWidget);
+    final pskField = tester.widget<TextField>(
+      find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.labelText == 'IPsec PSK',
+      ),
+    );
+    expect(pskField.controller?.text, 'keep-me');
+
+    // Switch back to PPTP (root) and save: protocol persists as PPTP with empty PSK.
+    await tester.tap(find.byKey(const Key('protocol_dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('PPTP (root)').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    final savedRow = await store.loadProfileWithSecrets(profile.id);
+    expect(savedRow, isNotNull);
+    expect(savedRow!.profile.protocol, TunnelProtocol.pptp);
+    expect(savedRow.psk, isEmpty);
+    expect(savedRow.secretsMissing, isFalse);
+  });
 }

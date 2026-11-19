@@ -448,7 +448,10 @@ class ProfileStore {
       }
       // Write secrets before the profile list so a failed secret write never leaves a secretless profile.
       await _secrets.write(_passwordKey(profile.id), password);
-      await _secrets.write(_pskKey(profile.id), psk);
+      await _secrets.write(
+        _pskKey(profile.id),
+        profile.protocol.isPptp ? '' : psk,
+      );
       await _saveProfileList(list);
       await setLastProfileId(profile.id);
     });
@@ -532,7 +535,10 @@ class ProfileStore {
         );
         usedNames.add(profile.displayName.trim().toLowerCase());
         await _secrets.write(_passwordKey(profile.id), envelope.password);
-        await _secrets.write(_pskKey(profile.id), envelope.psk);
+        await _secrets.write(
+          _pskKey(profile.id),
+          profile.protocol.isPptp ? '' : envelope.psk,
+        );
         list.add(profile);
         imported.add(profile);
       }
@@ -601,6 +607,14 @@ class ProfileStore {
     }
     if (profile == null) return null;
     final passwordRaw = await _readSecret(_passwordKey(id), id, 'password');
+    if (profile.protocol.isPptp) {
+      return (
+        profile: profile,
+        password: passwordRaw ?? '',
+        psk: '',
+        secretsMissing: passwordRaw == null,
+      );
+    }
     final pskRaw = await _readSecret(_pskKey(id), id, 'psk');
     return (
       profile: profile,

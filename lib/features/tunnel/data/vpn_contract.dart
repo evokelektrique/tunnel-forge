@@ -35,6 +35,7 @@ abstract final class VpnContract {
   static const String argUser = 'user';
   static const String argPassword = 'password';
   static const String argPsk = 'psk';
+  static const String argProtocol = 'protocol';
   static const String argDnsAutomatic = 'dnsAutomatic';
   static const String argDnsServers = 'dnsServers';
   static const String argDnsServerHost = 'host';
@@ -62,6 +63,8 @@ abstract final class VpnContract {
 
   static const String modeVpnTunnel = 'vpnTunnel';
   static const String modeProxyOnly = 'proxyOnly';
+  static const String protocolL2tp = 'l2tp';
+  static const String protocolPptp = 'pptp';
   static const String splitTunnelModeInclusive = 'inclusive';
   static const String splitTunnelModeExclusive = 'exclusive';
 

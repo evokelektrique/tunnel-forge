@@ -23,7 +23,7 @@ static void throw_io_exception(JNIEnv *env, const char *message) {
 void tunnel_loop_stop(void);
 
 static jint native_run_tunnel(JNIEnv *env, jclass clazz, jint tun_fd, jstring jserver, jstring juser, jstring jpassword,
-                              jstring jpsk, jint tun_mtu) {
+                              jstring jpsk, jint tun_mtu, jint protocol) {
   (void)clazz;
   jint out = (jint)TUNNEL_EXIT_BAD_ARGS;
   const char *server = (*env)->GetStringUTFChars(env, jserver, NULL);
@@ -34,7 +34,7 @@ static jint native_run_tunnel(JNIEnv *env, jclass clazz, jint tun_fd, jstring js
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "nativeRunTunnel: null string");
     goto cleanup;
   }
-  out = (jint)tunnel_loop_run(tun_fd, server, user, password, psk, (int)tun_mtu);
+  out = (jint)tunnel_loop_run(tun_fd, server, user, password, psk, (int)tun_mtu, (int)protocol);
 
 cleanup:
   if (server != NULL)
@@ -49,7 +49,7 @@ cleanup:
 }
 
 static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring juser, jstring jpassword, jstring jpsk,
-                             jint tun_mtu, jintArray jout_client_ipv4, jintArray jout_primary_dns_ipv4,
+                             jint tun_mtu, jint protocol, jintArray jout_client_ipv4, jintArray jout_primary_dns_ipv4,
                              jintArray jout_secondary_dns_ipv4) {
   (void)clazz;
   jint out = (jint)TUNNEL_EXIT_BAD_ARGS;
@@ -61,7 +61,7 @@ static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "nativeNegotiate: null string");
     goto cleanup;
   }
-  out = (jint)tunnel_negotiate(server, user, password, psk, (int)tun_mtu);
+  out = (jint)tunnel_negotiate(server, user, password, psk, (int)tun_mtu, (int)protocol);
   if (out == (jint)TUNNEL_EXIT_OK && jout_client_ipv4 != NULL) {
     jsize alen = (*env)->GetArrayLength(env, jout_client_ipv4);
     if (alen >= 4) {
@@ -123,6 +123,17 @@ static void native_set_socket_protection_enabled(JNIEnv *env, jclass clazz, jboo
   (void)env;
   (void)clazz;
   engine_set_socket_protection_enabled(enabled ? 1 : 0);
+}
+
+static void native_set_pptp_runtime_config(JNIEnv *env, jclass clazz, jstring jhelper_path, jstring jbind_iface) {
+  (void)clazz;
+  const char *helper_path = jhelper_path != NULL ? (*env)->GetStringUTFChars(env, jhelper_path, NULL) : NULL;
+  const char *bind_iface = jbind_iface != NULL ? (*env)->GetStringUTFChars(env, jbind_iface, NULL) : NULL;
+  engine_set_pptp_runtime_config(helper_path, bind_iface);
+  if (helper_path != NULL)
+    (*env)->ReleaseStringUTFChars(env, jhelper_path, helper_path);
+  if (bind_iface != NULL)
+    (*env)->ReleaseStringUTFChars(env, jbind_iface, bind_iface);
 }
 
 static jint native_start_loop(JNIEnv *env, jclass clazz, jint tun_fd) {
@@ -411,12 +422,13 @@ static void native_stop_tunnel(JNIEnv *env, jclass clazz) {
 
 static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
-      {"nativeRunTunnel", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)I",
+      {"nativeRunTunnel", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)I",
        (void *)native_run_tunnel},
       {"nativeFailure", "()[I", (void *)native_failure},
-      {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I[I[I[I)I",
+      {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II[I[I[I)I",
        (void *)native_negotiate},
       {"nativeSetSocketProtectionEnabled", "(Z)V", (void *)native_set_socket_protection_enabled},
+      {"nativeSetPptpRuntimeConfig", "(Ljava/lang/String;Ljava/lang/String;)V", (void *)native_set_pptp_runtime_config},
       {"nativeStartLoop", "(I)I", (void *)native_start_loop},
       {"nativeStartProxyLoop", "()I", (void *)native_start_proxy_loop},
       {"nativeGvisorStart", "([II)I", (void *)native_gvisor_start},

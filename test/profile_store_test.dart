@@ -55,8 +55,27 @@ void main() {
       expect(p!.id, 'a1');
       expect(p.displayName, 'Office');
       expect(p.server, 'vpn.company.net');
+      expect(p.protocol, TunnelProtocol.l2tp);
       expect(p.mtu, Profile.defaultVpnMtu);
       expect(p.toJson().containsKey('routingMode'), isFalse);
+    });
+
+    test('parses and serializes pptp protocol cleanly', () {
+      final p = Profile.tryFromJson({
+        'id': 'p-pptp',
+        'displayName': 'Legacy PPTP',
+        'server': 'pptp.company.net',
+        'user': 'u',
+        'protocol': 'pptp',
+        'dnsAutomatic': true,
+        'dns1Host': '',
+        'dns1Protocol': 'dnsOverUdp',
+        'dns2Host': '',
+        'dns2Protocol': 'dnsOverUdp',
+      });
+      expect(p, isNotNull);
+      expect(p!.protocol, TunnelProtocol.pptp);
+      expect(p.toJson()['protocol'], 'pptp');
     });
 
     test('parses mtu and clamps', () {
@@ -769,5 +788,27 @@ void main() {
       expect(loaded.first.favorite, isTrue);
       expect(loaded.first.displayName, 'Two Updated');
     });
+
+    test(
+      'PPTP profile does not mark secretsMissing when psk secret is absent',
+      () async {
+        const pptp = Profile(
+          id: 'p-pptp',
+          displayName: 'PPTP Branch',
+          server: 'pptp.example',
+          user: 'alice',
+          protocol: TunnelProtocol.pptp,
+        );
+        await store.upsertProfile(pptp, password: 'pw', psk: 'ignored');
+        await secrets.delete(ProfileStore.pskKey('p-pptp'));
+
+        final row = await store.loadProfileWithSecrets('p-pptp');
+        expect(row, isNotNull);
+        expect(row!.profile.protocol, TunnelProtocol.pptp);
+        expect(row.password, 'pw');
+        expect(row.psk, isEmpty);
+        expect(row.secretsMissing, isFalse);
+      },
+    );
   });
 }
