@@ -47,7 +47,6 @@
   <a href="#development">Development</a> •
   <a href="#architecture--project-layout">Architecture</a> •
   <a href="#security--privacy">Security</a> •
-  <a href="#debugging">Debugging</a> •
   <a href="#feedback">Feedback</a> •
   <a href="#licensing">Licensing</a>
 </p>
@@ -160,24 +159,6 @@ make help
 flutter test --coverage
 ```
 
-### Local VPN Server
-
-The included [docker-compose.yml](docker-compose.yml) starts a local
-`hwdsl2/ipsec-vpn-server` setup for Linux hosts.
-
-1. Copy [.env.example](.env.example) to `.env`.
-2. Set `VPN_PUBLIC_IP` to the address your Android client can reach.
-3. Configure `VPN_IPSEC_PSK`, `VPN_USER`, and `VPN_PASSWORD`.
-4. Create a matching profile in the app.
-
-Start the server:
-
-```sh
-docker compose up -d
-```
-
-The VPN container reads only the `VPN_*` values from the root `.env`.
-
 ## Architecture & Project Layout
 
 TunnelForge is a Flutter app at the UI layer, but the VPN runtime is mostly Android-native. Flutter keeps the profile, settings, logs, and connection state, then talks to Kotlin through platform channels. Kotlin owns the Android `VpnService` and foreground service lifecycle, runs the Netty-based HTTP CONNECT/SOCKS5 proxy frontend, and hands tunnel work to native code. The C layer handles L2TP/IPsec and packet processing; proxy-only mode also uses a small Go/gVisor userspace networking module, built as a native shared library and loaded by the Android runtime.
@@ -191,7 +172,7 @@ Netty is the local proxy frontend. It accepts HTTP CONNECT and SOCKS5 clients wi
 | `android/app/src/main/cpp/` | Native L2TP/IPsec tunnel engine and packet handling |
 | `android/gvisor/` | Go/gVisor userspace networking used by proxy mode |
 | `fastlane/metadata/` | Store metadata, screenshots, and changelogs |
-| `tool/` | Release, versioning, and VPN diagnostic scripts |
+| `tool/` | Release, versioning, F-Droid, and native test scripts |
 
 ## Security & Privacy
 
@@ -199,24 +180,6 @@ Netty is the local proxy frontend. It accepts HTTP CONNECT and SOCKS5 clients wi
 - Debug logs stay local, and sensitive tokens are redacted before display or sharing.
 - No analytics or crash-reporting SDKs are included in this repo.
 - Review debug logs before sharing them in public issues.
-
-## Debugging
-
-General diagnostics:
-
-```sh
-sh tool/vpn_debug.sh check
-sh tool/vpn_debug.sh diag --iface wlo1 --client-ip 192.168.1.100
-sh tool/vpn_debug.sh capture --iface wlo1
-sh tool/vpn_debug.sh log --iface wlo1
-```
-
-Libreswan and container logs:
-
-```sh
-sh tool/vpn_debug.sh pluto-logs --container ipsec-vpn-server
-docker exec -it ipsec-vpn-server tail -f /var/log/auth.log
-```
 
 ## Feedback
 
