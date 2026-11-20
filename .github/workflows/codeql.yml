@@ -197,6 +197,9 @@ jobs:
             echo "sdk.dir=${android_sdk_root}"
           } > local.properties
 
+      - name: Install Android API 37
+        run: sdkmanager --install 'platforms;android-37.0'
+
       - name: Build Kotlin targets for CodeQL
         working-directory: android
         run: |

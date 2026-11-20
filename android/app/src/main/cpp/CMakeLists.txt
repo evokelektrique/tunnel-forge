@@ -14,32 +14,7 @@ if(TUNNEL_FORGE_CLANG_TIDY)
       "${CLANG_TIDY_COMMAND};--config-file=${CMAKE_CURRENT_LIST_DIR}/../../../../../.clang-tidy")
 endif()
 
-include(FetchContent)
-set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
-set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
-# mbedTLS 2.28.9 declares cmake_minimum_required < 3.5, which CMake 4.0+ rejects otherwise.
-if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
-  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-endif()
-if(POLICY CMP0135)
-  cmake_policy(SET CMP0135 NEW)
-endif()
-
-set(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR "" CACHE PATH "Use an existing mbedTLS source tree instead of downloading it")
-if(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR)
-  add_subdirectory("${TUNNEL_FORGE_MBEDTLS_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/mbedtls")
-  set(mbedtls_SOURCE_DIR "${TUNNEL_FORGE_MBEDTLS_SOURCE_DIR}")
-else()
-  FetchContent_Declare(
-    mbedtls
-    URL https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v2.28.9.tar.gz
-  )
-  FetchContent_MakeAvailable(mbedtls)
-endif()
-if(TARGET mbedcrypto)
-  target_compile_definitions(mbedcrypto PRIVATE MBEDTLS_MD4_C)
-endif()
+include(mbedtls.cmake)
 
 add_library(
   tunnel_engine
@@ -76,6 +51,15 @@ set_target_properties(
     OUTPUT_NAME "pptp_gre_helper"
     SUFFIX ".so"
 )
+
+option(TUNNEL_FORGE_NATIVE_COVERAGE "Measure native code exercised by Android instrumentation tests" OFF)
+if(TUNNEL_FORGE_NATIVE_COVERAGE)
+  target_sources(tunnel_engine PRIVATE ../../androidTest/cpp/native_coverage.c)
+  foreach(target tunnel_engine pptp_gre_helper)
+    target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+    target_link_options(${target} PRIVATE -fprofile-instr-generate)
+  endforeach()
+endif()
 
 if(TUNNEL_FORGE_CLANG_TIDY)
   set_property(TARGET tunnel_engine PROPERTY C_CLANG_TIDY "${TUNNEL_FORGE_CLANG_TIDY_COMMAND}")

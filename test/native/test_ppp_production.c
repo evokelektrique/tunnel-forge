@@ -1,12 +1,4 @@
-#include <poll.h>
-#include <sys/socket.h>
-static int fake_poll(struct pollfd *fds, nfds_t n, int timeout);
-static ssize_t fake_recv(int fd, void *buf, size_t n, int flags);
-#define poll fake_poll
-#define recv fake_recv
 #include "../../android/app/src/main/cpp/ppp.c"
-#undef poll
-#undef recv
 #include <assert.h>
 /* Script the transport, keeping the real CHAP parser, MD5 and authentication loop. */
 static unsigned received, sent;
@@ -19,35 +11,27 @@ void tunnel_set_failure(int kind, int code, int general_error) {
 }
 static uint8_t response_ids[8];
 static uint8_t response_hashes[8][16];
-static int fake_poll(struct pollfd *fds, nfds_t n, int timeout) {
-  (void)n;
-  (void)timeout;
-  fds[0].revents = POLLIN;
-  return 1;
-}
-static ssize_t fake_recv(int fd, void *buf, size_t n, int flags) {
-  (void)fd;
-  (void)flags;
-  uint8_t frame[31] = {0x40, 2};
-  uint8_t *chap = frame + 8;
+static int fake_recv(void *ctx, uint8_t *buf, size_t cap, int timeout_ms) {
+  (void)ctx;
+  (void)timeout_ms;
+  uint8_t chap[23] = {0};
   util_write_be16(chap, PROTO_CHAP);
   chap[2] = received < 3 ? 1 : (test_mode == 1 ? 4 : 3);
   chap[3] = received == 0 ? 7 : 8;
   util_write_be16(chap + 4, received < 3 ? 21 : 4);
   chap[6] = 16;
-  size_t length = received++ < 3 ? sizeof(frame) : 14;
+  size_t length = received++ < 3 ? sizeof(chap) : 6;
   if (test_mode >= 2) {
     util_write_be16(chap, PROTO_PAP);
     chap[2] = 3;
     chap[3] = 1;
     util_write_be16(chap + 4, 5);
     chap[6] = test_mode == 3 ? 1 : 0; /* Mode 3 truncates the NAK message. */
-    length = 15;
+    length = 7;
   }
-  if (length > n)
-    return -1;
-  memcpy(buf, frame, length);
-  return (ssize_t)length;
+  assert(length <= cap);
+  memcpy(buf, chap, length);
+  return (int)length;
 }
 int tunnel_should_stop(void) { return 0; }
 void tunnel_engine_log(int p, const char *tag, const char *fmt, ...) {
@@ -55,48 +39,8 @@ void tunnel_engine_log(int p, const char *tag, const char *fmt, ...) {
   (void)tag;
   (void)fmt;
 }
-int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t n, uint8_t *out, size_t *len) {
-  (void)k;
-  (void)in;
-  (void)n;
-  (void)out;
-  (void)len;
-  return -1;
-}
-void esp_decrypt_last_fail_snprint(char *buf, size_t n) {
-  if (n)
-    buf[0] = 0;
-}
-int l2tp_data_extract_ppp(const uint8_t *in, size_t n, const l2tp_session_t *s, const uint8_t **out, size_t *len,
-                          int diag) {
-  (void)s;
-  (void)diag;
-  if (n < 8)
-    return -1;
-  *out = in + 8;
-  *len = n - 8;
-  return 0;
-}
-int l2tp_dispatch_incoming(int fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t plen, l2tp_session_t *s,
-                           const uint8_t *in, size_t n, packet_endpoint_t *endpoint, ppp_session_t *ppp) {
-  (void)fd;
-  (void)esp;
-  (void)peer;
-  (void)plen;
-  (void)s;
-  (void)in;
-  (void)n;
-  (void)endpoint;
-  (void)ppp;
-  return -1;
-}
-int l2tp_send_ppp(int fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t plen, l2tp_session_t *s,
-                  const uint8_t *in, size_t n) {
-  (void)fd;
-  (void)esp;
-  (void)peer;
-  (void)plen;
-  (void)s;
+static int fake_send(void *ctx, const uint8_t *in, size_t n) {
+  (void)ctx;
   if (test_mode >= 2) {
     assert(n >= 8 && util_read_be16(in + 2) == PROTO_PAP);
     sent++;
@@ -152,25 +96,24 @@ int main(void) {
   const uint8_t success[] = {0xc2, 0x23, 3, 1, 0, 4};
   assert(chap_result_code(success, sizeof(success)) == 3);
   assert(chap_result_code(success, sizeof(success) - 1) == 0);
-  esp_keys_t esp = {0};
-  l2tp_session_t session = {0};
-  assert(ppp_auth_chap_md5(0, &esp, NULL, 0, &session, "fixture", "fixture") == 0);
+  ppp_transport_t transport = {.send_frame = fake_send, .recv_frame = fake_recv};
+  assert(ppp_auth_chap_md5_transport(&transport, "fixture", "fixture") == 0);
   assert(received == 4 && sent == 3);
   assert(response_ids[0] == 7 && response_ids[1] == 8 && response_ids[2] == 8);
   assert(memcmp(response_hashes[0], response_hashes[1], 16) != 0);
   assert(memcmp(response_hashes[1], response_hashes[2], 16) == 0);
   received = sent = 0;
   test_mode = 1;
-  assert(ppp_auth_chap_md5(0, &esp, NULL, 0, &session, "fixture", "fixture") == -1);
+  assert(ppp_auth_chap_md5_transport(&transport, "fixture", "fixture") == -1);
   assert(failure[0] == 4 && failure[1] == 4);
   received = sent = 0;
   test_mode = 2;
-  assert(ppp_auth_pap(0, &esp, NULL, 0, &session, "fixture", "fixture") == -1);
+  assert(ppp_auth_pap_transport(&transport, "fixture", "fixture") == -1);
   assert(failure[0] == 5 && failure[1] == 3);
   received = sent = 0;
   test_mode = 3;
   tunnel_set_failure(0, 0, 0);
-  assert(ppp_auth_pap(0, &esp, NULL, 0, &session, "fixture", "fixture") == -1);
+  assert(ppp_auth_pap_transport(&transport, "fixture", "fixture") == -1);
   assert(received == 12 && failure[0] == 0);
   return 0;
 }

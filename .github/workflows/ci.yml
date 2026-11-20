@@ -65,6 +65,13 @@ jobs:
       - name: Run unit and widget tests with coverage
         run: flutter test --coverage
 
+      - name: Save Dart coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: dart-coverage
+          path: coverage/lcov.info
+          if-no-files-found: error
+
       - name: Upload coverage to Codecov
         if: env.CODECOV_TOKEN != ''
         env:
@@ -72,6 +79,8 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage/lcov.info
+          flags: dart
+          disable_search: true
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
@@ -98,12 +107,90 @@ jobs:
 
       - name: Run Android Go module tests
         working-directory: android/gvisor
-        run: go test ./...
+        run: |
+          go vet ./...
+          go test -race ./... -coverprofile=gvisor.cover
+          awk 'NR > 1 && $NF == 0 { print; uncovered = 1 } END { exit uncovered }' gvisor.cover
+          sed -i 's|^tunnel_forge_gvisor/|android/gvisor/|' gvisor.cover
+
+      - name: Save Go coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: go-coverage
+          path: android/gvisor/gvisor.cover
+          if-no-files-found: error
+
+      - name: Upload Go coverage to Codecov
+        if: env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: android/gvisor/gvisor.cover
+          flags: go
+          disable_search: true
+          fail_ci_if_error: true
+
+  native-c-tests:
+    name: Native C tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install LLVM coverage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-rt-dev llvm
+
+      - name: Run host and production protocol tests
+        env:
+          CC: /usr/bin/clang
+        run: |
+          cmake -S test/native -B build/native_test \
+            -DCMAKE_BUILD_TYPE=Debug -DTUNNEL_FORGE_NATIVE_PROTOCOL_TESTS=ON \
+            -DCMAKE_C_FLAGS='-fprofile-instr-generate -fcoverage-mapping' \
+            -DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate
+          cmake --build build/native_test --parallel
+          export LLVM_PROFILE_FILE="$PWD/build/native_test/%m-%p.profraw"
+          ctest --test-dir build/native_test --output-on-failure --no-tests=error --timeout 30
+
+      - name: Collect native C coverage
+        run: |
+          /usr/bin/llvm-profdata merge -sparse build/native_test/*.profraw -o build/native.profdata
+          binaries=()
+          for binary in build/native_test/test_*; do
+            binaries+=("-object=$binary")
+          done
+          /usr/bin/llvm-cov export -format=lcov -instr-profile=build/native.profdata \
+            "${binaries[@]}" -ignore-filename-regex='/test/native/(test_[^/]+\.c$|stubs/)|/mbedtls(-src)?/|^/usr/' \
+            > build/native-coverage.info
+          grep -q '^SF:' build/native-coverage.info
+
+      - name: Save native C coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-c-coverage
+          path: build/native-coverage.info
+          if-no-files-found: error
+
+      - name: Upload native C coverage to Codecov
+        if: env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: build/native-coverage.info
+          flags: native-c
+          disable_search: true
+          fail_ci_if_error: true
 
   android-unit-tests:
     name: android-unit-tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -155,13 +242,102 @@ jobs:
             echo "sdk.dir=${android_sdk_root}"
           } > local.properties
 
-      - name: Run Android JVM tests
-        working-directory: android
-        run: ./gradlew --no-daemon --console=plain --info --stacktrace -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest
+      - name: Install Android API 37
+        run: sdkmanager --install 'platforms;android-37.0'
 
-      - name: Run native C tests
+      - name: Run Android JVM tests with coverage and lint
         working-directory: android
-        run: ./gradlew --no-daemon --console=plain --stacktrace -Dorg.gradle.vfs.watch=false :app:testNativeC
+        run: ./gradlew --no-daemon --console=plain --stacktrace -Dorg.gradle.vfs.watch=false -PtunnelForgeCoverage :app:createDebugUnitTestCoverageReport :app:lintDebug
+
+      - name: Check release signing with a disposable keystore
+        working-directory: android
+        run: |
+          export TUNNEL_FORGE_ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/signing-test.p12"
+          trap 'rm -f "$RUNNER_TEMP/signing-test.p12" ../build/app/keystore-from-base64.jks' EXIT
+          export TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD=test-password
+          export TUNNEL_FORGE_ANDROID_KEY_ALIAS=ci-test
+          export TUNNEL_FORGE_ANDROID_KEY_PASSWORD=test-password
+          keytool -genkeypair -storetype PKCS12 -keyalg RSA -keysize 2048 -validity 1 \
+            -keystore "$TUNNEL_FORGE_ANDROID_KEYSTORE_PATH" -alias "$TUNNEL_FORGE_ANDROID_KEY_ALIAS" \
+            -storepass "$TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD" -dname 'CN=Tunnel Forge CI'
+          ./gradlew --console=plain :app:validateSigningRelease
+
+          TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64="$(base64 -w0 "$TUNNEL_FORGE_ANDROID_KEYSTORE_PATH")"
+          export TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64
+          unset TUNNEL_FORGE_ANDROID_KEYSTORE_PATH
+          ./gradlew --console=plain :app:validateSigningRelease
+          test "$(stat -c '%a' ../build/app/keystore-from-base64.jks)" = 600
+
+          if TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64=invalid-base64! ./gradlew --console=plain :app:validateSigningRelease > "$RUNNER_TEMP/signing-test.log" 2>&1; then
+            echo "Invalid base64 keystore was accepted"
+            exit 1
+          fi
+          grep -F 'TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64 must contain a base64-encoded keystore.' "$RUNNER_TEMP/signing-test.log"
+
+          if TUNNEL_FORGE_ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/signing-test.p12" ./gradlew --console=plain :app:validateSigningRelease > "$RUNNER_TEMP/signing-test.log" 2>&1; then
+            echo "Conflicting keystore sources were accepted"
+            exit 1
+          fi
+          grep -F 'Set only one of TUNNEL_FORGE_ANDROID_KEYSTORE_PATH or TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64.' "$RUNNER_TEMP/signing-test.log"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Android device tests with coverage
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          working-directory: android
+          script: ./gradlew --no-daemon --console=plain --stacktrace -Dorg.gradle.vfs.watch=false -PtunnelForgeCoverage -Pandroid.testInstrumentationRunnerArguments.nativeCoverage=true -Ptarget-platform=android-x64 :app:createDebugAndroidTestCoverageReport
+
+      - name: Collect Android native coverage
+        run: |
+          tools="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          profile="$(find build/app/outputs/connected_android_test_additional_output -name tunnel-engine.profraw -print -quit)"
+          engine="$(find build/app/intermediates/cxx/Debug -path '*/obj/x86_64/libtunnel_engine.so' -print -quit)"
+          test -n "$profile" && test -n "$engine"
+          "$tools/llvm-profdata" merge -sparse "$profile" -o build/android-native.profdata
+          "$tools/llvm-cov" export -format=lcov -instr-profile=build/android-native.profdata \
+            "$engine" -object="$(dirname "$engine")/libpptp_gre_helper.so" -ignore-filename-regex='/androidTest/|/_deps/|^/usr/' \
+            > build/android-native-coverage.info
+          grep -q '^SF:.*vpn_jni.c$' build/android-native-coverage.info
+
+      - name: Save Android coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-coverage
+          path: |
+            build/app/reports/coverage/
+            build/android-native-coverage.info
+          if-no-files-found: ignore
+
+      - name: Upload Android native coverage to Codecov
+        if: env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: build/android-native-coverage.info
+          flags: native-c
+          disable_search: true
+          fail_ci_if_error: true
+
+      - name: Upload Kotlin coverage to Codecov
+        if: env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: build/app/reports/coverage/test/debug/report.xml,build/app/reports/coverage/androidTest/debug/connected/report.xml
+          flags: kotlin
+          disable_search: true
+          fail_ci_if_error: true
 
       - name: Upload Android test results to Codecov
         if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
@@ -180,6 +356,9 @@ jobs:
           name: android-unit-test-reports
           path: |
             build/app/reports/tests/
+            build/app/reports/androidTests/
+            build/app/outputs/androidTest-results/
+            build/app/reports/lint-results-debug.*
             build/reports/
           if-no-files-found: ignore
 
@@ -190,6 +369,7 @@ jobs:
     needs:
       - flutter-checks
       - android-go-tests
+      - native-c-tests
       - android-unit-tests
 
     steps:
@@ -243,6 +423,9 @@ jobs:
             echo "flutter.sdk=${flutter_root}"
             echo "sdk.dir=${android_sdk_root}"
           } > local.properties
+
+      - name: Install Android API 37
+        run: sdkmanager --install 'platforms;android-37.0'
 
       - name: Configure Android release signing
         if: github.event_name != 'pull_request' && inputs.pr_number == ''

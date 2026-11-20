@@ -188,9 +188,14 @@ Set exactly one of `TUNNEL_FORGE_ANDROID_KEYSTORE_PATH` or `TUNNEL_FORGE_ANDROID
 
 ### Coverage
 
-```sh
-flutter test --coverage
-```
+CI saves coverage artifacts for Dart, Kotlin, Go, and native C. Both the host tests and Android instrumentation contribute to native C coverage. The Go job requires 100% statement coverage.
+
+CI also checks release signing with a disposable keystore.
+
+- For Dart, run `flutter test --coverage`.
+- For Kotlin, run `./gradlew -PtunnelForgeCoverage :app:createDebugUnitTestCoverageReport` from `android/`. With an emulator running, use `:app:createDebugAndroidTestCoverageReport` for device coverage. Pass `-Pandroid.testInstrumentationRunnerArguments.nativeCoverage=true` to collect the native profile too.
+- For Go, run `go test ./... -cover` from `android/gvisor/`.
+- For native C on Linux, configure `test/native` with `-DTUNNEL_FORGE_NATIVE_PROTOCOL_TESTS=ON` to include the production IKE, ESP, L2TP, PPP, and MPPE tests. Gradle's `:app:testNativeC` runs the portable subset.
 
 ## Security & Privacy
 

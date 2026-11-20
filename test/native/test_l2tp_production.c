@@ -1,3 +1,4 @@
+#define ppp_dispatch_ppp_frame fixture_ppp_dispatch_ppp_frame
 #include "../../android/app/src/main/cpp/l2tp.c"
 #include <assert.h>
 #include <sys/socket.h>
@@ -37,6 +38,20 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *p, socklen_t 
   (void)plen;
   (void)data;
   return (int)n;
+}
+
+static const uint8_t expected_ppp[] = {0xff, 0x03, 0x00, 0x21};
+
+int ppp_dispatch_ppp_frame(int fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t plen, l2tp_session_t *s,
+                           ppp_session_t *ppp, const uint8_t *frame, size_t len, packet_endpoint_t *endpoint) {
+  (void)fd;
+  (void)esp;
+  (void)peer;
+  (void)plen;
+  (void)endpoint;
+  assert(s != NULL && ppp != NULL);
+  assert(len == sizeof(expected_ppp) && memcmp(frame, expected_ppp, len) == 0);
+  return 17;
 }
 
 int main(void) {
@@ -106,6 +121,14 @@ int main(void) {
   assert(l2tp_dispatch_incoming(sockets[1], NULL, NULL, 0, &session, incoming, length, NULL, NULL) ==
          L2TP_DISPATCH_REMOTE_CLOSED);
   assert(failure[0] == 3 && failure[1] == 1 && failure[2] == 0);
+
+  session.peer_tunnel_id = 0x12;
+  session.peer_session_id = 0x34;
+  const uint8_t data[] = {0x40, 0x02, 0, 12, 0, 0x12, 0, 0x34, 0xff, 0x03, 0, 0x21};
+  ppp_session_t ppp = {0};
+  packet_endpoint_t endpoint = {0};
+  assert(l2tp_dispatch_incoming(sockets[1], NULL, NULL, 0, &session, data, sizeof(data), &endpoint, &ppp) == 17);
+
   close(sockets[0]);
   close(sockets[1]);
   return 0;

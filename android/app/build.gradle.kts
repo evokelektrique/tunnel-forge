@@ -1,7 +1,10 @@
+import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.FilterConfiguration
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.Base64
 import java.util.Properties
 
@@ -42,21 +45,8 @@ val keystorePassword = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD")
 val releaseKeyAlias = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEY_ALIAS")
 val releaseKeyPassword = getEnvOrDotEnv("TUNNEL_FORGE_ANDROID_KEY_PASSWORD")
 
-val resolvedStoreFile: File? = when {
-    !keystorePath.isNullOrBlank() -> {
-        val f = File(keystorePath)
-        if (f.isAbsolute) f
-        else rootProject.file("../$keystorePath").takeIf { it.isFile }
-            ?: rootProject.file(keystorePath)
-    }
-    !keystoreBase64.isNullOrBlank() -> {
-        val decoded = Base64.getDecoder().decode(keystoreBase64.trim())
-        val tempKeystore = layout.buildDirectory.file("keystore-from-base64.jks").get().asFile
-        tempKeystore.parentFile.mkdirs()
-        tempKeystore.writeBytes(decoded)
-        tempKeystore
-    }
-    else -> null
+if (keystorePath != null && keystoreBase64 != null) {
+    throw GradleException("Set only one of TUNNEL_FORGE_ANDROID_KEYSTORE_PATH or TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64.")
 }
 
 val releaseSigningInputs =
@@ -76,7 +66,34 @@ if (!hasReleaseSigning && releaseSigningInputs.values.any { !it.isNullOrBlank() 
     )
 }
 
-if (hasReleaseSigning && (resolvedStoreFile == null || !resolvedStoreFile.exists())) {
+val resolvedStoreFile: File? = when {
+    keystorePath != null -> {
+        val f = File(keystorePath)
+        if (f.isAbsolute) f
+        else rootProject.file("../$keystorePath").takeIf { it.isFile }
+            ?: rootProject.file(keystorePath)
+    }
+    keystoreBase64 != null -> {
+        val decoded = try {
+            Base64.getDecoder().decode(keystoreBase64.trim())
+        } catch (error: IllegalArgumentException) {
+            throw GradleException("TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64 must contain a base64-encoded keystore.", error)
+        }
+        val tempKeystore = layout.buildDirectory.file("keystore-from-base64.jks").get().asFile
+        tempKeystore.parentFile.mkdirs()
+        val stagingFile = Files.createTempFile(tempKeystore.parentFile.toPath(), ".keystore-", ".jks")
+        try {
+            Files.write(stagingFile, decoded)
+            Files.move(stagingFile, tempKeystore.toPath(), REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(stagingFile)
+        }
+        tempKeystore
+    }
+    else -> null
+}
+
+if (hasReleaseSigning && resolvedStoreFile?.isFile != true) {
     throw GradleException(
         "Android release keystore file not found at: ${resolvedStoreFile?.absolutePath ?: keystorePath}",
     )
@@ -204,13 +221,13 @@ val goCommand =
         ?: "go"
 val androidGoJniLibsDir = layout.buildDirectory.dir("androidGoJniLibs")
 
-android {
+configure<ApplicationExtension> {
     val enableClangTidy = providers.gradleProperty("tunnelForgeClangTidy").orNull
     val innerUdpNoChecksum = providers.gradleProperty("tunnelForgeInnerUdpNoChecksum").orNull
     val keymatVariant = providers.gradleProperty("tunnelForgeKeymatVariant").orNull
     val mbedtlsSourceDir = providers.gradleProperty("tunnelForgeMbedtlsSourceDir").orNull
     namespace = "io.github.evokelektrique.tunnelforge"
-    compileSdk = 36
+    compileSdk { version = release(37) }
     ndkVersion = flutter.ndkVersion
 
     dependenciesInfo {
@@ -222,6 +239,16 @@ android {
         generateLocaleConfig = true
     }
 
+    bundle {
+        language {
+            enableSplit = false
+        }
+    }
+
+    lint {
+        warningsAsErrors = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -230,7 +257,7 @@ android {
     defaultConfig {
         applicationId = "io.github.evokelektrique.tunnelforge"
         minSdk = 31
-        targetSdk = 36
+        targetSdk = 37
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -279,10 +306,17 @@ android {
             )
         }
         debug {
+            val collectCoverage = providers.gradleProperty("tunnelForgeCoverage").isPresent
+            enableUnitTestCoverage = collectCoverage
+            enableAndroidTestCoverage = collectCoverage
+
             // One-shot KEYMAT log after Quick Mode (sensitive). Release builds omit this flag.
             externalNativeBuild {
                 cmake {
                     arguments += listOf("-DTUNNEL_FORGE_DEBUG_ESP_KEYMAT=1")
+                    if (collectCoverage) {
+                        arguments += "-DTUNNEL_FORGE_NATIVE_COVERAGE=ON"
+                    }
                 }
             }
             // A/B inner UDP checksum:
@@ -332,13 +366,13 @@ androidComponents {
 
 dependencies {
     implementation("androidx.annotation:annotation:1.11.0")
-    implementation("androidx.core:core-ktx:1.18.0")
-    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
     implementation("io.netty:netty-codec-http:4.2.20.Final")
     implementation("io.netty:netty-codec-socks:4.2.20.Final")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("androidx.test:runner:1.3.0")
+    debugImplementation("androidx.test:runner:1.7.0")
 }
 
 flutter {

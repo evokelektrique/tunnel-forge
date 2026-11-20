@@ -24,7 +24,7 @@ env:
 
   FLUTTER_GIT_REVISION: 'ab2912035e160d9cad6306df307576da6128ebdb'
 
-  ANDROID_PLATFORM: 'android-36'
+  ANDROID_PLATFORM: 'android-37.0'
   ANDROID_BUILD_TOOLS: '36.0.0'
   ANDROID_CMAKE: '3.22.1'
   ANDROID_NDK: '28.2.13676358'
@@ -168,6 +168,7 @@ jobs:
           run_sdkmanager --licenses >/dev/null || true
 
           run_sdkmanager --install \
+            "platforms;android-36" \
             "platforms;${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "cmake;${ANDROID_CMAKE}" \

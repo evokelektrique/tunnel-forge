@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(tunnel_forge_native_test C)
 
 set(CMAKE_C_STANDARD 99)
+option(TUNNEL_FORGE_NATIVE_PROTOCOL_TESTS "Build host tests for IKE, ESP, L2TP, PPP and MPPE" OFF)
 
 add_executable(test_endian test_endian.c ../../android/app/src/main/cpp/util_endian.c)
 target_include_directories(test_endian PRIVATE ../../android/app/src/main/cpp)
@@ -39,7 +40,8 @@ add_test(NAME tunnel_liveness COMMAND test_tunnel_liveness)
 
 add_executable(test_packet_endpoint test_packet_endpoint.c ../../android/app/src/main/cpp/packet_endpoint.c)
 target_include_directories(test_packet_endpoint PRIVATE ../../android/app/src/main/cpp)
-target_link_libraries(test_packet_endpoint PRIVATE pthread)
+find_package(Threads REQUIRED)
+target_link_libraries(test_packet_endpoint PRIVATE Threads::Threads)
 add_test(NAME packet_endpoint COMMAND test_packet_endpoint)
 
 add_executable(test_ipv4_dataplane test_ipv4_dataplane.c
@@ -62,23 +64,18 @@ add_test(NAME pptp_control COMMAND test_pptp_control)
 
 # Optional production-source checks use mbedTLS headers from an Android build.
 if(TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR)
+  get_filename_component(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR "${TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR}" DIRECTORY)
+endif()
+if(TUNNEL_FORGE_NATIVE_PROTOCOL_TESTS OR TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR)
+  include(../../android/app/src/main/cpp/mbedtls.cmake)
   foreach(protocol ppp ike l2tp)
     add_executable(test_${protocol}_production test_${protocol}_production.c ../../android/app/src/main/cpp/util_endian.c)
-    target_include_directories(test_${protocol}_production PRIVATE stubs ${TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR})
+    target_include_directories(test_${protocol}_production PRIVATE stubs ${mbedtls_SOURCE_DIR}/include)
     target_compile_definitions(test_${protocol}_production PRIVATE _DEFAULT_SOURCE)
     target_compile_options(test_${protocol}_production PRIVATE -ffunction-sections -fdata-sections)
     target_link_options(test_${protocol}_production PRIVATE -Wl,--gc-sections)
     add_test(NAME ${protocol}_production COMMAND test_${protocol}_production)
   endforeach()
-  get_filename_component(mbedtls_test_source "${TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR}" DIRECTORY)
-  set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
-  set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-  set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
-  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-  add_subdirectory("${mbedtls_test_source}" "${CMAKE_CURRENT_BINARY_DIR}/mbedtls" EXCLUDE_FROM_ALL)
-  if(TARGET mbedcrypto)
-    target_compile_definitions(mbedcrypto PRIVATE MBEDTLS_MD4_C)
-  endif()
   target_link_libraries(test_ike_production PRIVATE mbedcrypto)
   target_link_libraries(test_ppp_production PRIVATE mbedcrypto)
   target_sources(test_ppp_production PRIVATE
@@ -87,11 +84,19 @@ if(TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR)
     ../../android/app/src/main/cpp/ppp_mppe.c)
   target_sources(test_l2tp_production PRIVATE ../../android/app/src/main/cpp/l2tp_avps.c ../../android/app/src/main/cpp/nat_t_keepalive.c)
 
+  add_executable(test_esp_udp test_esp_udp.c
+    ../../android/app/src/main/cpp/esp_udp.c
+    ../../android/app/src/main/cpp/nat_t_keepalive.c
+    ../../android/app/src/main/cpp/util_endian.c)
+  target_include_directories(test_esp_udp PRIVATE stubs ../../android/app/src/main/cpp)
+  target_link_libraries(test_esp_udp PRIVATE mbedcrypto)
+  add_test(NAME esp_udp COMMAND test_esp_udp)
+
   add_executable(test_ppp_mppe test_ppp_mppe.c
     ../../android/app/src/main/cpp/ppp_mppe.c
     ../../android/app/src/main/cpp/ppp_mschap.c
     ../../android/app/src/main/cpp/util_endian.c)
-  target_include_directories(test_ppp_mppe PRIVATE ../../android/app/src/main/cpp ${TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR})
+  target_include_directories(test_ppp_mppe PRIVATE ../../android/app/src/main/cpp ${mbedtls_SOURCE_DIR}/include)
   target_link_libraries(test_ppp_mppe PRIVATE mbedcrypto)
   add_test(NAME ppp_mppe COMMAND test_ppp_mppe)
 endif()
