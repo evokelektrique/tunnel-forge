@@ -25,6 +25,8 @@ class SettingsPanel extends StatefulWidget {
     required this.proxySettings,
     this.proxyExposure,
     required this.connectivityCheckSettings,
+    this.connectionHapticsEnabled = true,
+    this.onConnectionHapticsChanged,
     required this.batteryOptimizationStatus,
     required this.batteryOptimizationBusy,
     required this.onConnectionModeChanged,
@@ -61,6 +63,8 @@ class SettingsPanel extends StatefulWidget {
   final ProxySettings proxySettings;
   final ProxyExposure? proxyExposure;
   final ConnectivityCheckSettings connectivityCheckSettings;
+  final bool connectionHapticsEnabled;
+  final ValueChanged<bool>? onConnectionHapticsChanged;
   final BatteryOptimizationStatus batteryOptimizationStatus;
   final bool batteryOptimizationBusy;
   final ValueChanged<ConnectionMode> onConnectionModeChanged;
@@ -668,6 +672,23 @@ class _SettingsPanelState extends State<SettingsPanel> {
                 ),
               ],
             ),
+          ),
+        ),
+        const SizedBox(height: _kSectionGap),
+        _sectionTitle(t.connectionFeedback),
+        const SizedBox(height: _kSectionHeaderGap),
+        Card(
+          margin: EdgeInsets.zero,
+          child: SwitchListTile(
+            key: const Key('connection_haptics_switch'),
+            contentPadding: _kCardTilePadding,
+            title: _cardTitle(t.connectionHaptics),
+            subtitle: _cardText(
+              t.connectionHapticsHelp,
+              color: widget.colorScheme.onSurfaceVariant,
+            ),
+            value: widget.connectionHapticsEnabled,
+            onChanged: widget.onConnectionHapticsChanged,
           ),
         ),
         const SizedBox(height: _kSectionGap),

@@ -22,6 +22,7 @@ class _FakeSettingsRepository implements SettingsRepository {
       );
   bool batteryOptimizationConnectPromptShown = false;
   bool updateCheckConsentGranted = false;
+  bool connectionHapticsEnabled = true;
 
   @override
   Future<ConnectionMode> loadConnectionMode() async => connectionMode;
@@ -30,6 +31,9 @@ class _FakeSettingsRepository implements SettingsRepository {
   Future<ConnectivityCheckSettings> loadConnectivityCheckSettings() async {
     return connectivityCheckSettings;
   }
+
+  @override
+  Future<bool> loadConnectionHapticsEnabled() async => connectionHapticsEnabled;
 
   @override
   Future<LogDisplayLevel> loadLogDisplayLevel() async {
@@ -64,6 +68,11 @@ class _FakeSettingsRepository implements SettingsRepository {
     ConnectivityCheckSettings settings,
   ) async {
     connectivityCheckSettings = settings;
+  }
+
+  @override
+  Future<void> saveConnectionHapticsEnabled(bool enabled) async {
+    connectionHapticsEnabled = enabled;
   }
 
   @override
@@ -341,6 +350,27 @@ void main() {
 
       expect(updates.fetchCount, 0);
       expect(bloc.state.appUpdateStatus, AppUpdateStatus.idle);
+    });
+
+    test('persists connection haptics changes', () async {
+      final repository = _FakeSettingsRepository();
+      final bloc = SettingsBloc(
+        repository,
+        _FakeAppVersionRepository(
+          const AppVersionInfo(
+            displayVersion: '0.3.0+11',
+            semanticVersion: null,
+          ),
+        ),
+        _FakeAppUpdateRepository(),
+        _FakeLogsRepository(),
+        _FakeTunnelRepository(),
+      );
+      addTearDown(bloc.close);
+      bloc.add(const SettingsConnectionHapticsChanged(false));
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.connectionHapticsEnabled, isFalse);
+      expect(repository.connectionHapticsEnabled, isFalse);
     });
 
     blocTest<SettingsBloc, SettingsState>(

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:get_it/get_it.dart';
 import 'package:share_plus/share_plus.dart';
@@ -89,6 +90,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   int _lastTunnelMessageId = 0;
   int _lastSettingsMessageId = 0;
   bool _lastTunnelUp = false;
+  bool _connectionAttemptActive = false;
   int _lastLogsEntryCount = 0;
   bool _hasSyncedQuickSettings = false;
   QuickSettingsProfileConfig? _lastSyncedQuickSettingsConfig;
@@ -298,6 +300,9 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   }
 
   Future<void> _handleTunnelStateChange(TunnelState current) async {
+    if (current.busy && !_lastTunnelUp) {
+      _connectionAttemptActive = true;
+    }
     final message = current.message;
     if (message != null && message.id != _lastTunnelMessageId) {
       _lastTunnelMessageId = message.id;
@@ -319,9 +324,17 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       } else {
         _toast(message.text, error: message.error);
       }
+      if (_connectionAttemptActive && message.error) {
+        unawaited(_playConnectionHaptic(failure: true));
+        _connectionAttemptActive = false;
+      }
     }
     final settingsState = context.read<SettingsBloc>().state;
     if (!_lastTunnelUp && current.tunnelUp && !current.stopRequested) {
+      if (_connectionAttemptActive) {
+        unawaited(_playConnectionHaptic(failure: false));
+      }
+      _connectionAttemptActive = false;
       context.read<ConnectivityBloc>().add(
         ConnectivityRunRequested(
           _connectivityPingRequest(settingsState, current),
@@ -339,6 +352,21 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       ),
     );
     _lastTunnelUp = current.tunnelUp;
+  }
+
+  Future<void> _playConnectionHaptic({required bool failure}) async {
+    if (!context.read<SettingsBloc>().state.connectionHapticsEnabled) return;
+    try {
+      if (failure) {
+        await HapticFeedback.mediumImpact();
+      } else {
+        await HapticFeedback.lightImpact();
+      }
+    } on MissingPluginException {
+      // Haptic feedback is optional on platforms without the plugin.
+    } on PlatformException {
+      // Haptic feedback must not affect connection results.
+    }
   }
 
   Future<void> _handleLogsStateChange(LogsState current) async {
@@ -1002,6 +1030,11 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                     proxySettings: settingsState.proxySettings,
                     connectivityCheckSettings:
                         settingsState.connectivityCheckSettings,
+                    connectionHapticsEnabled:
+                        settingsState.connectionHapticsEnabled,
+                    onConnectionHapticsChanged: (enabled) => context
+                        .read<SettingsBloc>()
+                        .add(SettingsConnectionHapticsChanged(enabled)),
                     onConnectionModeChanged: (mode) => context
                         .read<SettingsBloc>()
                         .add(SettingsConnectionModeChanged(mode)),

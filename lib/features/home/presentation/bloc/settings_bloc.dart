@@ -95,6 +95,15 @@ final class SettingsConnectivityCheckSettingsChanged extends SettingsEvent {
   List<Object?> get props => [settings];
 }
 
+final class SettingsConnectionHapticsChanged extends SettingsEvent {
+  const SettingsConnectionHapticsChanged(this.enabled);
+
+  final bool enabled;
+
+  @override
+  List<Object?> get props => [enabled];
+}
+
 class SettingsState extends Equatable {
   const SettingsState({
     this.loading = true,
@@ -103,6 +112,7 @@ class SettingsState extends Equatable {
     this.splitTunnelSettings = const SplitTunnelSettings(),
     this.proxySettings = const ProxySettings(),
     this.connectivityCheckSettings = const ConnectivityCheckSettings(),
+    this.connectionHapticsEnabled = true,
     this.connectivityUrlError,
     this.installedVersion,
     this.installedVersionError,
@@ -125,6 +135,7 @@ class SettingsState extends Equatable {
   final SplitTunnelSettings splitTunnelSettings;
   final ProxySettings proxySettings;
   final ConnectivityCheckSettings connectivityCheckSettings;
+  final bool connectionHapticsEnabled;
   final String? connectivityUrlError;
   final String? installedVersion;
   final String? installedVersionError;
@@ -147,6 +158,7 @@ class SettingsState extends Equatable {
     SplitTunnelSettings? splitTunnelSettings,
     ProxySettings? proxySettings,
     ConnectivityCheckSettings? connectivityCheckSettings,
+    bool? connectionHapticsEnabled,
     String? connectivityUrlError,
     bool clearConnectivityUrlError = false,
     String? installedVersion,
@@ -176,6 +188,8 @@ class SettingsState extends Equatable {
       proxySettings: proxySettings ?? this.proxySettings,
       connectivityCheckSettings:
           connectivityCheckSettings ?? this.connectivityCheckSettings,
+      connectionHapticsEnabled:
+          connectionHapticsEnabled ?? this.connectionHapticsEnabled,
       connectivityUrlError: clearConnectivityUrlError
           ? null
           : (connectivityUrlError ?? this.connectivityUrlError),
@@ -216,6 +230,7 @@ class SettingsState extends Equatable {
     splitTunnelSettings,
     proxySettings,
     connectivityCheckSettings,
+    connectionHapticsEnabled,
     connectivityUrlError,
     installedVersion,
     installedVersionError,
@@ -248,6 +263,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     on<SettingsConnectivityCheckSettingsChanged>(
       _onConnectivityCheckSettingsChanged,
     );
+    on<SettingsConnectionHapticsChanged>(_onConnectionHapticsChanged);
     on<SettingsVersionCheckRequested>(_onVersionCheckRequested);
     on<SettingsVersionCheckConsentGranted>(_onVersionCheckConsentGranted);
     on<SettingsBatteryOptimizationRefreshRequested>(
@@ -320,6 +336,8 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     final proxySettingsFuture = _settingsRepository.loadProxySettings();
     final connectivityCheckSettingsFuture = _settingsRepository
         .loadConnectivityCheckSettings();
+    final connectionHapticsEnabledFuture = _settingsRepository
+        .loadConnectionHapticsEnabled();
     final installedVersionFuture = _appVersionRepository.loadInstalledVersion();
     final batteryOptimizationStatusFuture = _tunnelRepository
         .getBatteryOptimizationStatus();
@@ -330,6 +348,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     final splitTunnelSettings = await splitTunnelSettingsFuture;
     final proxySettings = await proxySettingsFuture;
     final connectivityCheckSettings = await connectivityCheckSettingsFuture;
+    final connectionHapticsEnabled = await connectionHapticsEnabledFuture;
     final batteryOptimizationStatus = await batteryOptimizationStatusFuture;
     final updateCheckConsentGranted = await updateCheckConsentFuture;
 
@@ -340,6 +359,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
         splitTunnelSettings: splitTunnelSettings,
         proxySettings: proxySettings,
         connectivityCheckSettings: connectivityCheckSettings,
+        connectionHapticsEnabled: connectionHapticsEnabled,
         batteryOptimizationStatus: batteryOptimizationStatus,
         updateCheckConsentGranted: updateCheckConsentGranted,
         clearConnectivityUrlError: true,
@@ -652,6 +672,14 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       'settings',
       'Connectivity check settings updated url=${settings.url} timeoutMs=${settings.timeoutMs}',
     );
+  }
+
+  Future<void> _onConnectionHapticsChanged(
+    SettingsConnectionHapticsChanged event,
+    Emitter<SettingsState> emit,
+  ) async {
+    emit(state.copyWith(connectionHapticsEnabled: event.enabled));
+    await _settingsRepository.saveConnectionHapticsEnabled(event.enabled);
   }
 
   Future<void> _onVersionCheckRequested(

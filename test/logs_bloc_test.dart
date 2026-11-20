@@ -147,6 +147,9 @@ class _FakeSettingsRepository implements SettingsRepository {
       const ConnectivityCheckSettings();
 
   @override
+  Future<bool> loadConnectionHapticsEnabled() async => true;
+
+  @override
   Future<ProxySettings> loadProxySettings() async => const ProxySettings();
 
   @override
@@ -160,6 +163,9 @@ class _FakeSettingsRepository implements SettingsRepository {
   Future<void> saveConnectivityCheckSettings(
     ConnectivityCheckSettings settings,
   ) async {}
+
+  @override
+  Future<void> saveConnectionHapticsEnabled(bool enabled) async {}
 
   @override
   Future<void> saveProxySettings(ProxySettings settings) async {}

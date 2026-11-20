@@ -58,6 +58,8 @@ abstract class SettingsRepository {
   Future<void> saveConnectivityCheckSettings(
     ConnectivityCheckSettings settings,
   );
+  Future<bool> loadConnectionHapticsEnabled();
+  Future<void> saveConnectionHapticsEnabled(bool enabled);
   Future<LogDisplayLevel> loadLogDisplayLevel();
   Future<void> saveLogDisplayLevel(LogDisplayLevel level);
   Future<bool> loadBatteryOptimizationConnectPromptShown();

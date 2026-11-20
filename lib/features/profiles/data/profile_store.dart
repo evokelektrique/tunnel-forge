@@ -108,6 +108,8 @@ class ProfileStore {
   static const prefsKeyConnectivityCheckUrl = 'connectivity_check_url_v1';
   static const prefsKeyConnectivityCheckTimeoutMs =
       'connectivity_check_timeout_ms_v1';
+  static const prefsKeyConnectionHapticsEnabled =
+      'connection_haptics_enabled_v1';
   static const prefsKeyLogDisplayLevel = 'log_display_level_v1';
   static const prefsKeyBatteryOptimizationConnectPromptShown =
       'battery_optimization_connect_prompt_shown_v1';
@@ -445,6 +447,16 @@ class ProfileStore {
       prefsKeyConnectivityCheckTimeoutMs,
       ConnectivityCheckSettings.normalizeTimeoutMs(settings.timeoutMs),
     );
+  }
+
+  Future<bool> loadConnectionHapticsEnabled() async {
+    final p = await _prefs();
+    return p.getBool(prefsKeyConnectionHapticsEnabled) ?? true;
+  }
+
+  Future<void> saveConnectionHapticsEnabled(bool enabled) async {
+    final p = await _prefs();
+    await p.setBool(prefsKeyConnectionHapticsEnabled, enabled);
   }
 
   Future<LogDisplayLevel> loadLogDisplayLevel() async {

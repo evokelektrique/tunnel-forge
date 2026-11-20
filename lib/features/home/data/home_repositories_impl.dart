@@ -238,6 +238,11 @@ class SettingsRepositoryImpl implements SettingsRepository {
   }
 
   @override
+  Future<bool> loadConnectionHapticsEnabled() {
+    return _profileStore.loadConnectionHapticsEnabled();
+  }
+
+  @override
   Future<LogDisplayLevel> loadLogDisplayLevel() {
     return _profileStore.loadLogDisplayLevel();
   }
@@ -272,6 +277,11 @@ class SettingsRepositoryImpl implements SettingsRepository {
     ConnectivityCheckSettings settings,
   ) {
     return _profileStore.saveConnectivityCheckSettings(settings);
+  }
+
+  @override
+  Future<void> saveConnectionHapticsEnabled(bool enabled) {
+    return _profileStore.saveConnectionHapticsEnabled(enabled);
   }
 
   @override

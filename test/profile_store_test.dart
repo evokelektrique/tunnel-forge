@@ -342,6 +342,14 @@ void main() {
       expect(saved.timeoutMs, 3200);
     });
 
+    test('defaults connection haptics on and persists updates', () async {
+      expect(await store.loadConnectionHapticsEnabled(), isTrue);
+
+      await store.saveConnectionHapticsEnabled(false);
+
+      expect(await store.loadConnectionHapticsEnabled(), isFalse);
+    });
+
     test('defaults log display level to info and persists updates', () async {
       expect(await store.loadLogDisplayLevel(), LogDisplayLevel.info);
 
