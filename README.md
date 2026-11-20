@@ -63,7 +63,7 @@ TunnelForge is an Android client for those setups. It connects to existing L2TP/
 - Per-app routing (Inclusive and Exclusive)
 - Multiple profiles with credential storage
 - Subscriptions for adding multiple profiles and keeping them up-to-date
-- [Share links and subscriptions](docs/share_links.md)
+- [Share links](docs/share_links.md)
 - Connection status and detailed logs
 - Custom DNS supporting UDP, TCP, TLS and HTTPS
 - Variable MTU
