@@ -1,0 +1,50 @@
+TunnelForge 1.0.0
+
+Major changes
+
+- Added PPTP support for rooted Android devices in full-device VPN and local proxy modes. Profiles now show their protocol, and shared profiles carry that choice. Older .tfp exports still import. (2a324ff)
+- Added profile subscriptions. Import an HTTP or HTTPS feed, browse it in its own tab, and sync manually or on a schedule. Android can report background updates and profile changes. (a7624d8, issue #31)
+- Changed profile sharing to readable tf:// links. Re-export older tf://p/ links before sharing them again because this release cannot import them. New links can contain passwords and IPsec pre-shared keys in plaintext. (85ec391)
+- Added an Android Quick Settings tile that connects or disconnects the selected profile and uses the TunnelForge icon. Switching profiles during an active connection reconnects with the new selection. (6f07998, 20d0073)
+- Added automatic reconnection when the network returns. In VPN mode, traffic stays blocked during an outage. The app explains waiting, reconnecting, remote shutdowns, and stalled reconnect attempts. (9b8895c, 354a9ce, 5220df5)
+
+Profiles and app controls
+
+- Added batch export, copy, and delete. Import several profiles from one .tfp bundle or from newline-separated links. (67a898f)
+- Added up to five favorites and drag reordering within each section. Hold a row to select or reorder it. Favorite and menu buttons keep their own actions. (444a987, 6688ef3, d52f6f4)
+- Preserved saved profiles when credentials cannot be read. The editor prompts for missing secrets, and failed exports offer a recovery path. (9b272c9)
+- Moved .tfp imports off the UI thread. Added source validation, file size limits, strict UTF-8 decoding, and timeouts for slow file providers. (db2744a, 73b9203)
+- Organized Settings into General, Connection, and About. Added optional vibration feedback for connection results and placed the update checker above the installed version. (50e018c, f434868, 8faf71f, fef6329)
+
+VPN and proxy fixes
+
+- Improved compatibility with Yamaha RTX1220 and similar servers. IKEv1 accepts their phase-one reply. L2TP handles a one-packet receive window and removes an extra field from its connection confirmation. (45a4fea, 5544221, issue #14)
+- Made a second tap restart a connectivity check immediately. Results from canceled checks can no longer override the current result. (14b10c1)
+- Validated HTTP and SOCKS5 proxy ports in the editor and on Android. The editor identifies invalid, reserved, conflicting, and occupied ports. Fixed how the proxy reads its tunnel thread's exit status. (88a5fe9, 41f4a4a)
+- Hardened the gVisor stack by releasing outgoing packet buffers, cleaning up startup failures, and keeping connection IDs within the native interface's range. (9fdf34b)
+- Fixed coordination of native tunnel session timeouts and cleaned up warning-prone TLS and tunneled DNS code. (f4c7de3, 05b5975, 4d9e7f6, PR #30)
+
+Diagnostics and Android
+
+- Added rotating diagnostic files and reporting for crashes, native exits, and ANRs. Batched engine logs and preserved background failures until the UI can show them. Use debug-log export to include diagnostic files in a report. (297b198, 523a02a, 9bdaeb5, 3aab32c)
+- Added redacted debug logs for profile, settings, and other app actions. VPN logs now identify why a connection stopped and avoid repeating battery status. (bde38cd, e2464c2)
+- Refreshed battery optimization status when returning from Android settings and after the permission prompt. Removed the manual refresh button. (e2464c2, cf7eeb6)
+- Moved translation strings into Flutter ARB and Android resources so new languages can be added without changing Dart or Kotlin. Diagnostic output stays in English. Moved on-screen messages above Android clipboard prompts. (122a853, 52535fa)
+- Updated adaptive launcher artwork and consolidated the splash screen. Kept the Quick Settings fallback and explicitly excluded app data from Android backups and device transfers. (4c4e169)
+
+Build and release
+
+- Updated Flutter, Dart, Gradle, AGP, Kotlin, Go, Flutter packages, AndroidX, Netty, and gVisor. Migrated file picking and UI dependencies, used built-in Kotlin and current AGP APIs, and targeted Android API 37. (e47a6c0, 19d4011, ab71bc4, f8f279e, 69618fe, ba9a888, fbdf0d5)
+- Enabled R8 explicitly for Android releases while retaining app-specific rules. Release signing can read a local .env file and use either a keystore path or base64 keystore data. (64374e9, 23d9055)
+- Improved native builds on Windows and CMake compatibility for Android and mbedTLS. Removed unused PPP helpers and cleaned up IKEv1 and PPTP native code. (a6f6c2c, 0398fd0, cd511cd, 56bc14b, dd65057, 33dfd6c, 712501f, PR #30)
+- Removed unused non-Android templates, the local Docker VPN setup, and obsolete debug and release scripts. Documented Flutter and Gradle commands, profile sharing, subscriptions, and current VPN support. (fc63cee, 888a19e, cef0a93, 8c8fda6, 446c3cc, 2e7a6af)
+- Updated the English Android store listing for PPTP, L2TP, subscriptions, and share links. Removed the duplicate Persian store listing and the stale F-Droid recipe copy. (22a0990, 062d472, 4c13486, dabb2ab, 487f4b6, 73f57f3)
+- Recorded interim build numbers and release notes during development. (387108d, a84f62f, ac202b0, 9ba4dcd, 7c0cbbf)
+
+Tests, CI, and repository
+
+- Added tests for startup, split tunneling, profile validation, and subscription retries. Fixed test timing and diagnostics output, and skipped first-run notices in debug builds to speed up development. (5ff87f4, 5126c03, 926c94d, 171d2a5)
+- Published per-language coverage, ran native C tests through Gradle, and collected Android native coverage from the libraries packaged in the debug build. Enforced Android lint, validated release signing in CI, and fixed SDK discovery and advisory handling. (cef0a93, fbdf0d5, 2f505a1, 5e0e016, a8e2a5d)
+- Aligned CodeQL with the Flutter and Go toolchains, cached native packages for mirror failures, and fixed analysis, coverage uploads, and lint false positives. Formatted Dart sources to satisfy CI. (75a0d5a, 87723d5, 6d392d2, f4c7de3, 3dc4a0c, 0dad096, 46486d6, 40f736d, 882a892, b794af5, PR #30)
+- Pinned Codecov, enabled Dependabot, and updated the GitHub Actions for checkout, artifacts, Java, and Gradle. (ca8ba60, a284f64, 916294d, 7a1f7a4, 0df9c33, 70eeaab, f3f957a, f7aa316, 91a269a, a567ee0, PR #24, PR #25, PR #26, PR #27, PR #28)
+- Added GitHub bug and feedback templates, fixed the form defaults, and updated ignore rules for local build files and tools. (ef59f37, cfb0f8a, 5f1e76d, cd8944a, 9efc51c, 4145af6, f872092, 3f3c478, 2b3188f)
