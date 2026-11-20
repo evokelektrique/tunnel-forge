@@ -99,7 +99,6 @@ class SettingsPanel extends StatefulWidget {
 class _SettingsPanelState extends State<SettingsPanel> {
   static const double _kSectionGap = 24;
   static const double _kSectionHeaderGap = 8;
-  static const double _kCardGap = 12;
   static const EdgeInsets _kCardTilePadding = EdgeInsets.fromLTRB(
     16,
     12,
@@ -240,530 +239,568 @@ class _SettingsPanelState extends State<SettingsPanel> {
       _ when widget.proxySettings.allowLanConnections => t.connectToDetectLan,
       _ => t.lanDisabled,
     };
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
         _sectionTitle(t.general),
         const SizedBox(height: _kSectionHeaderGap),
-        _sectionTitle(t.languageLabel),
+        _buildGeneralGroup(t, languageSummary),
+        const SizedBox(height: _kSectionGap),
+        _sectionTitle(t.connection),
         const SizedBox(height: _kSectionHeaderGap),
-        Card(
-          margin: EdgeInsets.zero,
-          child: ListTile(
-            key: const Key('settings_language_tile'),
-            contentPadding: _kCardTilePadding,
-            leading: Icon(
-              Icons.translate_rounded,
-              color: widget.colorScheme.onSurfaceVariant,
-            ),
-            title: _cardTitle(t.languageLabel),
-            subtitle: _cardText(
-              languageSummary,
-              color: widget.colorScheme.onSurfaceVariant,
-            ),
-            trailing: Icon(
-              Icons.chevron_right,
-              color: widget.colorScheme.onSurfaceVariant,
-            ),
-            onTap: () => showLanguagePickerSheet(
-              context,
-              selectedLocale: widget.selectedLocale,
-              onSelected: widget.onLocaleChanged,
-            ),
-          ),
+        _buildConnectionGroup(
+          t,
+          proxyMode: proxyMode,
+          splitTunnelSettings: splitTunnelSettings,
+          isInclusive: isInclusive,
+          activePackagesEmpty: activePackagesEmpty,
+          splitTunnelSubtitle: splitTunnelSubtitle,
+          proxyDisplayHost: proxyDisplayHost,
+          proxyHttpPort: proxyHttpPort,
+          proxySocksPort: proxySocksPort,
+          proxyEndpointStatus: proxyEndpointStatus,
         ),
         const SizedBox(height: _kSectionGap),
-        if (widget.themeMode != null && widget.onThemeModeChanged != null) ...[
-          _sectionTitle(t.appearance),
-          const SizedBox(height: _kSectionHeaderGap),
-          SegmentedButton<ThemeMode>(
-            segments: [
-              ButtonSegment<ThemeMode>(
-                value: ThemeMode.system,
-                label: Text(t.system),
-                icon: const Icon(Icons.brightness_auto_outlined, size: 18),
-              ),
-              ButtonSegment<ThemeMode>(
-                value: ThemeMode.light,
-                label: Text(t.light),
-                icon: const Icon(Icons.light_mode_outlined, size: 18),
-              ),
-              ButtonSegment<ThemeMode>(
-                value: ThemeMode.dark,
-                label: Text(t.dark),
-                icon: const Icon(Icons.dark_mode_outlined, size: 18),
-              ),
-            ],
-            selected: {widget.themeMode!},
-            onSelectionChanged: (next) {
-              if (next.isEmpty) return;
-              widget.onThemeModeChanged!(next.first);
-            },
-          ),
-          const SizedBox(height: _kSectionGap),
-        ],
-        _sectionTitle(t.connectionHaptics),
-        const SizedBox(height: _kSectionHeaderGap),
-        Card(
-          margin: EdgeInsets.zero,
-          child: SwitchListTile(
-            key: const Key('connection_haptics_switch'),
-            contentPadding: _kCardTilePadding,
-            title: _cardTitle(t.connectionHaptics),
-            subtitle: _cardText(
-              t.connectionHapticsHelp,
-              color: widget.colorScheme.onSurfaceVariant,
-            ),
-            value: widget.connectionHapticsEnabled,
-            onChanged: widget.onConnectionHapticsChanged,
-          ),
-        ),
-        const SizedBox(height: _kSectionGap),
-        _sectionTitle(t.connectionMode),
-        const SizedBox(height: _kSectionHeaderGap),
-        SegmentedButton<ConnectionMode>(
-          segments: [
-            ButtonSegment<ConnectionMode>(
-              value: ConnectionMode.vpnTunnel,
-              label: Text(t.vpn),
-              icon: const Icon(Icons.vpn_key_outlined, size: 18),
-            ),
-            ButtonSegment<ConnectionMode>(
-              value: ConnectionMode.proxyOnly,
-              label: Text(t.localProxy),
-              icon: const Icon(Icons.lan_outlined, size: 18),
-            ),
-          ],
-          selected: {widget.connectionMode},
-          onSelectionChanged: widget.routingLocked
-              ? null
-              : (next) {
-                  if (next.isEmpty) return;
-                  widget.onConnectionModeChanged(next.first);
-                },
-        ),
-        const SizedBox(height: _kSectionGap),
-        if (!proxyMode) ...[
-          _sectionTitle(t.splitTunneling),
-          const SizedBox(height: _kSectionHeaderGap),
-          Card(
-            margin: EdgeInsets.zero,
-            clipBehavior: Clip.antiAlias,
-            child: Padding(
-              padding: _kCardContentPadding,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SwitchListTile(
-                    key: const Key('split_tunnel_enabled_switch'),
-                    contentPadding: EdgeInsets.zero,
-                    title: _cardTitle(t.enableSplitTunneling),
-                    subtitle: _cardText(
-                      splitTunnelSettings.enabled
-                          ? t.splitTunnelApply(
-                              isInclusive ? t.inclusive : t.exclusive,
-                            )
-                          : t.splitTunnelRouteAll,
-                      color: widget.colorScheme.onSurfaceVariant,
-                    ),
-                    value: splitTunnelSettings.enabled,
-                    onChanged: widget.routingLocked
-                        ? null
-                        : (value) => widget.onSplitTunnelSettingsChanged(
-                            splitTunnelSettings.copyWith(enabled: value),
-                          ),
-                  ),
-                  if (splitTunnelSettings.enabled) ...[
-                    const SizedBox(height: 8),
-                    _cardTitle(t.mode),
-                    _cardText(
-                      isInclusive
-                          ? t.inclusiveDescription
-                          : t.exclusiveDescription,
-                      color: widget.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      width: double.infinity,
-                      child: SegmentedButton<SplitTunnelMode>(
-                        showSelectedIcon: false,
-                        segments: [
-                          ButtonSegment<SplitTunnelMode>(
-                            value: SplitTunnelMode.inclusive,
-                            label: Text(t.inclusive),
-                          ),
-                          ButtonSegment<SplitTunnelMode>(
-                            value: SplitTunnelMode.exclusive,
-                            label: Text(t.exclusive),
-                          ),
-                        ],
-                        selected: {splitTunnelSettings.mode},
-                        onSelectionChanged: widget.routingLocked
-                            ? null
-                            : (next) {
-                                if (next.isEmpty) return;
-                                widget.onSplitTunnelSettingsChanged(
-                                  splitTunnelSettings.copyWith(
-                                    mode: next.first,
-                                  ),
-                                );
-                              },
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    ListTile(
-                      enabled: !widget.routingLocked,
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        isInclusive
-                            ? Icons.arrow_downward_rounded
-                            : Icons.arrow_outward_rounded,
-                        color: widget.colorScheme.onSurfaceVariant,
-                      ),
-                      title: _cardTitle(
-                        isInclusive
-                            ? t.selectAppsUsingVpn
-                            : t.selectAppsOutsideVpn,
-                      ),
-                      subtitle: _cardText(
-                        splitTunnelSubtitle,
-                        color: isInclusive && activePackagesEmpty
-                            ? widget.colorScheme.error
-                            : widget.colorScheme.onSurfaceVariant,
-                      ),
-                      trailing: Icon(
-                        Icons.chevron_right,
-                        color: widget.colorScheme.onSurfaceVariant,
-                      ),
-                      onTap: widget.onChooseApps,
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: _kSectionGap),
-        ],
-        _sectionTitle(t.localProxy),
-        const SizedBox(height: _kSectionHeaderGap),
-        Card(
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-            padding: _kCardContentPadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildProxyPortField(
-                  key: const Key('proxy_http_port_field'),
-                  label: t.httpPort,
-                  slot: _httpPortSlot,
-                ),
-                const SizedBox(height: 16),
-                _buildProxyPortField(
-                  key: const Key('proxy_socks_port_field'),
-                  label: t.socksPort,
-                  slot: _socksPortSlot,
-                ),
-                const SizedBox(height: 8),
-                _cardText(
-                  t.proxyPortLimitsNote,
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(height: 12),
-                SwitchListTile(
-                  key: const Key('proxy_allow_lan_switch'),
-                  contentPadding: EdgeInsets.zero,
-                  title: _cardTitle(t.allowLan),
-                  subtitle: _cardText(
-                    widget.proxySettings.allowLanConnections
-                        ? t.allowLanOn
-                        : t.allowLanOff,
-                    color: widget.colorScheme.onSurfaceVariant,
-                  ),
-                  value: widget.proxySettings.allowLanConnections,
-                  onChanged: widget.routingLocked
-                      ? null
-                      : (value) => widget.onProxySettingsChanged(
-                          widget.proxySettings.copyWith(
-                            allowLanConnections: value,
-                          ),
-                        ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: _kCardGap),
-        Card(
-          margin: EdgeInsets.zero,
-          child: Padding(
-            padding: _kCardTilePadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _cardTitle(t.proxyEndpoints),
-                const SizedBox(height: 8),
-                _cardText(
-                  [
-                    'HTTP: $proxyDisplayHost:$proxyHttpPort',
-                    'SOCKS5: $proxyDisplayHost:$proxySocksPort',
-                    proxyEndpointStatus,
-                  ].join('\n'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: _kSectionGap),
-        Card(
-          key: const Key('battery_optimization_card'),
-          margin: EdgeInsets.zero,
-          child: Padding(
-            padding: _kCardTilePadding,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _cardTitle(t.batteryOptimization),
-                      _cardText(
-                        _batteryOptimizationSubtitle(t),
-                        color: _batteryOptimizationColor(),
-                      ),
-                    ],
-                  ),
-                ),
-                if (widget.batteryOptimizationStatus.canRequestExemption) ...[
-                  const SizedBox(width: 12),
-                  FilledButton.tonalIcon(
-                    key: const Key('battery_optimization_request_button'),
-                    onPressed: widget.batteryOptimizationBusy
-                        ? null
-                        : widget.onRequestBatteryOptimization,
-                    icon: const Icon(Icons.shield_outlined),
-                    label: Text(t.allowBackgroundVpn),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: _kSectionGap),
-        _sectionTitle(t.connectivityCheck),
-        const SizedBox(height: _kSectionHeaderGap),
-        Card(
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-            padding: _kCardContentPadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _cardTitle(t.statusCheckUrl),
-                _cardText(
-                  t.statusCheckHelp,
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  key: const Key('connectivity_url_field'),
-                  controller: _connectivityUrlController,
-                  keyboardType: TextInputType.url,
-                  decoration: InputDecoration(
-                    labelText: t.connectivityUrl,
-                    hintText: ConnectivityCheckSettings.defaultUrl,
-                    errorText: _connectivityUrlError,
-                  ),
-                  onChanged: (value) {
-                    final error = ConnectivityCheckSettings.validateUrl(
-                      value,
-                      l10n: t,
-                    );
-                    if (_connectivityUrlError != error) {
-                      setState(() => _connectivityUrlError = error);
-                    }
-                    if (error != null) return;
-                    widget.onConnectivityCheckSettingsChanged(
-                      widget.connectivityCheckSettings.copyWith(url: value),
-                    );
-                  },
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  key: const Key('connectivity_timeout_field'),
-                  controller: _connectivityTimeoutController,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: InputDecoration(
-                    labelText: t.connectivityTimeout,
-                    hintText: '${ConnectivityCheckSettings.defaultTimeoutMs}',
-                    errorText: _connectivityTimeoutError,
-                  ),
-                  onChanged: (value) {
-                    final error = ConnectivityCheckSettings.validateTimeoutMs(
-                      value,
-                      l10n: t,
-                    );
-                    if (_connectivityTimeoutError != error) {
-                      setState(() => _connectivityTimeoutError = error);
-                    }
-                    if (error != null) return;
-                    final timeoutMs = ConnectivityCheckSettings.parseTimeoutMs(
-                      value,
-                    );
-                    if (timeoutMs == null) return;
-                    widget.onConnectivityCheckSettingsChanged(
-                      widget.connectivityCheckSettings.copyWith(
-                        timeoutMs: timeoutMs,
-                      ),
-                    );
-                  },
-                ),
-                _cardText(
-                  t.timeoutHelp,
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (widget.onOpenL2tpSecurityNotice != null) ...[
-          const SizedBox(height: _kSectionGap),
-          _sectionTitle(t.notice),
-          const SizedBox(height: _kSectionHeaderGap),
-          Card(
-            margin: EdgeInsets.zero,
-            child: ListTile(
-              key: const Key('l2tp_security_notice_tile'),
-              contentPadding: _kCardTilePadding,
-              title: _cardTitle(t.l2tpSecurityNotice),
-              subtitle: _cardText(
-                t.reviewL2tpNotice,
-                color: widget.colorScheme.onSurfaceVariant,
-              ),
-              trailing: Icon(
-                Icons.chevron_right,
-                color: widget.colorScheme.onSurfaceVariant,
-              ),
-              onTap: widget.onOpenL2tpSecurityNotice,
-            ),
-          ),
-        ],
-        const SizedBox(height: _kSectionGap),
-        _sectionTitle(t.updates),
-        const SizedBox(height: _kSectionHeaderGap),
-        Card(
-          key: const Key('settings_update_card'),
-          margin: EdgeInsets.zero,
-          child: Padding(
-            padding: _kCardContentPadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _cardTitle(_updateTitle(t)),
-                _cardText(
-                  _updateSubtitle(t),
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    OutlinedButton.icon(
-                      key: const Key('settings_update_refresh_button'),
-                      onPressed: _handleVersionCheckPressed,
-                      icon: const Icon(Icons.refresh),
-                      label: Text(t.refresh),
-                    ),
-                    if (widget.onOpenReleasePage != null)
-                      FilledButton.tonalIcon(
-                        key: const Key('settings_update_open_button'),
-                        onPressed: widget.onOpenReleasePage,
-                        icon: const Icon(Icons.open_in_new),
-                        label: Text(t.openReleasePage),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: _kSectionGap),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Text(
-            widget.installedVersion == null
-                ? t.versionUnavailable
-                : t.version(widget.installedVersion!),
-            key: const Key('settings_version_footer'),
-            textAlign: TextAlign.center,
-            style: widget.textTheme.bodySmall?.copyWith(
-              color: widget.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
         _sectionTitle(t.about),
         const SizedBox(height: _kSectionHeaderGap),
-        Card(
-          key: const Key('settings_about_card'),
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
+        _buildAboutGroup(t),
+      ],
+    );
+  }
+
+  Widget _buildGeneralGroup(AppLocalizations t, String languageSummary) {
+    final children = <Widget>[
+      ListTile(
+        key: const Key('settings_language_tile'),
+        contentPadding: _kCardTilePadding,
+        leading: Icon(
+          Icons.translate_rounded,
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        title: _cardTitle(t.languageLabel),
+        subtitle: _cardText(
+          languageSummary,
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        trailing: Icon(
+          Icons.chevron_right,
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        onTap: () => showLanguagePickerSheet(
+          context,
+          selectedLocale: widget.selectedLocale,
+          onSelected: widget.onLocaleChanged,
+        ),
+      ),
+    ];
+
+    if (widget.themeMode != null && widget.onThemeModeChanged != null) {
+      children.add(
+        Padding(
+          padding: _kCardContentPadding,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Padding(
-                padding: _kCardContentPadding,
-                child: _cardText(
-                  t.aboutText,
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                key: const Key('settings_about_telegram_tile'),
-                contentPadding: _kCardTilePadding,
-                title: _cardTitle(t.telegramTitle),
-                subtitle: _cardText(
-                  'https://t.me/TunnelForge',
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                trailing: Icon(
-                  Icons.open_in_new,
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                onTap: widget.onOpenTelegram,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                key: const Key('settings_about_github_tile'),
-                contentPadding: _kCardTilePadding,
-                title: _cardTitle(t.githubTitle),
-                subtitle: _cardText(
-                  'https://github.com/evokelektrique/tunnel-forge',
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                trailing: Icon(
-                  Icons.open_in_new,
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                onTap: widget.onOpenGithub,
+              _cardTitle(t.appearance),
+              const SizedBox(height: 12),
+              SegmentedButton<ThemeMode>(
+                segments: [
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.system,
+                    label: Text(t.system),
+                    icon: const Icon(Icons.brightness_auto_outlined, size: 18),
+                  ),
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.light,
+                    label: Text(t.light),
+                    icon: const Icon(Icons.light_mode_outlined, size: 18),
+                  ),
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.dark,
+                    label: Text(t.dark),
+                    icon: const Icon(Icons.dark_mode_outlined, size: 18),
+                  ),
+                ],
+                selected: {widget.themeMode!},
+                onSelectionChanged: (next) {
+                  if (next.isEmpty) return;
+                  widget.onThemeModeChanged!(next.first);
+                },
               ),
             ],
           ),
         ),
-      ],
+      );
+    }
+
+    children.add(
+      SwitchListTile(
+        key: const Key('connection_haptics_switch'),
+        contentPadding: _kCardTilePadding,
+        title: _cardTitle(t.connectionHaptics),
+        subtitle: _cardText(
+          t.connectionHapticsHelp,
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        value: widget.connectionHapticsEnabled,
+        onChanged: widget.onConnectionHapticsChanged,
+      ),
+    );
+    children.add(
+      Padding(
+        key: const Key('battery_optimization_card'),
+        padding: _kCardTilePadding,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _cardTitle(t.batteryOptimization),
+                  _cardText(
+                    _batteryOptimizationSubtitle(t),
+                    color: _batteryOptimizationColor(),
+                  ),
+                ],
+              ),
+            ),
+            if (widget.batteryOptimizationStatus.canRequestExemption) ...[
+              const SizedBox(width: 12),
+              FilledButton.tonalIcon(
+                key: const Key('battery_optimization_request_button'),
+                onPressed: widget.batteryOptimizationBusy
+                    ? null
+                    : widget.onRequestBatteryOptimization,
+                icon: const Icon(Icons.shield_outlined),
+                label: Text(t.allowBackgroundVpn),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+    return _groupCard(children);
+  }
+
+  Widget _buildConnectionGroup(
+    AppLocalizations t, {
+    required bool proxyMode,
+    required SplitTunnelSettings splitTunnelSettings,
+    required bool isInclusive,
+    required bool activePackagesEmpty,
+    required String splitTunnelSubtitle,
+    required String proxyDisplayHost,
+    required int proxyHttpPort,
+    required int proxySocksPort,
+    required String proxyEndpointStatus,
+  }) {
+    final children = <Widget>[
+      Padding(
+        padding: _kCardContentPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _cardTitle(t.connectionMode),
+            const SizedBox(height: 12),
+            SegmentedButton<ConnectionMode>(
+              segments: [
+                ButtonSegment<ConnectionMode>(
+                  value: ConnectionMode.vpnTunnel,
+                  label: Text(t.vpn),
+                  icon: const Icon(Icons.vpn_key_outlined, size: 18),
+                ),
+                ButtonSegment<ConnectionMode>(
+                  value: ConnectionMode.proxyOnly,
+                  label: Text(t.localProxy),
+                  icon: const Icon(Icons.lan_outlined, size: 18),
+                ),
+              ],
+              selected: {widget.connectionMode},
+              onSelectionChanged: widget.routingLocked
+                  ? null
+                  : (next) {
+                      if (next.isEmpty) return;
+                      widget.onConnectionModeChanged(next.first);
+                    },
+            ),
+          ],
+        ),
+      ),
+    ];
+
+    if (!proxyMode) {
+      children.add(
+        Padding(
+          padding: _kCardContentPadding,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _cardTitle(t.splitTunneling),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                key: const Key('split_tunnel_enabled_switch'),
+                contentPadding: EdgeInsets.zero,
+                title: _cardTitle(t.enableSplitTunneling),
+                subtitle: _cardText(
+                  splitTunnelSettings.enabled
+                      ? t.splitTunnelApply(
+                          isInclusive ? t.inclusive : t.exclusive,
+                        )
+                      : t.splitTunnelRouteAll,
+                  color: widget.colorScheme.onSurfaceVariant,
+                ),
+                value: splitTunnelSettings.enabled,
+                onChanged: widget.routingLocked
+                    ? null
+                    : (value) => widget.onSplitTunnelSettingsChanged(
+                        splitTunnelSettings.copyWith(enabled: value),
+                      ),
+              ),
+              if (splitTunnelSettings.enabled) ...[
+                const SizedBox(height: 8),
+                _cardTitle(t.mode),
+                _cardText(
+                  isInclusive
+                      ? t.inclusiveDescription
+                      : t.exclusiveDescription,
+                  color: widget.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<SplitTunnelMode>(
+                    showSelectedIcon: false,
+                    segments: [
+                      ButtonSegment<SplitTunnelMode>(
+                        value: SplitTunnelMode.inclusive,
+                        label: Text(t.inclusive),
+                      ),
+                      ButtonSegment<SplitTunnelMode>(
+                        value: SplitTunnelMode.exclusive,
+                        label: Text(t.exclusive),
+                      ),
+                    ],
+                    selected: {splitTunnelSettings.mode},
+                    onSelectionChanged: widget.routingLocked
+                        ? null
+                        : (next) {
+                            if (next.isEmpty) return;
+                            widget.onSplitTunnelSettingsChanged(
+                              splitTunnelSettings.copyWith(mode: next.first),
+                            );
+                          },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  enabled: !widget.routingLocked,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    isInclusive
+                        ? Icons.arrow_downward_rounded
+                        : Icons.arrow_outward_rounded,
+                    color: widget.colorScheme.onSurfaceVariant,
+                  ),
+                  title: _cardTitle(
+                    isInclusive
+                        ? t.selectAppsUsingVpn
+                        : t.selectAppsOutsideVpn,
+                  ),
+                  subtitle: _cardText(
+                    splitTunnelSubtitle,
+                    color: isInclusive && activePackagesEmpty
+                        ? widget.colorScheme.error
+                        : widget.colorScheme.onSurfaceVariant,
+                  ),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    color: widget.colorScheme.onSurfaceVariant,
+                  ),
+                  onTap: widget.onChooseApps,
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    children.add(
+      Padding(
+        padding: _kCardContentPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _cardTitle(t.localProxy),
+            const SizedBox(height: 12),
+            _buildProxyPortField(
+              key: const Key('proxy_http_port_field'),
+              label: t.httpPort,
+              slot: _httpPortSlot,
+            ),
+            const SizedBox(height: 16),
+            _buildProxyPortField(
+              key: const Key('proxy_socks_port_field'),
+              label: t.socksPort,
+              slot: _socksPortSlot,
+            ),
+            const SizedBox(height: 8),
+            _cardText(
+              t.proxyPortLimitsNote,
+              color: widget.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              key: const Key('proxy_allow_lan_switch'),
+              contentPadding: EdgeInsets.zero,
+              title: _cardTitle(t.allowLan),
+              subtitle: _cardText(
+                widget.proxySettings.allowLanConnections
+                    ? t.allowLanOn
+                    : t.allowLanOff,
+                color: widget.colorScheme.onSurfaceVariant,
+              ),
+              value: widget.proxySettings.allowLanConnections,
+              onChanged: widget.routingLocked
+                  ? null
+                  : (value) => widget.onProxySettingsChanged(
+                      widget.proxySettings.copyWith(
+                        allowLanConnections: value,
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 12),
+            _cardTitle(t.proxyEndpoints),
+            const SizedBox(height: 8),
+            _cardText(
+              [
+                'HTTP: $proxyDisplayHost:$proxyHttpPort',
+                'SOCKS5: $proxyDisplayHost:$proxySocksPort',
+                proxyEndpointStatus,
+              ].join('\n'),
+            ),
+          ],
+        ),
+      ),
+    );
+    children.add(
+      Padding(
+        padding: _kCardContentPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _cardTitle(t.connectivityCheck),
+            const SizedBox(height: 8),
+            _cardTitle(t.statusCheckUrl),
+            _cardText(
+              t.statusCheckHelp,
+              color: widget.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              key: const Key('connectivity_url_field'),
+              controller: _connectivityUrlController,
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                labelText: t.connectivityUrl,
+                hintText: ConnectivityCheckSettings.defaultUrl,
+                errorText: _connectivityUrlError,
+              ),
+              onChanged: (value) {
+                final error = ConnectivityCheckSettings.validateUrl(
+                  value,
+                  l10n: t,
+                );
+                if (_connectivityUrlError != error) {
+                  setState(() => _connectivityUrlError = error);
+                }
+                if (error != null) return;
+                widget.onConnectivityCheckSettingsChanged(
+                  widget.connectivityCheckSettings.copyWith(url: value),
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              key: const Key('connectivity_timeout_field'),
+              controller: _connectivityTimeoutController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                labelText: t.connectivityTimeout,
+                hintText: '${ConnectivityCheckSettings.defaultTimeoutMs}',
+                errorText: _connectivityTimeoutError,
+              ),
+              onChanged: (value) {
+                final error = ConnectivityCheckSettings.validateTimeoutMs(
+                  value,
+                  l10n: t,
+                );
+                if (_connectivityTimeoutError != error) {
+                  setState(() => _connectivityTimeoutError = error);
+                }
+                if (error != null) return;
+                final timeoutMs = ConnectivityCheckSettings.parseTimeoutMs(
+                  value,
+                );
+                if (timeoutMs == null) return;
+                widget.onConnectivityCheckSettingsChanged(
+                  widget.connectivityCheckSettings.copyWith(
+                    timeoutMs: timeoutMs,
+                  ),
+                );
+              },
+            ),
+            _cardText(
+              t.timeoutHelp,
+              color: widget.colorScheme.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+    return _groupCard(children);
+  }
+
+  Widget _buildAboutGroup(AppLocalizations t) {
+    final children = <Widget>[];
+    if (widget.onOpenL2tpSecurityNotice != null) {
+      children.add(
+        ListTile(
+          key: const Key('l2tp_security_notice_tile'),
+          contentPadding: _kCardTilePadding,
+          title: _cardTitle(t.l2tpSecurityNotice),
+          subtitle: _cardText(
+            t.reviewL2tpNotice,
+            color: widget.colorScheme.onSurfaceVariant,
+          ),
+          trailing: Icon(
+            Icons.chevron_right,
+            color: widget.colorScheme.onSurfaceVariant,
+          ),
+          onTap: widget.onOpenL2tpSecurityNotice,
+        ),
+      );
+    }
+    children.add(
+      Padding(
+        padding: _kCardContentPadding,
+        child: _cardText(
+          t.aboutText,
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+    children.add(
+      ListTile(
+        key: const Key('settings_about_telegram_tile'),
+        contentPadding: _kCardTilePadding,
+        title: _cardTitle(t.telegramTitle),
+        subtitle: _cardText(
+          'https://t.me/TunnelForge',
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        trailing: Icon(
+          Icons.open_in_new,
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        onTap: widget.onOpenTelegram,
+      ),
+    );
+    children.add(
+      ListTile(
+        key: const Key('settings_about_github_tile'),
+        contentPadding: _kCardTilePadding,
+        title: _cardTitle(t.githubTitle),
+        subtitle: _cardText(
+          'https://github.com/evokelektrique/tunnel-forge',
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        trailing: Icon(
+          Icons.open_in_new,
+          color: widget.colorScheme.onSurfaceVariant,
+        ),
+        onTap: widget.onOpenGithub,
+      ),
+    );
+    children.add(
+      Padding(
+        key: const Key('settings_version_footer'),
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          widget.installedVersion == null
+              ? t.versionUnavailable
+              : t.version(widget.installedVersion!),
+          textAlign: TextAlign.center,
+          style: widget.textTheme.bodySmall?.copyWith(
+            color: widget.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+    children.add(
+      Padding(
+        key: const Key('settings_update_card'),
+        padding: _kCardContentPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _cardTitle(_updateTitle(t)),
+            _cardText(
+              _updateSubtitle(t),
+              color: widget.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  key: const Key('settings_update_refresh_button'),
+                  onPressed: _handleVersionCheckPressed,
+                  icon: const Icon(Icons.refresh),
+                  label: Text(t.refresh),
+                ),
+                if (widget.onOpenReleasePage != null)
+                  FilledButton.tonalIcon(
+                    key: const Key('settings_update_open_button'),
+                    onPressed: widget.onOpenReleasePage,
+                    icon: const Icon(Icons.open_in_new),
+                    label: Text(t.openReleasePage),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    return _groupCard(children, key: const Key('settings_about_card'));
+  }
+
+  Widget _groupCard(List<Widget> children, {Key? key}) {
+    final content = <Widget>[];
+    for (var i = 0; i < children.length; i++) {
+      if (i > 0) content.add(const Divider(height: 1));
+      content.add(children[i]);
+    }
+    return Card(
+      key: key,
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: content,
+      ),
     );
   }
 
   Widget _sectionTitle(String text) {
     return Text(
       text,
-      style: widget.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+      style: widget.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
     );
   }
 

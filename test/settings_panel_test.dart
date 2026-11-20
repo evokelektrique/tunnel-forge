@@ -74,6 +74,23 @@ void main() {
     );
   }
 
+  testWidgets('settings groups controls into three ordered cards', (
+    tester,
+  ) async {
+    await tester.pumpWidget(buildPanel(proxySettings: const ProxySettings()));
+
+    expect(find.text('General'), findsOneWidget);
+    expect(find.text('Connection'), findsOneWidget);
+    expect(find.byType(Divider), findsWidgets);
+
+    await tester.scrollUntilVisible(
+      find.text('About'),
+      300,
+      scrollable: settingsScrollView(),
+    );
+    expect(find.text('About'), findsOneWidget);
+  });
+
   testWidgets('proxy port fields update when persisted settings load later', (
     tester,
   ) async {
