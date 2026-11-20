@@ -1,1 +1,1 @@
-L2TP/IPsec VPN client for Android
+PPTP/L2TP VPN client for Android
