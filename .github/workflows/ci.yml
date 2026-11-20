@@ -300,11 +300,11 @@ jobs:
         run: |
           tools="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
           profile="$(find build/app/outputs/connected_android_test_additional_output -name tunnel-engine.profraw -print -quit)"
-          engine="$(find build/app/intermediates/cxx/Debug -path '*/obj/x86_64/libtunnel_engine.so' -print -quit)"
-          test -n "$profile" && test -n "$engine"
+          native_libs="build/app/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/x86_64"
+          test -s "$profile"
           "$tools/llvm-profdata" merge -sparse "$profile" -o build/android-native.profdata
           "$tools/llvm-cov" export -format=lcov -instr-profile=build/android-native.profdata \
-            "$engine" -object="$(dirname "$engine")/libpptp_gre_helper.so" -ignore-filename-regex='/androidTest/|/_deps/|^/usr/' \
+            "$native_libs/libtunnel_engine.so" -object="$native_libs/libpptp_gre_helper.so" -ignore-filename-regex='/androidTest/|/_deps/|^/usr/' \
             > build/android-native-coverage.info
           grep -q '^SF:.*vpn_jni.c$' build/android-native-coverage.info
 
