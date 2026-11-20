@@ -1039,9 +1039,7 @@ class TunnelVpnService : VpnService() {
         for (dnsServer in tunDnsServersForBuilder(dnsAutomatic, automaticDnsServers)) {
             builder.addDnsServer(dnsServer)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.allowFamily(OsConstants.AF_INET)
-        }
+        builder.allowFamily(OsConstants.AF_INET)
         applyExcludeRouteForVpnServer(builder, server)
         if (splitTunnelEnabled && splitTunnelMode == VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE) {
             for (pkg in effectiveInclusivePkgs) {
@@ -1466,7 +1464,6 @@ class TunnelVpnService : VpnService() {
         }
 
     private fun createChannelIfNeeded() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val ch = NotificationChannel(
             CHANNEL_ID,

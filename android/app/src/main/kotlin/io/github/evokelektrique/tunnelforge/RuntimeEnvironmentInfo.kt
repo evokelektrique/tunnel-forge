@@ -21,15 +21,7 @@ internal object RuntimeEnvironmentInfo {
             } catch (_: Exception) {
                 null
             }
-        val buildNumber =
-            packageInfo?.let {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    it.longVersionCode.toString()
-                } else {
-                    @Suppress("DEPRECATION")
-                    it.versionCode.toString()
-                }
-            }.orEmpty()
+        val buildNumber = packageInfo?.longVersionCode?.toString().orEmpty()
         VpnTunnelEvents.emitEngineLog(
             Log.INFO,
             tag,

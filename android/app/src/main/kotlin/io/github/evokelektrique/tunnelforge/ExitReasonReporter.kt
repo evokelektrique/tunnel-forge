@@ -102,6 +102,7 @@ object ExitReasonReporter {
                 when (info.reason) {
                     ApplicationExitInfo.REASON_ANR -> writeAnrTrace(info)
                     ApplicationExitInfo.REASON_CRASH_NATIVE -> saveNativeTombstone(logsDir, info)
+                    else -> Unit
                 }
             }
             tsFile.writeText(exits.last().timestamp.toString(), StandardCharsets.UTF_8)

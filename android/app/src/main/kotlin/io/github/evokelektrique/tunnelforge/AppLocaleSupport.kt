@@ -4,6 +4,7 @@ import android.app.LocaleManager
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
+import androidx.core.content.edit
 import android.os.LocaleList
 import androidx.annotation.StringRes
 
@@ -23,9 +24,9 @@ internal object AppLocaleSupport {
     fun applyAppLocale(context: Context, rawTag: String?) {
         val tag = normalizeLanguageTag(rawTag)
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().apply {
+        prefs.edit {
             if (tag == null) remove(KEY_LOCALE_TAG) else putString(KEY_LOCALE_TAG, tag)
-        }.apply()
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val localeManager = context.getSystemService(LocaleManager::class.java)

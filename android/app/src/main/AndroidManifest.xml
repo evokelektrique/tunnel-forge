@@ -16,6 +16,7 @@
         android:label="@string/app_name"
         android:name=".TunnelForgeApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -45,7 +46,8 @@
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/vnd.tunnelforge.profile+json" />
-                <data android:scheme="content" android:pathPattern=".*\\.tfp" />
+                <data android:scheme="content" />
+                <data android:pathPattern=".*\\.tfp" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />

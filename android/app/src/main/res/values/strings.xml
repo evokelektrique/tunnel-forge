@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name" translatable="false">TunnelForge</string>
     <string name="vpn_session_name" translatable="false">TunnelForge</string>
     <string name="vpn_notification_title">TunnelForge VPN</string>
-    <string name="vpn_notification_connecting">Connecting...</string>
+    <string name="vpn_notification_connecting">Connecting…</string>
     <string name="vpn_notification_connected">VPN active</string>
     <string name="vpn_notification_connected_profile">Connected: %1$s</string>
     <string name="vpn_notification_waiting_network">Waiting for network (blocking internet)</string>
-    <string name="vpn_notification_reconnecting">Reconnecting...</string>
-    <string name="proxy_notification_starting">Starting local proxy...</string>
+    <string name="vpn_notification_reconnecting">Reconnecting…</string>
+    <string name="proxy_notification_starting">Starting local proxy…</string>
     <string name="proxy_notification_waiting_network">Waiting for network</string>
     <string name="vpn_notification_action_disconnect">Disconnect</string>
     <string name="vpn_notification_channel_name">VPN</string>
@@ -17,7 +17,7 @@
     <string name="vpn_notification_connect_failed_title">TunnelForge connection failed</string>
     <string name="vpn_notification_disconnected_server">VPN server closed the connection.</string>
     <string name="vpn_notification_reconnecting_alert_title">TunnelForge connection dropped</string>
-    <string name="vpn_notification_reconnecting_alert_body">Connection lost. Reconnecting in background...</string>
+    <string name="vpn_notification_reconnecting_alert_body">Connection lost. Reconnecting in background…</string>
     <string name="proxy_notification_title">TunnelForge proxy</string>
     <string name="qs_tile_label" translatable="false">TunnelForge</string>
     <string name="qs_tile_no_profile" translatable="false">No profile selected</string>
@@ -101,5 +101,5 @@
     <string name="subscription_notification_fetching">Fetching subscription…</string>
     <string name="subscription_notification_applying">Applying profiles (%1$d/%2$d)…</string>
     <string name="subscription_notification_updated_title">%1$s updated</string>
-    <string name="subscription_notification_summary">%1$d imported, %2$d updated, %3$d removed</string>
+    <string name="subscription_notification_summary" tools:ignore="PluralsCandidate">%1$d imported, %2$d updated, %3$d removed</string>
 </resources>

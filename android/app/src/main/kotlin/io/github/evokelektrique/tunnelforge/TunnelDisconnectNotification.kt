@@ -452,7 +452,6 @@ internal object TunnelDisconnectNotification {
     }
 
     private fun createChannelIfNeeded(context: Context, nm: NotificationManager) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel =
             NotificationChannel(
                 CHANNEL_ID,

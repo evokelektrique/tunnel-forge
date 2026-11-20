@@ -1,6 +1,7 @@
 package io.github.evokelektrique.tunnelforge
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.ForegroundServiceStartNotAllowedException
 import android.app.PendingIntent
 import android.content.Intent
@@ -80,6 +81,7 @@ class TunnelQuickSettingsTileService : TileService() {
         return false
     }
 
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     private fun launchAppToConnect() {
         val intent =
             Intent(this, MainActivity::class.java).apply {
@@ -96,6 +98,7 @@ class TunnelQuickSettingsTileService : TileService() {
                 )
             startActivityAndCollapse(pendingIntent)
         } else {
+            // The PendingIntent overload was introduced in API 34.
             @Suppress("DEPRECATION")
             startActivityAndCollapse(intent)
         }
@@ -122,9 +125,7 @@ class TunnelQuickSettingsTileService : TileService() {
         tile.state = presentation.state
         tile.label = presentation.label
         tile.subtitle = presentation.subtitle
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            tile.stateDescription = presentation.stateDescription
-        }
+        tile.stateDescription = presentation.stateDescription
         tile.icon = Icon.createWithResource(this, R.drawable.ic_qs_tunnel)
         tile.updateTile()
     }

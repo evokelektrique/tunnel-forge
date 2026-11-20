@@ -1,14 +1,12 @@
 package io.github.evokelektrique.tunnelforge
 
 import android.content.res.Configuration
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.os.Build
 import android.util.TypedValue
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -29,17 +27,11 @@ class SplashThemeTest {
             val theme = themedContext.resources.newTheme().apply {
                 applyStyle(R.style.LaunchTheme, true)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val value = TypedValue()
-                theme.resolveAttribute(android.R.attr.windowSplashScreenBackground, value, true)
-                assertEquals("Android 12+ splash nightMode=$nightMode", expectedColor, value.data)
-            }
-            val drawable = themedContext.resources.getDrawable(R.drawable.launch_background, theme)
-            val bitmap = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
-            drawable.setBounds(0, 0, bitmap.width, bitmap.height)
-            drawable.draw(Canvas(bitmap))
-            assertEquals("Legacy splash nightMode=$nightMode", expectedColor, bitmap.getPixel(0, 0))
-            bitmap.recycle()
+            val value = TypedValue()
+            assertTrue(theme.resolveAttribute(android.R.attr.windowSplashScreenBackground, value, true))
+            assertEquals("Android 12+ splash nightMode=$nightMode", expectedColor, value.data)
+            assertTrue(theme.resolveAttribute(android.R.attr.windowSplashScreenAnimatedIcon, value, true))
+            assertEquals(R.drawable.android12splash, value.resourceId)
         }
     }
 }

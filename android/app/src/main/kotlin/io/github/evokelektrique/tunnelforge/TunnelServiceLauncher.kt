@@ -2,7 +2,6 @@ package io.github.evokelektrique.tunnelforge
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 
 /** Shared builder and foreground-service dispatcher for VPN and local-proxy sessions. */
 internal object TunnelServiceLauncher {
@@ -69,11 +68,7 @@ internal object TunnelServiceLauncher {
     }
 
     fun startForegroundWorkerService(context: Context, intent: Intent) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
-        }
+        context.startForegroundService(intent)
     }
 
     fun stop(

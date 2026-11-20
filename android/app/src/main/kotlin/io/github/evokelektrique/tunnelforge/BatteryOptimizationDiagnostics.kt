@@ -1,7 +1,6 @@
 package io.github.evokelektrique.tunnelforge
 
 import android.content.Context
-import android.os.Build
 import android.os.PowerManager
 import android.util.Log
 
@@ -46,12 +45,10 @@ internal class BatteryOptimizationLogPolicy {
 }
 
 internal object BatteryOptimizationDiagnostics {
-    const val STATE_UNSUPPORTED = "unsupported"
     const val STATE_ALLOWED = "allowed"
     const val STATE_RESTRICTED = "restricted"
 
     fun isIgnoringBatteryOptimizations(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
         val target = context.applicationContext ?: context
         val powerManager = target.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
         return powerManager.isIgnoringBatteryOptimizations(target.packageName)
@@ -64,11 +61,7 @@ internal object BatteryOptimizationDiagnostics {
     }
 
     fun stateName(context: Context): String =
-        when {
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.M -> STATE_UNSUPPORTED
-            isIgnoringBatteryOptimizations(context) -> STATE_ALLOWED
-            else -> STATE_RESTRICTED
-        }
+        if (isIgnoringBatteryOptimizations(context)) STATE_ALLOWED else STATE_RESTRICTED
 
     fun emitForVpnEvent(
         context: Context,

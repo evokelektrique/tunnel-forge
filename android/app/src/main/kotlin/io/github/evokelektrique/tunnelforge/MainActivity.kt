@@ -1,6 +1,7 @@
 package io.github.evokelektrique.tunnelforge
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.UiModeManager
 import android.app.ForegroundServiceStartNotAllowedException
@@ -23,6 +24,9 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.IntentCompat
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
+import androidx.core.net.toUri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -153,14 +157,12 @@ class MainActivity : FlutterActivity() {
                 AppInfoContract.SET_THEME_MODE -> {
                     // Android 12+ renders the starting window before Flutter starts.
                     // Persist the app override with Android so that splash matches it.
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val mode = when (call.arguments as? String) {
-                            "dark" -> UiModeManager.MODE_NIGHT_YES
-                            "light" -> UiModeManager.MODE_NIGHT_NO
-                            else -> UiModeManager.MODE_NIGHT_AUTO
-                        }
-                        getSystemService(UiModeManager::class.java).setApplicationNightMode(mode)
+                    val mode = when (call.arguments as? String) {
+                        "dark" -> UiModeManager.MODE_NIGHT_YES
+                        "light" -> UiModeManager.MODE_NIGHT_NO
+                        else -> UiModeManager.MODE_NIGHT_AUTO
                     }
+                    getSystemService(UiModeManager::class.java).setApplicationNightMode(mode)
                     result.success(null)
                 }
                 AppInfoContract.SET_APP_LOCALE -> {
@@ -422,13 +424,7 @@ class MainActivity : FlutterActivity() {
                 packageManager.getPackageInfo(packageName, 0)
             }
         val versionName = packageInfo.versionName?.trim().orEmpty()
-        val buildNumber =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                packageInfo.longVersionCode.toString()
-            } else {
-                @Suppress("DEPRECATION")
-                packageInfo.versionCode.toString()
-            }
+        val buildNumber = packageInfo.longVersionCode.toString()
         return mapOf(
             AppInfoContract.ARG_VERSION_NAME to versionName,
             AppInfoContract.ARG_BUILD_NUMBER to buildNumber,
@@ -595,10 +591,10 @@ class MainActivity : FlutterActivity() {
         if (drawable is BitmapDrawable) {
             val existing = drawable.bitmap
             if (existing != null && !existing.isRecycled) {
-                return Bitmap.createScaledBitmap(existing, sizePx, sizePx, true)
+                return existing.scale(sizePx, sizePx)
             }
         }
-        val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val bmp = createBitmap(sizePx, sizePx)
         val canvas = Canvas(bmp)
         drawable.setBounds(0, 0, sizePx, sizePx)
         drawable.draw(canvas)
@@ -661,11 +657,9 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    // This user-initiated request keeps the VPN available during Doze.
+    @SuppressLint("BatteryLife")
     private fun requestIgnoreBatteryOptimizations(result: MethodChannel.Result) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            result.success(batteryOptimizationResult(BATTERY_OUTCOME_UNSUPPORTED))
-            return
-        }
         if (isIgnoringBatteryOptimizations()) {
             BatteryOptimizationLogPolicy.shared.markUnrestrictedLogged()
             result.success(batteryOptimizationResult(BATTERY_OUTCOME_ALREADY_ALLOWED))
@@ -682,7 +676,7 @@ class MainActivity : FlutterActivity() {
         }
         val requestIntent =
             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
+                data = "package:$packageName".toUri()
             }
         if (launchSafely(requestIntent, REQUEST_BATTERY_OPTIMIZATION)) {
             batteryOptimizationPermissionResult = result
@@ -700,9 +694,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun openBatteryOptimizationSettings(): Map<String, Any?> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return batteryOptimizationResult(BATTERY_OUTCOME_UNSUPPORTED)
-        }
         val settingsIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
         return if (launchSafely(settingsIntent)) {
             awaitingBatteryOptimizationReturn = true
@@ -720,7 +711,7 @@ class MainActivity : FlutterActivity() {
         val intents =
             manufacturerBackgroundSettingsIntents(manufacturer) +
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.parse("package:$packageName")
+                    data = "package:$packageName".toUri()
                 }
         for (intent in intents) {
             if (launchSafely(intent)) {
@@ -776,7 +767,7 @@ class MainActivity : FlutterActivity() {
         failureMessage: String,
     ): Map<String, Any?> {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.parse("package:$packageName")
+            data = "package:$packageName".toUri()
         }
         return if (launchSafely(intent)) {
             awaitingBatteryOptimizationReturn = true
@@ -1115,7 +1106,6 @@ class MainActivity : FlutterActivity() {
         private const val BATTERY_RETURN_RECHECK_MAX_ATTEMPTS = 50
         private val BATTERY_REFRESH_CALLBACK_TOKEN = Any()
         private val BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN = Any()
-        private const val BATTERY_OUTCOME_UNSUPPORTED = "unsupported"
         private const val BATTERY_OUTCOME_ALREADY_ALLOWED = "alreadyAllowed"
         private const val BATTERY_OUTCOME_REQUESTED = "requested"
         private const val BATTERY_OUTCOME_SETTINGS_OPENED = "settingsOpened"

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="vpn_notification_title">وی‌پی‌ان TunnelForge</string>
-    <string name="vpn_notification_connecting">در حال اتصال...</string>
+    <string name="vpn_notification_connecting">در حال اتصال…</string>
     <string name="vpn_notification_connected">وی‌پی‌ان فعال است</string>
     <string name="vpn_notification_connected_profile">متصل: %1$s</string>
     <string name="vpn_notification_waiting_network">در انتظار شبکه (مسدودسازی اینترنت)</string>
-    <string name="vpn_notification_reconnecting">در حال اتصال مجدد...</string>
-    <string name="proxy_notification_starting">در حال شروع پروکسی محلی...</string>
+    <string name="vpn_notification_reconnecting">در حال اتصال مجدد…</string>
+    <string name="proxy_notification_starting">در حال شروع پروکسی محلی…</string>
     <string name="proxy_notification_waiting_network">در انتظار شبکه</string>
     <string name="vpn_notification_action_disconnect">قطع اتصال</string>
     <string name="vpn_notification_channel_name">وی‌پی‌ان</string>
@@ -15,7 +15,7 @@
     <string name="vpn_notification_connect_failed_title">اتصال TunnelForge ناموفق بود</string>
     <string name="vpn_notification_disconnected_server">سرور وی‌پی‌ان اتصال را بست.</string>
     <string name="vpn_notification_reconnecting_alert_title">اتصال TunnelForge قطع شد</string>
-    <string name="vpn_notification_reconnecting_alert_body">اتصال قطع شد. در حال اتصال مجدد در پس‌زمینه...</string>
+    <string name="vpn_notification_reconnecting_alert_body">اتصال قطع شد. در حال اتصال مجدد در پس‌زمینه…</string>
     <string name="proxy_notification_title">پروکسی TunnelForge</string>
 
     <string name="tunnel_reason_auth_failed">احراز هویت ناموفق بود.</string>
