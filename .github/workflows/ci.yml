@@ -76,18 +76,6 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
 
-  native-tests:
-    name: native-tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Run native tests
-        run: sh tool/run_native_tests.sh
-
   android-go-tests:
     name: Android Go native tests
     runs-on: ubuntu-latest
@@ -171,6 +159,10 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon --console=plain --info --stacktrace -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest
 
+      - name: Run native C tests
+        working-directory: android
+        run: ./gradlew --no-daemon --console=plain --stacktrace -Dorg.gradle.vfs.watch=false :app:testNativeC
+
       - name: Upload Android test results to Codecov
         if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
         env:
@@ -197,7 +189,6 @@ jobs:
     timeout-minutes: 45
     needs:
       - flutter-checks
-      - native-tests
       - android-go-tests
       - android-unit-tests
 
