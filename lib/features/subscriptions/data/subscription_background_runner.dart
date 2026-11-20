@@ -43,15 +43,12 @@ Future<void> runSubscriptionBackgroundMain() async {
   }) async {
     try {
       await store.reloadPreferences();
-      final summary = await syncService.syncSubscriptionById(
+      await syncService.syncSubscriptionById(
         subscriptionId,
         trigger: isBackground
             ? SubscriptionSyncTrigger.backgroundAuto
             : SubscriptionSyncTrigger.foregroundAuto,
       );
-      if (summary == null) {
-        return SubscriptionContract.outcomeSuccess;
-      }
       return SubscriptionContract.outcomeSuccess;
     } on SubscriptionException catch (error) {
       return error.isRetryable

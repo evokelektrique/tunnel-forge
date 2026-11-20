@@ -11,7 +11,8 @@ import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/features/home/domain/home_models.dart';
 import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
 import 'package:tunnel_forge/features/onboarding/domain/onboarding_repository.dart';
-import 'package:tunnel_forge/main.dart';
+import 'package:tunnel_forge/main.dart' as app;
+import 'package:tunnel_forge/main.dart' show TunnelForgeApp;
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/app/theme/app_theme.dart';
@@ -115,6 +116,21 @@ MemorySecretStore _seededSecrets(String profileId) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('main mounts the production app', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final previousFlutterError = FlutterError.onError;
+    final dispatcher = tester.binding.platformDispatcher;
+    final previousPlatformError = dispatcher.onError;
+    try {
+      app.main();
+      await tester.pump();
+      expect(find.byType(TunnelForgeApp), findsOneWidget);
+    } finally {
+      FlutterError.onError = previousFlutterError;
+      dispatcher.onError = previousPlatformError;
+    }
+  });
 
   setUp(() {
     DiagnosticsBridge.instance = FakeDiagnosticsBridge();
