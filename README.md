@@ -63,6 +63,7 @@ TunnelForge is an Android client for those setups. It connects to existing L2TP/
 - Per-app routing (Inclusive and Exclusive)
 - Multiple profiles with credential storage
 - Subscriptions for adding multiple profiles and keeping them up-to-date
+- [Share links and subscriptions](docs/share_links.md)
 - Connection status and detailed logs
 - Custom DNS supporting UDP, TCP, TLS and HTTPS
 - Variable MTU
@@ -125,32 +126,65 @@ Run the app on a connected Android device or emulator:
 flutter run
 ```
 
+Share-link grammar and subscription format are documented in [docs/share_links.md](docs/share_links.md).
+
+Linux prerequisites include Android Studio or `sdkmanager` for the Android NDK and CMake. Install Go and Ninja with your package manager.
+
+macOS prerequisites include Android Studio or `sdkmanager` for the Android NDK and CMake. Install the native tools with Homebrew:
+
+```sh
+brew install go cmake ninja
+```
+
+Windows prerequisites include Android Studio SDK Manager for the Android NDK and CMake. Install Go with the installer or `winget install GoLang.Go`. Gradle runs native tasks without Make or Bash.
+
 ### Common Workflows
 
-The Makefile wraps the commands used during normal development:
+Run Dart and Flutter commands from the repository root.
+
+#### Linux and macOS
 
 ```sh
-make format
-make check
-make test
-make build-debug
-make build-release
+dart format lib test
+flutter analyze
+flutter test
+cd android
+./gradlew :app:formatAndroidNativeC
+./gradlew :app:lintDebug
+./gradlew :app:testDebugUnitTest
+./gradlew :app:testNativeC
+./gradlew :app:checkNativeC
+cd ..
+flutter build apk --debug
+flutter build apk --release --split-per-abi
 ```
 
-- `make format` formats Dart and Android native C sources.
-- `make check` runs Flutter analysis, Android lint, and native C checks.
-- `make test` runs Flutter, Android unit, and native C tests.
-- `make build-debug` builds the Android debug APK.
-- `make build-release` loads release signing credentials from the root `.env`
-  and builds signed split-ABI APKs in `build/app/outputs/flutter-apk/`. Set either
-  `TUNNEL_FORGE_ANDROID_KEYSTORE_PATH` or `TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64`,
-  plus the keystore password, key alias, and key password from `.env.example`.
+#### Windows PowerShell
 
-For focused targets, run:
+```powershell
+dart format lib test
+flutter analyze
+flutter test
+cd android
+.\gradlew.bat :app:formatAndroidNativeC
+.\gradlew.bat :app:lintDebug
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:testNativeC
+.\gradlew.bat :app:checkNativeC
+cd ..
+flutter build apk --debug
+flutter build apk --release --split-per-abi
+```
+
+Release signing reads the root `.env` on every OS. Copy the template first:
 
 ```sh
-make help
+cp .env.example .env
 ```
+
+In PowerShell, use `Copy-Item .env.example .env`.
+
+Set exactly one of `TUNNEL_FORGE_ANDROID_KEYSTORE_PATH` or `TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64`, plus the keystore password, key alias, and key password. For one-off bash variables, use `export NAME=value`. In PowerShell, use `$env:NAME = 'value'`. Signed APKs are written to `build/app/outputs/flutter-apk/`.
 
 ### Coverage
 
