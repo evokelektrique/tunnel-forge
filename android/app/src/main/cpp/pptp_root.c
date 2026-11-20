@@ -150,9 +150,11 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
     return TUNNEL_EXIT_GRE_SOCKET_FAILED;
   }
 
+  /* Phase 2: locate su; if absent, fall back to PATH lookup below. */
   char su_buf[256];
   const char *su_path = find_su_binary(su_buf, sizeof(su_buf));
 
+  /* Phase 3: stdin/stdout/stderr pipes for the root helper, all close-on-exec. */
   int in_pipe[2] = {-1, -1};
   int out_pipe[2] = {-1, -1};
   int err_pipe[2] = {-1, -1};
@@ -180,6 +182,7 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
   (void)set_cloexec(err_pipe[0]);
   (void)set_cloexec(err_pipe[1]);
 
+  /* Phase 4: wire the pipe ends to the child's stdio via spawn file actions. */
   posix_spawn_file_actions_t actions;
   if (posix_spawn_file_actions_init(&actions) != 0) {
     close(in_pipe[0]);
@@ -198,6 +201,7 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
   snprintf(helper_cmd, sizeof(helper_cmd), "exec '%s'", helper_path);
   char *argv[] = {(char *)"su", (char *)"-c", helper_cmd, NULL};
 
+  /* Phase 5: run the helper through su; parent closes the child-side pipe ends afterwards. */
   pid_t child = -1;
   int spawn_rc;
   if (su_path != NULL) {
@@ -229,6 +233,7 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
   (void)set_nonblock(r->from_helper_fd);
   (void)set_nonblock(r->err_fd);
 
+  /* Phase 6: send the init frame: magic, peer IPv4, flags, fwmark, bind interface. */
   uint8_t init[HELPER_INIT_LEN];
   memset(init, 0, sizeof(init));
   init[0] = HELPER_MAGIC_0;
@@ -248,6 +253,7 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
     return TUNNEL_EXIT_ROOT_DENIED;
   }
 
+  /* Phase 7: read the fixed-size reply frame; give up after 30 s, on stop request, or on helper EOF. */
   uint8_t reply[HELPER_REPLY_LEN] = {0};
   size_t reply_got = 0u;
   char stderr_buf[256] = {0};
@@ -307,6 +313,7 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
     }
   }
 
+  /* Phase 8: reject replies with a short read or wrong magic (e.g. su printed an error instead). */
   if (reply_got < sizeof(reply) || reply[0] != HELPER_MAGIC_0 || reply[1] != HELPER_MAGIC_1 ||
       reply[2] != HELPER_MAGIC_2 || reply[3] != HELPER_MAGIC_3) {
     drain_helper_stderr(r->err_fd, stderr_buf, sizeof(stderr_buf));
@@ -316,6 +323,7 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
     return TUNNEL_EXIT_ROOT_DENIED;
   }
 
+  /* Phase 9: a non-OK status means the raw GRE socket failed; EPERM/EACCES means root was denied. */
   uint32_t helper_status = util_read_be32(reply + 4u);
   uint32_t helper_errno = util_read_be32(reply + 8u);
   if (helper_status != HELPER_STATUS_OK) {

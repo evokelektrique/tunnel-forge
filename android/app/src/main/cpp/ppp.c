@@ -1101,14 +1101,6 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
   return -1;
 }
 
-static int ppp_auth_chap_md5(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
-                             l2tp_session_t *l2tp, const char *user, const char *password) {
-  ppp_l2tp_ctx_t ctx;
-  ppp_transport_t transport;
-  ppp_init_l2tp_transport(&transport, &ctx, esp_fd, esp, peer, peer_len, l2tp);
-  return ppp_auth_chap_md5_transport(&transport, user, password);
-}
-
 static int ppp_auth_pap_transport(ppp_transport_t *transport, const char *user, const char *password) {
   uint8_t pap[128];
   size_t o = 0;
@@ -1158,14 +1150,6 @@ static int ppp_auth_pap_transport(ppp_transport_t *transport, const char *user, 
     }
   }
   return -1;
-}
-
-static int ppp_auth_pap(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
-                        l2tp_session_t *l2tp, const char *user, const char *password) {
-  ppp_l2tp_ctx_t ctx;
-  ppp_transport_t transport;
-  ppp_init_l2tp_transport(&transport, &ctx, esp_fd, esp, peer, peer_len, l2tp);
-  return ppp_auth_pap_transport(&transport, user, password);
 }
 
 static int ipcp_ipv4_is_zero(const uint8_t ip[4]) { return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0; }
