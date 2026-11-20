@@ -243,7 +243,8 @@ jobs:
           } > local.properties
 
       - name: Install Android API 37
-        run: sdkmanager --install 'platforms;android-37.0'
+        run: |
+          "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-37.0'
 
       - name: Run Android JVM tests with coverage and lint
         working-directory: android
@@ -425,7 +426,8 @@ jobs:
           } > local.properties
 
       - name: Install Android API 37
-        run: sdkmanager --install 'platforms;android-37.0'
+        run: |
+          "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-37.0'
 
       - name: Configure Android release signing
         if: github.event_name != 'pull_request' && inputs.pr_number == ''
