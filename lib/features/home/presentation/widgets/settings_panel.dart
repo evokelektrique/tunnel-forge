@@ -243,6 +243,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
+        _sectionTitle(t.general),
+        const SizedBox(height: _kSectionHeaderGap),
         _sectionTitle(t.languageLabel),
         const SizedBox(height: _kSectionHeaderGap),
         Card(
@@ -300,6 +302,23 @@ class _SettingsPanelState extends State<SettingsPanel> {
           ),
           const SizedBox(height: _kSectionGap),
         ],
+        _sectionTitle(t.connectionHaptics),
+        const SizedBox(height: _kSectionHeaderGap),
+        Card(
+          margin: EdgeInsets.zero,
+          child: SwitchListTile(
+            key: const Key('connection_haptics_switch'),
+            contentPadding: _kCardTilePadding,
+            title: _cardTitle(t.connectionHaptics),
+            subtitle: _cardText(
+              t.connectionHapticsHelp,
+              color: widget.colorScheme.onSurfaceVariant,
+            ),
+            value: widget.connectionHapticsEnabled,
+            onChanged: widget.onConnectionHapticsChanged,
+          ),
+        ),
+        const SizedBox(height: _kSectionGap),
         _sectionTitle(t.connectionMode),
         const SizedBox(height: _kSectionHeaderGap),
         SegmentedButton<ConnectionMode>(
@@ -672,23 +691,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
                 ),
               ],
             ),
-          ),
-        ),
-        const SizedBox(height: _kSectionGap),
-        _sectionTitle(t.connectionFeedback),
-        const SizedBox(height: _kSectionHeaderGap),
-        Card(
-          margin: EdgeInsets.zero,
-          child: SwitchListTile(
-            key: const Key('connection_haptics_switch'),
-            contentPadding: _kCardTilePadding,
-            title: _cardTitle(t.connectionHaptics),
-            subtitle: _cardText(
-              t.connectionHapticsHelp,
-              color: widget.colorScheme.onSurfaceVariant,
-            ),
-            value: widget.connectionHapticsEnabled,
-            onChanged: widget.onConnectionHapticsChanged,
           ),
         ),
         const SizedBox(height: _kSectionGap),

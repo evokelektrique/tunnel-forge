@@ -295,6 +295,8 @@ void main() {
     await tester.pump();
     expect(checkedPorts, isEmpty);
 
+    await tester.drag(settingsScrollView(), const Offset(0, -240));
+    await tester.pump();
     await tester.tap(find.byKey(const Key('proxy_socks_port_field')));
     await tester.pump();
     expect(checkedPorts, [18081]);
@@ -390,6 +392,8 @@ void main() {
       ),
     );
 
+    await tester.drag(settingsScrollView(), const Offset(0, -320));
+    await tester.pump();
     await tester.tap(find.byKey(const Key('split_tunnel_enabled_switch')));
     await tester.pump();
 
@@ -735,6 +739,12 @@ void main() {
       200,
       scrollable: settingsScrollView(),
     );
+    await Scrollable.ensureVisible(
+      tester.element(find.byKey(const Key('l2tp_security_notice_tile'))),
+      alignment: 0.1,
+      duration: Duration.zero,
+    );
+    await tester.pump();
     await tester.tap(find.byKey(const Key('l2tp_security_notice_tile')));
     await tester.pump();
 

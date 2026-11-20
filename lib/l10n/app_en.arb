@@ -62,7 +62,7 @@
   "compatibilityOnly": "Use only when compatibility requires it",
   "compatibilityBody": "Proceed only if this service requires L2TP/IPsec or PPTP and no stronger protocol is available.",
   "appearance": "Appearance",
-  "connectionFeedback": "Connection feedback",
+  "general": "General",
   "connectionHaptics": "Connection haptics",
   "connectionHapticsHelp": "Vibrate briefly when a profile connects or fails.",
   "system": "System",
