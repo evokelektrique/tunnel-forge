@@ -297,13 +297,13 @@ configure<ApplicationExtension> {
 
     buildTypes {
         release {
+            optimization {
+                enable = true
+            }
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
-            )
+            proguardFiles("proguard-rules.pro")
         }
         debug {
             val collectCoverage = providers.gradleProperty("tunnelForgeCoverage").isPresent
