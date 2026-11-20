@@ -5,8 +5,7 @@
 <h1 align="center">TunnelForge</h1>
 
 <p align="center">
-  L2TP/IPsec (IKEv1) for modern Android, with full-device VPN, proxy-only mode,
-  and per-app routing.
+  L2TP/PPTP VPN for modern Android.
 </p>
 
 <p align="center">
@@ -45,7 +44,6 @@
   <a href="#screenshots">Screenshots</a> •
   <a href="#install">Install</a> •
   <a href="#development">Development</a> •
-  <a href="#architecture--project-layout">Architecture</a> •
   <a href="#security--privacy">Security</a> •
   <a href="#feedback">Feedback</a> •
   <a href="#licensing">Licensing</a>
@@ -53,17 +51,18 @@
 
 ## Overview
 
-Android 12 removed the old built-in L2TP and PPTP VPN options. A lot of offices, schools, universities, and private networks still have L2TP/IPsec servers in place.
+Android 12 removed the old built-in L2TP and PPTP VPN options. A lot of offices, schools, universities, and private networks still have them in place.
 
-TunnelForge is an Android client for those setups. It connects to existing L2TP/IPsec (IKEv1) servers, so you can keep using the server you already have while running a current Android version.
+TunnelForge is an Android client for those setups. It connects to existing L2TP/PPTP servers, so you can keep using the server you already have while running a current Android version.
 
 ### Key features
 
-- L2TP with optional IPsec (IKEv1) client flow
+- Supports PPTP (root required) and L2TP with optional IPsec (IKEv1)
 - Full-device VPN mode
 - Proxy-only mode with local HTTP and SOCKS5 listeners
 - Per-app routing (Inclusive and Exclusive)
 - Multiple profiles with credential storage
+- Subscriptions for adding multiple profiles and keeping them up-to-date
 - Connection status and detailed logs
 - Custom DNS supporting UDP, TCP, TLS and HTTPS
 - Variable MTU
@@ -159,32 +158,15 @@ make help
 flutter test --coverage
 ```
 
-## Architecture & Project Layout
-
-TunnelForge is a Flutter app at the UI layer, but the VPN runtime is mostly Android-native. Flutter keeps the profile, settings, logs, and connection state, then talks to Kotlin through platform channels. Kotlin owns the Android `VpnService` and foreground service lifecycle, runs the Netty-based HTTP CONNECT/SOCKS5 proxy frontend, and hands tunnel work to native code. The C layer handles L2TP/IPsec and packet processing; proxy-only mode also uses a small Go/gVisor userspace networking module, built as a native shared library and loaded by the Android runtime.
-
-Netty is the local proxy frontend. It accepts HTTP CONNECT and SOCKS5 clients with event-loop based I/O, while blocking tunnel transport work stays behind that frontend. The C engine remains the core L2TP/IPsec path, and Go/gVisor provides the userspace TCP/IP stack used by proxy-only mode.
-
-| Path | Purpose |
-| --- | --- |
-| `lib/` | Flutter UI, profiles, settings, logs, and app state |
-| `android/app/src/main/kotlin/` | Android VPN service, Netty proxy runtime, and platform channels |
-| `android/app/src/main/cpp/` | Native L2TP/IPsec tunnel engine and packet handling |
-| `android/gvisor/` | Go/gVisor userspace networking used by proxy mode |
-| `fastlane/metadata/` | Store metadata, screenshots, and changelogs |
-| `tool/` | Release, versioning, F-Droid, and native test scripts |
-
 ## Security & Privacy
 
 - VPN credentials are stored on-device with `flutter_secure_storage`.
 - Debug logs stay local, and sensitive tokens are redacted before display or sharing.
 - No analytics or crash-reporting SDKs are included in this repo.
-- Review debug logs before sharing them in public issues.
 
 ## Feedback
 
-Use GitHub Issues or [Telegram channel](https://t.me/TunnelForge) for bugs, feature requests or general feedback. When reporting a connection problem,
-include the values used in the profile (such as MTU and DNS), Android version, device model, and app logs (debug).
+Use GitHub Issues or [Telegram channel](https://t.me/TunnelForge) for bugs, feature requests or general feedback. Use the export button and bring your logs file (in full) when submitting an issue.
 
 ## Licensing
 
