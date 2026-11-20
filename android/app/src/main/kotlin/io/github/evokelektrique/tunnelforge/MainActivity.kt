@@ -40,12 +40,14 @@ class MainActivity : FlutterActivity() {
 
     private var vpnPermissionResult: MethodChannel.Result? = null
     private var notificationPermissionResult: MethodChannel.Result? = null
+    private var subscriptionNotificationPermissionResult: MethodChannel.Result? = null
     private var batteryOptimizationPermissionResult: MethodChannel.Result? = null
     private var awaitingBatteryOptimizationReturn = false
     private var pendingConnectIntent: Intent? = null
     private var vpnChannel: MethodChannel? = null
     private var quickSettingsChannel: MethodChannel? = null
     private var profileTransferChannel: MethodChannel? = null
+    private var subscriptionChannel: MethodChannel? = null
     private var profileTransferConsumerReady = false
     private var quickSettingsConnectConsumerReady = false
     private var pendingQuickSettingsConnect = false
@@ -120,6 +122,31 @@ class MainActivity : FlutterActivity() {
                         else -> result.notImplemented()
                     }
                 }
+            }
+        subscriptionChannel =
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                SubscriptionContract.METHOD_CHANNEL,
+            ).also { channel ->
+                channel.setMethodCallHandler(
+                    SubscriptionChannelHandler(
+                        context = this,
+                        onRequestNotificationPermission = { pendingResult ->
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || hasPostNotificationsPermission()) {
+                                pendingResult.success(true)
+                            } else if (subscriptionNotificationPermissionResult != null) {
+                                pendingResult.success(false)
+                            } else {
+                                subscriptionNotificationPermissionResult = pendingResult
+                                requestPermissions(
+                                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                                    REQUEST_SUBSCRIPTION_POST_NOTIFICATIONS,
+                                )
+                            }
+                        },
+                    ),
+                )
+                SubscriptionLiveBridge.attach(channel)
             }
         appInfoChannel.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -432,6 +459,7 @@ class MainActivity : FlutterActivity() {
         AppForegroundTracker.setForeground(false)
         vpnPermissionResult = null
         notificationPermissionResult = null
+        subscriptionNotificationPermissionResult = null
         batteryOptimizationPermissionResult = null
         awaitingBatteryOptimizationReturn = false
         pendingConnectIntent = null
@@ -440,6 +468,8 @@ class MainActivity : FlutterActivity() {
         pendingQuickSettingsConnect = false
         profileTransferChannel = null
         quickSettingsChannel = null
+        subscriptionChannel?.let(SubscriptionLiveBridge::detach)
+        subscriptionChannel = null
         mainHandler.removeCallbacksAndMessages(PROFILE_IMPORT_CALLBACK_TOKEN)
         mainHandler.removeCallbacksAndMessages(BATTERY_REFRESH_CALLBACK_TOKEN)
         mainHandler.removeCallbacksAndMessages(BATTERY_PERMISSION_RESULT_CALLBACK_TOKEN)
@@ -484,6 +514,15 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_SUBSCRIPTION_POST_NOTIFICATIONS) {
+            val pending = subscriptionNotificationPermissionResult ?: return
+            subscriptionNotificationPermissionResult = null
+            val granted =
+                grantResults.isNotEmpty() &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED
+            pending.success(granted)
+            return
+        }
         if (requestCode != REQUEST_POST_NOTIFICATIONS) return
         val pending = notificationPermissionResult ?: return
         val connectIntent = pendingConnectIntent
@@ -1064,6 +1103,7 @@ class MainActivity : FlutterActivity() {
         private const val REQUEST_VPN_PERMISSION = 0x4E50
         private const val REQUEST_POST_NOTIFICATIONS = 0x4E51
         private const val REQUEST_BATTERY_OPTIMIZATION = 0x4E52
+        private const val REQUEST_SUBSCRIPTION_POST_NOTIFICATIONS = 0x4E53
         private const val ProfileTransferMimeType = "application/vnd.tunnelforge.profile+json"
         private const val MAX_PROFILE_IMPORT_BYTES = ProfileImportStreamReader.DEFAULT_MAX_BYTES
         private const val PROFILE_IMPORT_READ_TIMEOUT_MS = 5_000L

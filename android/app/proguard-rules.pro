@@ -6,6 +6,13 @@
 -keep class io.github.evokelektrique.tunnelforge.VpnTunnelEvents {
     public static void emitEngineLogFromNative(int, java.lang.String, java.lang.String);
 }
+-keep class io.github.evokelektrique.tunnelforge.SubscriptionAutoUpdateWorker { *; }
+
+# Room 2.6.1 (used by WorkManager) only keeps RoomDatabase subclass names,
+# so R8 full mode strips WorkDatabase_Impl.<init>() and its DAOs unless kept.
+-keep class * extends androidx.room.RoomDatabase {
+    <init>();
+}
 
 # Netty probes optional JVM/server integrations that are not present on Android.
 -dontwarn java.lang.Module

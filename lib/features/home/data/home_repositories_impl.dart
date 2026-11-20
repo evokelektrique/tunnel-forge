@@ -15,6 +15,9 @@ import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_bridge.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_bridge.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_sync_service.dart';
+import 'package:tunnel_forge/features/subscriptions/domain/subscription_models.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_client.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
@@ -98,10 +101,14 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
     required bool favoritesSection,
     required int oldIndex,
     required int newIndex,
+    String? subscriptionId,
+    bool filterBySubscription = false,
   }) => _profileStore.reorderProfiles(
     favoritesSection: favoritesSection,
     oldIndex: oldIndex,
     newIndex: newIndex,
+    subscriptionId: subscriptionId,
+    filterBySubscription: filterBySubscription,
   );
 
   @override
@@ -706,6 +713,76 @@ class ProfileTransferRepositoryImpl implements ProfileTransferRepository {
 
   @override
   Future<List<IncomingProfileTransfer>> start() => _bridge.start();
+}
+
+class SubscriptionsRepositoryImpl implements SubscriptionsRepository {
+  SubscriptionsRepositoryImpl({
+    required ProfileStore profileStore,
+    required SubscriptionSyncService syncService,
+    required SubscriptionBridge bridge,
+  }) : _profileStore = profileStore,
+       _syncService = syncService,
+       _bridge = bridge;
+
+  final ProfileStore _profileStore;
+  final SubscriptionSyncService _syncService;
+  final SubscriptionBridge _bridge;
+
+  @override
+  Future<List<Subscription>> loadSubscriptions() =>
+      _profileStore.loadSubscriptions();
+
+  @override
+  Future<SubscriptionSyncSummary> addAndSyncSubscription({
+    required String name,
+    required String url,
+    required bool autoUpdate,
+    required int updateIntervalMinutes,
+    required SubscriptionIntervalUnit intervalUnit,
+  }) => _syncService.addAndSyncSubscription(
+    name: name,
+    url: url,
+    autoUpdate: autoUpdate,
+    updateIntervalMinutes: updateIntervalMinutes,
+    intervalUnit: intervalUnit,
+  );
+
+  @override
+  Future<void> saveSubscriptionSettings(Subscription subscription) =>
+      _profileStore.saveSubscription(subscription);
+
+  @override
+  Future<SubscriptionSyncSummary?> syncSubscriptionById(
+    String subscriptionId, {
+    required SubscriptionSyncTrigger trigger,
+  }) => _syncService.syncSubscriptionById(subscriptionId, trigger: trigger);
+
+  @override
+  Future<({int removedProfilesCount})> deleteSubscription(
+    String subscriptionId,
+  ) => _profileStore.deleteSubscription(subscriptionId);
+
+  @override
+  Future<void> syncSchedules(List<Subscription> subscriptions) =>
+      _bridge.syncSchedules(subscriptions);
+
+  @override
+  Future<bool> requestNotificationPermission() =>
+      _bridge.requestNotificationPermission();
+
+  @override
+  Future<List<SubscriptionSyncSummary>> consumePendingSummaries() =>
+      _profileStore.consumePendingSubscriptionSummaries();
+
+  @override
+  Future<void> reloadStore() => _profileStore.reloadPreferences();
+
+  @override
+  void setScheduledUpdateHandler(ScheduledSubscriptionUpdateHandler? handler) =>
+      _bridge.setScheduledUpdateHandler(handler);
+
+  @override
+  void dispose() => _bridge.dispose();
 }
 
 class LogsRepositoryImpl implements LogsRepository {

@@ -16,6 +16,7 @@ import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/presentation/profile_editor_sheet.dart';
 import 'package:tunnel_forge/features/profiles/presentation/profile_picker_sheet.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
+import 'package:tunnel_forge/features/subscriptions/presentation/subscription_update_dialog.dart';
 import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/home/presentation/widgets/connection_panel.dart';
@@ -84,6 +85,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   final ScrollController _logsScroll = ScrollController();
   bool _logsStickToBottom = true;
   int _lastProfilesMessageId = 0;
+  int _lastSubscriptionSummaryEventId = 0;
   int _lastTunnelMessageId = 0;
   int _lastSettingsMessageId = 0;
   bool _lastTunnelUp = false;
@@ -92,6 +94,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   QuickSettingsProfileConfig? _lastSyncedQuickSettingsConfig;
   bool _pendingQuickSettingsConnect = false;
   StreamSubscription<void>? _quickSettingsConnectSub;
+  Timer? _dueSubscriptionsTimer;
 
   @override
   void initState() {
@@ -102,6 +105,12 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     _quickSettingsConnectSub = tunnelRepository.quickSettingsConnectRequests
         .listen((_) => _handleQuickSettingsConnectSignal());
     unawaited(_consumePendingQuickSettingsConnect());
+    _dueSubscriptionsTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted) return;
+      context.read<ProfilesBloc>().add(
+        const ProfilesDueSubscriptionsCheckRequested(),
+      );
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _syncQuickSettings(
@@ -114,6 +123,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _dueSubscriptionsTimer?.cancel();
     _quickSettingsConnectSub?.cancel();
     _logsScroll.removeListener(_syncLogsStickToBottom);
     _logsScroll.dispose();
@@ -126,6 +136,9 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     context.read<TunnelBloc>().add(const TunnelRuntimeSyncRequested());
     context.read<SettingsBloc>().add(
       const SettingsBatteryOptimizationRefreshRequested(),
+    );
+    context.read<ProfilesBloc>().add(
+      const ProfilesDueSubscriptionsCheckRequested(),
     );
   }
 
@@ -250,6 +263,12 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     if (message != null && message.id != _lastProfilesMessageId) {
       _lastProfilesMessageId = message.id;
       _toast(message.text, error: message.error);
+    }
+    final summaryEvent = state.pendingSummaryEvent;
+    if (summaryEvent != null &&
+        summaryEvent.id != _lastSubscriptionSummaryEventId) {
+      _lastSubscriptionSummaryEventId = summaryEvent.id;
+      unawaited(SubscriptionUpdateDialog.show(context, summaryEvent.summaries));
     }
     _syncQuickSettings(state, context.read<SettingsBloc>().state);
   }
@@ -741,6 +760,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
         BlocListener<ProfilesBloc, ProfilesState>(
           listenWhen: (previous, current) =>
               previous.message != current.message ||
+              previous.pendingSummaryEvent != current.pendingSummaryEvent ||
               previous.loading != current.loading ||
               previous.activeProfileId != current.activeProfileId ||
               previous.activeProfileRow != current.activeProfileRow,

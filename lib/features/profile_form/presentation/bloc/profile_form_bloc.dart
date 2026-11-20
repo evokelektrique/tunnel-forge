@@ -159,6 +159,7 @@ class ProfileFormState extends Equatable {
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
     this.mtu = '${Profile.defaultVpnMtu}',
     this.favorite = false,
+    this.subscriptionId,
     this.messageId = 0,
     this.message,
     this.saved = false,
@@ -182,6 +183,7 @@ class ProfileFormState extends Equatable {
   final DnsProtocol dns2Protocol;
   final String mtu;
   final bool favorite;
+  final String? subscriptionId;
   final int messageId;
   final String? message;
   final bool saved;
@@ -212,6 +214,8 @@ class ProfileFormState extends Equatable {
     DnsProtocol? dns2Protocol,
     String? mtu,
     bool? favorite,
+    String? subscriptionId,
+    bool clearSubscriptionId = false,
     int? messageId,
     String? message,
     bool clearMessage = false,
@@ -236,6 +240,9 @@ class ProfileFormState extends Equatable {
       dns2Protocol: dns2Protocol ?? this.dns2Protocol,
       mtu: mtu ?? this.mtu,
       favorite: favorite ?? this.favorite,
+      subscriptionId: clearSubscriptionId
+          ? null
+          : (subscriptionId ?? this.subscriptionId),
       messageId: messageId ?? this.messageId,
       message: clearMessage ? null : (message ?? this.message),
       saved: saved ?? this.saved,
@@ -263,6 +270,7 @@ class ProfileFormState extends Equatable {
     dns2Protocol,
     mtu,
     favorite,
+    subscriptionId,
     messageId,
     message,
     saved,
@@ -388,6 +396,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           dns2Protocol: DnsProtocol.dnsOverUdp,
           mtu: '${Profile.defaultVpnMtu}',
           favorite: false,
+          clearSubscriptionId: true,
           saved: false,
         ),
       );
@@ -423,6 +432,8 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         dns2Protocol: profile.dns2Protocol,
         mtu: '${profile.mtu}',
         favorite: profile.favorite,
+        subscriptionId: profile.subscriptionId,
+        clearSubscriptionId: profile.subscriptionId == null,
       ),
     );
   }
@@ -516,6 +527,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       dns2Protocol: state.dns2Protocol,
       mtu: Profile.normalizeMtu(mtuParsed),
       favorite: state.favorite,
+      subscriptionId: state.subscriptionId,
     );
   }
 

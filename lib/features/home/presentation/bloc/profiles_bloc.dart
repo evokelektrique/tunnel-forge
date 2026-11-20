@@ -9,6 +9,8 @@ import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_contract.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_contract.dart';
+import 'package:tunnel_forge/features/subscriptions/domain/subscription_models.dart';
 import '../../../home/data/home_repositories_impl.dart';
 import '../../../home/domain/home_models.dart';
 import '../../../home/domain/home_repositories.dart';
@@ -145,20 +147,116 @@ final class ProfilesGroupReordered extends ProfilesEvent {
     required this.favoritesSection,
     required this.oldIndex,
     required this.newIndex,
+    this.subscriptionId,
+    this.filterBySubscription = false,
   });
 
   final bool favoritesSection;
   final int oldIndex;
   final int newIndex;
+  final String? subscriptionId;
+  final bool filterBySubscription;
 
   @override
-  List<Object?> get props => [favoritesSection, oldIndex, newIndex];
+  List<Object?> get props => [
+    favoritesSection,
+    oldIndex,
+    newIndex,
+    subscriptionId,
+    filterBySubscription,
+  ];
+}
+
+final class ProfilesSubscriptionAddRequested extends ProfilesEvent {
+  const ProfilesSubscriptionAddRequested({
+    required this.name,
+    required this.url,
+    required this.autoUpdate,
+    required this.updateIntervalMinutes,
+    required this.intervalUnit,
+  });
+
+  final String name;
+  final String url;
+  final bool autoUpdate;
+  final int updateIntervalMinutes;
+  final SubscriptionIntervalUnit intervalUnit;
+
+  @override
+  List<Object?> get props => [
+    name,
+    url,
+    autoUpdate,
+    updateIntervalMinutes,
+    intervalUnit,
+  ];
+}
+
+final class ProfilesSubscriptionEditRequested extends ProfilesEvent {
+  const ProfilesSubscriptionEditRequested({
+    required this.subscription,
+    required this.urlChanged,
+    required this.autoUpdateNewlyEnabled,
+  });
+
+  final Subscription subscription;
+  final bool urlChanged;
+  final bool autoUpdateNewlyEnabled;
+
+  @override
+  List<Object?> get props => [subscription, urlChanged, autoUpdateNewlyEnabled];
+}
+
+final class ProfilesSubscriptionSyncRequested extends ProfilesEvent {
+  const ProfilesSubscriptionSyncRequested(
+    this.subscriptionId, {
+    this.trigger = SubscriptionSyncTrigger.manual,
+  });
+
+  final String subscriptionId;
+  final SubscriptionSyncTrigger trigger;
+
+  @override
+  List<Object?> get props => [subscriptionId, trigger];
+}
+
+final class ProfilesSubscriptionDeleteRequested extends ProfilesEvent {
+  const ProfilesSubscriptionDeleteRequested(this.subscriptionId);
+
+  final String subscriptionId;
+
+  @override
+  List<Object?> get props => [subscriptionId];
+}
+
+final class ProfilesDueSubscriptionsCheckRequested extends ProfilesEvent {
+  const ProfilesDueSubscriptionsCheckRequested();
+}
+
+final class _ProfilesScheduledSubscriptionSyncRequested extends ProfilesEvent {
+  const _ProfilesScheduledSubscriptionSyncRequested(
+    this.subscriptionId,
+    this.completer,
+  );
+
+  final String subscriptionId;
+  final Completer<String> completer;
+
+  @override
+  List<Object?> get props => [subscriptionId];
 }
 
 class ProfilesState extends Equatable {
   const ProfilesState({
     this.loading = true,
     this.profiles = const <Profile>[],
+    this.subscriptions = const <Subscription>[],
+    this.updatingSubscriptionIds = const <String>{},
+    this.subscriptionSubmitting = false,
+    this.subscriptionSubmissionId = 0,
+    this.subscriptionSubmissionError,
+    this.lastSavedSubscriptionId,
+    this.pendingSummaryEvent,
     this.activeProfileId,
     this.activeProfileRow,
     this.selectImportedProfileWhenIdle = true,
@@ -167,6 +265,13 @@ class ProfilesState extends Equatable {
 
   final bool loading;
   final List<Profile> profiles;
+  final List<Subscription> subscriptions;
+  final Set<String> updatingSubscriptionIds;
+  final bool subscriptionSubmitting;
+  final int subscriptionSubmissionId;
+  final String? subscriptionSubmissionError;
+  final String? lastSavedSubscriptionId;
+  final SubscriptionSyncSummaryEvent? pendingSummaryEvent;
   final String? activeProfileId;
   final ProfileSecretRow? activeProfileRow;
   final bool selectImportedProfileWhenIdle;
@@ -181,6 +286,16 @@ class ProfilesState extends Equatable {
   ProfilesState copyWith({
     bool? loading,
     List<Profile>? profiles,
+    List<Subscription>? subscriptions,
+    Set<String>? updatingSubscriptionIds,
+    bool? subscriptionSubmitting,
+    int? subscriptionSubmissionId,
+    String? subscriptionSubmissionError,
+    bool clearSubscriptionSubmissionError = false,
+    String? lastSavedSubscriptionId,
+    bool clearLastSavedSubscriptionId = false,
+    SubscriptionSyncSummaryEvent? pendingSummaryEvent,
+    bool clearPendingSummaryEvent = false,
     String? activeProfileId,
     bool clearActiveProfileId = false,
     ProfileSecretRow? activeProfileRow,
@@ -192,6 +307,22 @@ class ProfilesState extends Equatable {
     return ProfilesState(
       loading: loading ?? this.loading,
       profiles: profiles ?? this.profiles,
+      subscriptions: subscriptions ?? this.subscriptions,
+      updatingSubscriptionIds:
+          updatingSubscriptionIds ?? this.updatingSubscriptionIds,
+      subscriptionSubmitting:
+          subscriptionSubmitting ?? this.subscriptionSubmitting,
+      subscriptionSubmissionId:
+          subscriptionSubmissionId ?? this.subscriptionSubmissionId,
+      subscriptionSubmissionError: clearSubscriptionSubmissionError
+          ? null
+          : (subscriptionSubmissionError ?? this.subscriptionSubmissionError),
+      lastSavedSubscriptionId: clearLastSavedSubscriptionId
+          ? null
+          : (lastSavedSubscriptionId ?? this.lastSavedSubscriptionId),
+      pendingSummaryEvent: clearPendingSummaryEvent
+          ? null
+          : (pendingSummaryEvent ?? this.pendingSummaryEvent),
       activeProfileId: clearActiveProfileId
           ? null
           : (activeProfileId ?? this.activeProfileId),
@@ -208,6 +339,13 @@ class ProfilesState extends Equatable {
   List<Object?> get props => [
     loading,
     profiles,
+    subscriptions,
+    updatingSubscriptionIds,
+    subscriptionSubmitting,
+    subscriptionSubmissionId,
+    subscriptionSubmissionError,
+    lastSavedSubscriptionId,
+    pendingSummaryEvent,
     activeProfileId,
     activeProfileRow,
     selectImportedProfileWhenIdle,
@@ -219,8 +357,12 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
   ProfilesBloc(
     this._profilesRepository,
     this._transferRepository, {
+    SubscriptionsRepository? subscriptionsRepository,
     LogsRepository? logsRepository,
-  }) : _logsRepository = logsRepository,
+    DateTime Function()? clock,
+  }) : _subscriptionsRepository = subscriptionsRepository,
+       _logsRepository = logsRepository,
+       _clock = clock ?? DateTime.now,
        super(const ProfilesState()) {
     on<ProfilesStarted>(_onStarted);
     on<ProfilesSelectionChanged>(_onSelectionChanged);
@@ -236,13 +378,26 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     on<ProfilesImportSelectionPolicyChanged>(_onImportSelectionPolicyChanged);
     on<ProfilesFavoriteToggled>(_onFavoriteToggled);
     on<ProfilesGroupReordered>(_onGroupReordered);
+    on<ProfilesSubscriptionAddRequested>(_onSubscriptionAddRequested);
+    on<ProfilesSubscriptionEditRequested>(_onSubscriptionEditRequested);
+    on<ProfilesSubscriptionSyncRequested>(_onSubscriptionSyncRequested);
+    on<ProfilesSubscriptionDeleteRequested>(_onSubscriptionDeleteRequested);
+    on<ProfilesDueSubscriptionsCheckRequested>(
+      _onDueSubscriptionsCheckRequested,
+    );
+    on<_ProfilesScheduledSubscriptionSyncRequested>(
+      _onScheduledSubscriptionSyncRequested,
+    );
   }
 
   final ProfilesRepository _profilesRepository;
   final ProfileTransferRepository _transferRepository;
+  final SubscriptionsRepository? _subscriptionsRepository;
   final LogsRepository? _logsRepository;
+  final DateTime Function() _clock;
   StreamSubscription<IncomingProfileTransfer>? _transferSub;
   int _messageId = 0;
+  int _summaryEventId = 0;
 
   void _log(LogLevel level, String message) {
     _logsRepository?.logDart(level, 'profiles', message);
@@ -273,6 +428,22 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     final pendingTransfers = await _transferRepository.start();
     for (final transfer in pendingTransfers) {
       _queueIncomingTransfer(transfer);
+    }
+    final subsRepo = _subscriptionsRepository;
+    if (subsRepo != null) {
+      subsRepo.setScheduledUpdateHandler(_handleScheduledUpdate);
+      await subsRepo.syncSchedules(state.subscriptions);
+      final pendingSummaries = await subsRepo.consumePendingSummaries();
+      if (pendingSummaries.isNotEmpty) {
+        emit(
+          state.copyWith(
+            pendingSummaryEvent: _nextSummaryEvent(pendingSummaries),
+          ),
+        );
+      }
+      if (state.subscriptions.any((s) => s.isDueAt(_clock()))) {
+        add(const ProfilesDueSubscriptionsCheckRequested());
+      }
     }
   }
 
@@ -755,6 +926,8 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       favoritesSection: event.favoritesSection,
       oldIndex: event.oldIndex,
       newIndex: event.newIndex,
+      subscriptionId: event.subscriptionId,
+      filterBySubscription: event.filterBySubscription,
     );
     if (_sameProfileOrder(state.profiles, nextProfiles)) return;
     // Emit immediately so SliverReorderableList does not snap back before disk write finishes.
@@ -764,6 +937,8 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         favoritesSection: event.favoritesSection,
         oldIndex: event.oldIndex,
         newIndex: event.newIndex,
+        subscriptionId: event.subscriptionId,
+        filterBySubscription: event.filterBySubscription,
       );
       _log(
         LogLevel.debug,
@@ -791,10 +966,417 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     }
   }
 
+  Future<String> _handleScheduledUpdate(
+    String subscriptionId, {
+    required bool isBackground,
+  }) {
+    if (isClosed) {
+      return Future<String>.value(SubscriptionContract.outcomeRetry);
+    }
+    final completer = Completer<String>();
+    add(_ProfilesScheduledSubscriptionSyncRequested(subscriptionId, completer));
+    return completer.future;
+  }
+
+  Future<void> _onSubscriptionAddRequested(
+    ProfilesSubscriptionAddRequested event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    final subsRepo = _subscriptionsRepository;
+    if (subsRepo == null) return;
+    final t = AppL10n.current;
+    emit(
+      state.copyWith(
+        subscriptionSubmitting: true,
+        clearSubscriptionSubmissionError: true,
+        clearMessage: true,
+      ),
+    );
+    try {
+      if (event.autoUpdate) {
+        await subsRepo.requestNotificationPermission();
+      }
+      final summary = await subsRepo.addAndSyncSubscription(
+        name: event.name,
+        url: event.url,
+        autoUpdate: event.autoUpdate,
+        updateIntervalMinutes: event.updateIntervalMinutes,
+        intervalUnit: event.intervalUnit,
+      );
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      await subsRepo.syncSchedules(state.subscriptions);
+      emit(
+        state.copyWith(
+          subscriptionSubmitting: false,
+          subscriptionSubmissionId: state.subscriptionSubmissionId + 1,
+          clearSubscriptionSubmissionError: true,
+          lastSavedSubscriptionId: summary.subscriptionId,
+          pendingSummaryEvent: _nextSummaryEvent([summary]),
+        ),
+      );
+    } on SubscriptionException catch (error) {
+      final msg = error.localizedMessage(t);
+      emit(
+        state.copyWith(
+          subscriptionSubmitting: false,
+          subscriptionSubmissionId: state.subscriptionSubmissionId + 1,
+          subscriptionSubmissionError: msg,
+          message: _nextMessage(msg, error: true),
+        ),
+      );
+    } catch (_) {
+      final msg = t.couldNotSaveSubscription;
+      emit(
+        state.copyWith(
+          subscriptionSubmitting: false,
+          subscriptionSubmissionId: state.subscriptionSubmissionId + 1,
+          subscriptionSubmissionError: msg,
+          message: _nextMessage(msg, error: true),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onSubscriptionEditRequested(
+    ProfilesSubscriptionEditRequested event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    final subsRepo = _subscriptionsRepository;
+    if (subsRepo == null) return;
+    final t = AppL10n.current;
+    emit(
+      state.copyWith(
+        subscriptionSubmitting: true,
+        clearSubscriptionSubmissionError: true,
+        clearMessage: true,
+      ),
+    );
+    try {
+      if (event.autoUpdateNewlyEnabled) {
+        await subsRepo.requestNotificationPermission();
+      }
+      await subsRepo.saveSubscriptionSettings(event.subscription);
+      SubscriptionSyncSummary? syncSummary;
+      if (event.urlChanged) {
+        syncSummary = await subsRepo.syncSubscriptionById(
+          event.subscription.id,
+          trigger: SubscriptionSyncTrigger.manual,
+        );
+      }
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      await subsRepo.syncSchedules(state.subscriptions);
+      emit(
+        state.copyWith(
+          subscriptionSubmitting: false,
+          subscriptionSubmissionId: state.subscriptionSubmissionId + 1,
+          clearSubscriptionSubmissionError: true,
+          lastSavedSubscriptionId: event.subscription.id,
+          pendingSummaryEvent: syncSummary == null
+              ? null
+              : _nextSummaryEvent([syncSummary]),
+          message: syncSummary == null
+              ? _nextMessage(t.subscriptionSaved)
+              : null,
+        ),
+      );
+    } on SubscriptionException catch (error) {
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      final msg = error.localizedMessage(t);
+      emit(
+        state.copyWith(
+          subscriptionSubmitting: false,
+          subscriptionSubmissionId: state.subscriptionSubmissionId + 1,
+          subscriptionSubmissionError: msg,
+          message: _nextMessage(msg, error: true),
+        ),
+      );
+    } catch (_) {
+      final msg = t.couldNotSaveSubscription;
+      emit(
+        state.copyWith(
+          subscriptionSubmitting: false,
+          subscriptionSubmissionId: state.subscriptionSubmissionId + 1,
+          subscriptionSubmissionError: msg,
+          message: _nextMessage(msg, error: true),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onSubscriptionSyncRequested(
+    ProfilesSubscriptionSyncRequested event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    final subsRepo = _subscriptionsRepository;
+    if (subsRepo == null) return;
+    if (state.updatingSubscriptionIds.contains(event.subscriptionId)) return;
+    final t = AppL10n.current;
+    emit(
+      state.copyWith(
+        updatingSubscriptionIds: <String>{
+          ...state.updatingSubscriptionIds,
+          event.subscriptionId,
+        },
+        clearMessage: true,
+      ),
+    );
+    try {
+      final summary = await subsRepo.syncSubscriptionById(
+        event.subscriptionId,
+        trigger: event.trigger,
+      );
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      final nextUpdating = Set<String>.of(state.updatingSubscriptionIds)
+        ..remove(event.subscriptionId);
+      final shouldShowDialog =
+          summary != null && (!event.trigger.isAuto || summary.hasChanges);
+      emit(
+        state.copyWith(
+          updatingSubscriptionIds: nextUpdating,
+          pendingSummaryEvent: shouldShowDialog
+              ? _nextSummaryEvent([summary])
+              : null,
+        ),
+      );
+    } on SubscriptionException catch (error) {
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      final nextUpdating = Set<String>.of(state.updatingSubscriptionIds)
+        ..remove(event.subscriptionId);
+      emit(
+        state.copyWith(
+          updatingSubscriptionIds: nextUpdating,
+          message: event.trigger.isAuto
+              ? null
+              : _nextMessage(error.localizedMessage(t), error: true),
+        ),
+      );
+    } catch (_) {
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      final nextUpdating = Set<String>.of(state.updatingSubscriptionIds)
+        ..remove(event.subscriptionId);
+      emit(
+        state.copyWith(
+          updatingSubscriptionIds: nextUpdating,
+          message: event.trigger.isAuto
+              ? null
+              : _nextMessage(t.subscriptionErrorUnexpected, error: true),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onScheduledSubscriptionSyncRequested(
+    _ProfilesScheduledSubscriptionSyncRequested event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    final subsRepo = _subscriptionsRepository;
+    if (subsRepo == null) {
+      if (!event.completer.isCompleted) {
+        event.completer.complete(SubscriptionContract.outcomeFailure);
+      }
+      return;
+    }
+    emit(
+      state.copyWith(
+        updatingSubscriptionIds: <String>{
+          ...state.updatingSubscriptionIds,
+          event.subscriptionId,
+        },
+      ),
+    );
+    var outcome = SubscriptionContract.outcomeSuccess;
+    try {
+      final summary = await subsRepo.syncSubscriptionById(
+        event.subscriptionId,
+        trigger: SubscriptionSyncTrigger.foregroundAuto,
+      );
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      final nextUpdating = Set<String>.of(state.updatingSubscriptionIds)
+        ..remove(event.subscriptionId);
+      emit(
+        state.copyWith(
+          updatingSubscriptionIds: nextUpdating,
+          pendingSummaryEvent: summary != null && summary.hasChanges
+              ? _nextSummaryEvent([summary])
+              : null,
+        ),
+      );
+    } on SubscriptionException catch (error) {
+      outcome = error.isRetryable
+          ? SubscriptionContract.outcomeRetry
+          : SubscriptionContract.outcomeFailure;
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      final nextUpdating = Set<String>.of(state.updatingSubscriptionIds)
+        ..remove(event.subscriptionId);
+      emit(state.copyWith(updatingSubscriptionIds: nextUpdating));
+    } catch (_) {
+      outcome = SubscriptionContract.outcomeRetry;
+      final nextUpdating = Set<String>.of(state.updatingSubscriptionIds)
+        ..remove(event.subscriptionId);
+      emit(state.copyWith(updatingSubscriptionIds: nextUpdating));
+    } finally {
+      if (!event.completer.isCompleted) {
+        event.completer.complete(outcome);
+      }
+    }
+  }
+
+  Future<void> _onSubscriptionDeleteRequested(
+    ProfilesSubscriptionDeleteRequested event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    final subsRepo = _subscriptionsRepository;
+    if (subsRepo == null) return;
+    final t = AppL10n.current;
+    try {
+      final result = await subsRepo.deleteSubscription(event.subscriptionId);
+      _log(
+        LogLevel.debug,
+        'Deleted subscription id=${event.subscriptionId} removedProfiles=${result.removedProfilesCount}',
+      );
+      final activeWasInSub =
+          state.activeProfileId != null &&
+          state.profiles.any(
+            (p) =>
+                p.id == state.activeProfileId &&
+                p.subscriptionId == event.subscriptionId,
+          );
+      final nextPreferred = activeWasInSub ? null : state.activeProfileId;
+      await _reloadProfiles(emit, preferredActiveId: nextPreferred);
+      if (activeWasInSub &&
+          state.activeProfileId == null &&
+          state.profiles.isNotEmpty) {
+        add(ProfilesSelectionChanged(state.profiles.first.id));
+      }
+      await subsRepo.syncSchedules(state.subscriptions);
+      emit(state.copyWith(message: _nextMessage(t.subscriptionDeleted)));
+    } catch (error) {
+      _log(
+        LogLevel.warning,
+        'Delete subscription failed id=${event.subscriptionId} error=${error.runtimeType}',
+      );
+      emit(
+        state.copyWith(
+          message: _nextMessage(t.couldNotDeleteSubscription, error: true),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onDueSubscriptionsCheckRequested(
+    ProfilesDueSubscriptionsCheckRequested event,
+    Emitter<ProfilesState> emit,
+  ) async {
+    final subsRepo = _subscriptionsRepository;
+    if (subsRepo == null) return;
+    await subsRepo.reloadStore();
+    final pendingSummaries = await subsRepo.consumePendingSummaries();
+    final loadedSubscriptions = await subsRepo.loadSubscriptions();
+
+    if (pendingSummaries.isNotEmpty ||
+        loadedSubscriptions != state.subscriptions) {
+      await _reloadProfiles(
+        emit,
+        preferredActiveId: state.activeProfileId,
+        showLoading: false,
+      );
+      if (pendingSummaries.isNotEmpty) {
+        emit(
+          state.copyWith(
+            pendingSummaryEvent: _nextSummaryEvent(pendingSummaries),
+          ),
+        );
+      }
+    }
+
+    final now = _clock();
+    final due = loadedSubscriptions
+        .where(
+          (s) =>
+              s.isDueAt(now) && !state.updatingSubscriptionIds.contains(s.id),
+        )
+        .toList();
+    if (due.isEmpty) return;
+
+    final changedSummaries = <SubscriptionSyncSummary>[];
+    for (final sub in due) {
+      emit(
+        state.copyWith(
+          updatingSubscriptionIds: <String>{
+            ...state.updatingSubscriptionIds,
+            sub.id,
+          },
+        ),
+      );
+      try {
+        final summary = await subsRepo.syncSubscriptionById(
+          sub.id,
+          trigger: SubscriptionSyncTrigger.foregroundAuto,
+        );
+        if (summary != null && summary.hasChanges) {
+          changedSummaries.add(summary);
+        }
+      } catch (_) {
+        // Auto-update failures are recorded on the subscription and logged silently.
+      } finally {
+        final nextUpdating = Set<String>.of(state.updatingSubscriptionIds)
+          ..remove(sub.id);
+        emit(state.copyWith(updatingSubscriptionIds: nextUpdating));
+      }
+    }
+
+    await _reloadProfiles(
+      emit,
+      preferredActiveId: state.activeProfileId,
+      showLoading: false,
+    );
+    if (changedSummaries.isNotEmpty) {
+      emit(
+        state.copyWith(
+          pendingSummaryEvent: _nextSummaryEvent(changedSummaries),
+        ),
+      );
+    }
+  }
+
   static bool _sameProfileOrder(List<Profile> a, List<Profile> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (a[i].id != b[i].id || a[i].favorite != b[i].favorite) {
+      if (a[i].id != b[i].id ||
+          a[i].favorite != b[i].favorite ||
+          a[i].subscriptionId != b[i].subscriptionId) {
         return false;
       }
     }
@@ -815,13 +1397,20 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
   Future<void> _reloadProfiles(
     Emitter<ProfilesState> emit, {
     String? preferredActiveId,
+    bool showLoading = true,
   }) async {
-    emit(state.copyWith(loading: true, clearMessage: true));
+    if (showLoading) {
+      emit(state.copyWith(loading: true, clearMessage: true));
+    }
     final profiles = await _profilesRepository.loadProfiles();
+    final subscriptions = _subscriptionsRepository == null
+        ? state.subscriptions
+        : await _subscriptionsRepository.loadSubscriptions();
+    final candidateId = preferredActiveId ?? state.activeProfileId;
     final targetId =
-        preferredActiveId != null &&
-            profiles.any((profile) => profile.id == preferredActiveId)
-        ? preferredActiveId
+        candidateId != null &&
+            profiles.any((profile) => profile.id == candidateId)
+        ? candidateId
         : null;
     ProfileSecretRow? targetRow;
     if (targetId != null) {
@@ -831,8 +1420,11 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       state.copyWith(
         loading: false,
         profiles: profiles,
+        subscriptions: subscriptions,
         activeProfileId: targetRow == null ? null : targetId,
+        clearActiveProfileId: targetRow == null,
         activeProfileRow: targetRow,
+        clearActiveProfileRow: targetRow == null,
       ),
     );
   }
@@ -842,8 +1434,19 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     return HomeMessage(id: _messageId, text: text, error: error);
   }
 
+  SubscriptionSyncSummaryEvent _nextSummaryEvent(
+    List<SubscriptionSyncSummary> summaries,
+  ) {
+    _summaryEventId += 1;
+    return SubscriptionSyncSummaryEvent(
+      id: _summaryEventId,
+      summaries: List<SubscriptionSyncSummary>.unmodifiable(summaries),
+    );
+  }
+
   @override
   Future<void> close() async {
+    _subscriptionsRepository?.setScheduledUpdateHandler(null);
     await _transferSub?.cancel();
     return super.close();
   }

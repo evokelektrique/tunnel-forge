@@ -94,4 +94,12 @@
     <string name="tunnel_reason_android_4">VPN permission is no longer granted.</string>
     <string name="tunnel_reason_android_5">Local proxy startup failed.</string>
     <string name="tunnel_reason_android_6">Tunnel disconnected unexpectedly.</string>
+
+    <string name="subscription_notification_progress_channel_name">Subscription updates</string>
+    <string name="subscription_notification_result_channel_name">Subscription changes</string>
+    <string name="subscription_notification_updating_title">Updating %1$s</string>
+    <string name="subscription_notification_fetching">Fetching subscription…</string>
+    <string name="subscription_notification_applying">Applying profiles (%1$d/%2$d)…</string>
+    <string name="subscription_notification_updated_title">%1$s updated</string>
+    <string name="subscription_notification_summary">%1$d imported, %2$d updated, %3$d removed</string>
 </resources>

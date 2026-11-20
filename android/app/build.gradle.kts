@@ -333,6 +333,7 @@ androidComponents {
 dependencies {
     implementation("androidx.annotation:annotation:1.11.0")
     implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("io.netty:netty-codec-http:4.2.20.Final")
     implementation("io.netty:netty-codec-socks:4.2.20.Final")
     testImplementation("junit:junit:4.13.2")

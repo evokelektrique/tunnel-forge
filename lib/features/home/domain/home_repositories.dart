@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_bridge.dart';
+import 'package:tunnel_forge/features/subscriptions/domain/subscription_models.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
 import 'home_models.dart';
@@ -33,6 +35,8 @@ abstract class ProfilesRepository {
     required bool favoritesSection,
     required int oldIndex,
     required int newIndex,
+    String? subscriptionId,
+    bool filterBySubscription = false,
   });
   Future<void> copyProfileShareLink(String id);
   Future<void> copyProfileShareLinks(List<String> ids);
@@ -111,6 +115,31 @@ abstract class ProfileTransferRepository {
   Stream<IncomingProfileTransfer> get incomingTransfers;
   Future<List<IncomingProfileTransfer>> start();
   Future<void> dispose();
+}
+
+abstract class SubscriptionsRepository {
+  Future<List<Subscription>> loadSubscriptions();
+  Future<SubscriptionSyncSummary> addAndSyncSubscription({
+    required String name,
+    required String url,
+    required bool autoUpdate,
+    required int updateIntervalMinutes,
+    required SubscriptionIntervalUnit intervalUnit,
+  });
+  Future<void> saveSubscriptionSettings(Subscription subscription);
+  Future<SubscriptionSyncSummary?> syncSubscriptionById(
+    String subscriptionId, {
+    required SubscriptionSyncTrigger trigger,
+  });
+  Future<({int removedProfilesCount})> deleteSubscription(
+    String subscriptionId,
+  );
+  Future<void> syncSchedules(List<Subscription> subscriptions);
+  Future<bool> requestNotificationPermission();
+  Future<List<SubscriptionSyncSummary>> consumePendingSummaries();
+  Future<void> reloadStore();
+  void setScheduledUpdateHandler(ScheduledSubscriptionUpdateHandler? handler);
+  void dispose();
 }
 
 abstract class LogsRepository {

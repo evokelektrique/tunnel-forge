@@ -12,6 +12,8 @@ import 'package:tunnel_forge/core/platform/app_info_bridge.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_bridge.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_bridge.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_http_client.dart';
 import 'package:tunnel_forge/app/theme/app_theme.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_client.dart';
 import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
@@ -30,6 +32,8 @@ class TunnelForgeApp extends StatefulWidget {
     this.connectivityChecker,
     this.vpnClient,
     this.profileTransferBridge,
+    this.subscriptionBridge,
+    this.subscriptionHttpClient,
     this.appVersionRepository,
     this.appUpdateRepository,
     this.onboardingRepository,
@@ -41,6 +45,8 @@ class TunnelForgeApp extends StatefulWidget {
   final ConnectivityChecker? connectivityChecker;
   final VpnClient? vpnClient;
   final ProfileTransferBridge? profileTransferBridge;
+  final SubscriptionBridge? subscriptionBridge;
+  final SubscriptionHttpClient? subscriptionHttpClient;
   final AppVersionRepository? appVersionRepository;
   final AppUpdateRepository? appUpdateRepository;
   final OnboardingRepository? onboardingRepository;
@@ -93,6 +99,8 @@ class _TunnelForgeAppState extends State<TunnelForgeApp>
       connectivityChecker: widget.connectivityChecker,
       vpnClient: widget.vpnClient,
       profileTransferBridge: widget.profileTransferBridge,
+      subscriptionBridge: widget.subscriptionBridge,
+      subscriptionHttpClient: widget.subscriptionHttpClient,
       appVersionRepository: widget.appVersionRepository,
       appUpdateRepository: widget.appUpdateRepository,
       onboardingRepository: widget.onboardingRepository,

@@ -86,4 +86,12 @@
     <string name="tunnel_reason_android_4">مجوز وی‌پی‌ان دیگر برقرار نیست.</string>
     <string name="tunnel_reason_android_5">راه‌اندازی پروکسی محلی ناموفق بود.</string>
     <string name="tunnel_reason_android_6">تونل به‌طور غیرمنتظره قطع شد.</string>
+
+    <string name="subscription_notification_progress_channel_name">به‌روزرسانی اشتراک‌ها</string>
+    <string name="subscription_notification_result_channel_name">تغییرات اشتراک‌ها</string>
+    <string name="subscription_notification_updating_title">در حال به‌روزرسانی %1$s</string>
+    <string name="subscription_notification_fetching">در حال دریافت اشتراک…</string>
+    <string name="subscription_notification_applying">در حال اعمال پروفایل‌ها (%1$d/%2$d)…</string>
+    <string name="subscription_notification_updated_title">%1$s به‌روزرسانی شد</string>
+    <string name="subscription_notification_summary">%1$d واردشده، %2$d به‌روزرسانی‌شده، %3$d حذف‌شده</string>
 </resources>

@@ -1,5 +1,6 @@
 // Profile list JSON in [SharedPreferences]; password and PSK in [SecretStore].
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
@@ -9,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
+import 'package:tunnel_forge/features/subscriptions/domain/subscription_models.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 
@@ -111,6 +113,9 @@ class ProfileStore {
       'battery_optimization_connect_prompt_shown_v1';
   static const prefsKeyUpdateCheckConsentGranted =
       'update_check_consent_granted_v1';
+  static const prefsKeySubscriptionsJson = 'vpn_subscriptions_json_v1';
+  static const prefsKeyPendingSubscriptionSummariesJson =
+      'vpn_pending_subscription_summaries_v1';
 
   final SharedPreferences? _prefsOverride;
   final SecretStore _secrets;
@@ -130,33 +135,70 @@ class ProfileStore {
     return completer.future;
   }
 
-  /// Keeps favorites at the front (capped at [Profile.maxFavorites]) while preserving relative order.
+  /// Keeps favorites at the front (capped at [Profile.maxFavorites] per tab/subscription)
+  /// while preserving relative order within each bucket.
   static List<Profile> normalizeProfiles(List<Profile> profiles) {
-    final favorites = <Profile>[];
-    final others = <Profile>[];
+    final buckets = <String?, List<Profile>>{};
     for (final profile in profiles) {
-      if (profile.favorite && favorites.length < Profile.maxFavorites) {
-        favorites.add(profile);
-      } else {
-        others.add(
-          profile.favorite ? profile.copyWith(favorite: false) : profile,
-        );
-      }
+      buckets
+          .putIfAbsent(profile.subscriptionId, () => <Profile>[])
+          .add(profile);
     }
-    return <Profile>[...favorites, ...others];
+    final out = <Profile>[];
+    for (final bucket in buckets.values) {
+      final favorites = <Profile>[];
+      final others = <Profile>[];
+      for (final profile in bucket) {
+        if (profile.favorite && favorites.length < Profile.maxFavorites) {
+          favorites.add(profile);
+        } else {
+          others.add(
+            profile.favorite ? profile.copyWith(favorite: false) : profile,
+          );
+        }
+      }
+      out
+        ..addAll(favorites)
+        ..addAll(others);
+    }
+    return out;
   }
 
   /// Reorders an item strictly within either the favorites or non-favorites slice.
+  /// When [filterBySubscription] is true, scopes reordering to [subscriptionId] (`null` = Local).
   /// Expects [newIndex] as the post-removal destination index (matching [SliverReorderableList.onReorderItem]).
   static List<Profile> reorderProfileSection(
     List<Profile> profiles, {
     required bool favoritesSection,
     required int oldIndex,
     required int newIndex,
+    String? subscriptionId,
+    bool filterBySubscription = false,
   }) {
     final normalized = normalizeProfiles(profiles);
-    final favorites = normalized.where((p) => p.favorite).toList();
-    final others = normalized.where((p) => !p.favorite).toList();
+    if (!filterBySubscription) {
+      final favorites = normalized.where((p) => p.favorite).toList();
+      final others = normalized.where((p) => !p.favorite).toList();
+      final target = favoritesSection ? favorites : others;
+      if (oldIndex < 0 ||
+          oldIndex >= target.length ||
+          newIndex < 0 ||
+          newIndex >= target.length ||
+          oldIndex == newIndex) {
+        return normalized;
+      }
+      final moved = target.removeAt(oldIndex);
+      target.insert(newIndex, moved);
+      return <Profile>[...favorites, ...others];
+    }
+    final inBucket = normalized
+        .where((p) => p.subscriptionId == subscriptionId)
+        .toList();
+    final othersOutside = normalized
+        .where((p) => p.subscriptionId != subscriptionId)
+        .toList();
+    final favorites = inBucket.where((p) => p.favorite).toList();
+    final others = inBucket.where((p) => !p.favorite).toList();
     final target = favoritesSection ? favorites : others;
     if (oldIndex < 0 ||
         oldIndex >= target.length ||
@@ -167,7 +209,11 @@ class ProfileStore {
     }
     final moved = target.removeAt(oldIndex);
     target.insert(newIndex, moved);
-    return <Profile>[...favorites, ...others];
+    return normalizeProfiles(<Profile>[
+      ...othersOutside,
+      ...favorites,
+      ...others,
+    ]);
   }
 
   static String passwordKey(String profileId) =>
@@ -180,6 +226,13 @@ class ProfileStore {
 
   Future<SharedPreferences> _prefs() async =>
       _prefsOverride ?? SharedPreferences.getInstance();
+
+  /// Refreshes cached [SharedPreferences] after a background isolate write.
+  Future<void> reloadPreferences() async {
+    if (_prefsOverride != null) return;
+    final p = await _prefs();
+    await p.reload();
+  }
 
   static String newProfileId() {
     final b = Uint8List.fromList(
@@ -466,20 +519,32 @@ class ProfileStore {
         return (profiles: list, limitReached: false, favorite: false);
       }
       final target = list[idx];
-      final favCount = list.where((p) => p.favorite).length;
+      final bucket = target.subscriptionId;
+      final inBucket = list.where((p) => p.subscriptionId == bucket).toList();
+      final outsideBucket = list
+          .where((p) => p.subscriptionId != bucket)
+          .toList();
+      final bucketIdx = inBucket.indexWhere((e) => e.id == id);
+      final favCount = inBucket.where((p) => p.favorite).length;
       if (!target.favorite) {
         if (favCount >= Profile.maxFavorites) {
           return (profiles: list, limitReached: true, favorite: false);
         }
-        final updated = List<Profile>.of(list)..removeAt(idx);
-        updated.insert(favCount, target.copyWith(favorite: true));
-        final normalized = normalizeProfiles(updated);
+        final updatedBucket = List<Profile>.of(inBucket)..removeAt(bucketIdx);
+        updatedBucket.insert(favCount, target.copyWith(favorite: true));
+        final normalized = normalizeProfiles(<Profile>[
+          ...outsideBucket,
+          ...updatedBucket,
+        ]);
         await _saveProfileList(normalized);
         return (profiles: normalized, limitReached: false, favorite: true);
       }
-      final updated = List<Profile>.of(list)..removeAt(idx);
-      updated.insert(favCount - 1, target.copyWith(favorite: false));
-      final normalized = normalizeProfiles(updated);
+      final updatedBucket = List<Profile>.of(inBucket)..removeAt(bucketIdx);
+      updatedBucket.insert(favCount - 1, target.copyWith(favorite: false));
+      final normalized = normalizeProfiles(<Profile>[
+        ...outsideBucket,
+        ...updatedBucket,
+      ]);
       await _saveProfileList(normalized);
       return (profiles: normalized, limitReached: false, favorite: false);
     });
@@ -489,6 +554,8 @@ class ProfileStore {
     required bool favoritesSection,
     required int oldIndex,
     required int newIndex,
+    String? subscriptionId,
+    bool filterBySubscription = false,
   }) {
     return _runSerialized(() async {
       final list = await loadProfiles();
@@ -497,6 +564,8 @@ class ProfileStore {
         favoritesSection: favoritesSection,
         oldIndex: oldIndex,
         newIndex: newIndex,
+        subscriptionId: subscriptionId,
+        filterBySubscription: filterBySubscription,
       );
       await _saveProfileList(next);
       return next;
@@ -622,5 +691,326 @@ class ProfileStore {
       psk: pskRaw ?? '',
       secretsMissing: passwordRaw == null || pskRaw == null,
     );
+  }
+
+  static String subscriptionMatchKey({
+    required TunnelProtocol protocol,
+    required String server,
+    required String user,
+  }) => '${protocol.jsonValue}|${server.trim().toLowerCase()}|$user';
+
+  static bool _sameProfileFields(Profile a, Profile b) {
+    return a.displayName == b.displayName &&
+        a.server.trim().toLowerCase() == b.server.trim().toLowerCase() &&
+        a.user == b.user &&
+        a.protocol == b.protocol &&
+        a.dnsAutomatic == b.dnsAutomatic &&
+        a.dns1Host == b.dns1Host &&
+        a.dns1Protocol == b.dns1Protocol &&
+        a.dns2Host == b.dns2Host &&
+        a.dns2Protocol == b.dns2Protocol &&
+        a.mtu == b.mtu &&
+        a.subscriptionId == b.subscriptionId;
+  }
+
+  Future<List<Subscription>> loadSubscriptions() async {
+    final p = await _prefs();
+    final raw = p.getString(prefsKeySubscriptionsJson);
+    if (raw == null || raw.isEmpty) return const <Subscription>[];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const <Subscription>[];
+      final out = <Subscription>[];
+      for (final entry in decoded) {
+        final sub = Subscription.tryFromJson(entry);
+        if (sub != null) out.add(sub);
+      }
+      return out;
+    } catch (e) {
+      _onLog?.call(
+        LogLevel.error,
+        'Subscription list decode failed (${e.runtimeType})',
+      );
+      return const <Subscription>[];
+    }
+  }
+
+  Future<void> _saveSubscriptions(List<Subscription> subscriptions) async {
+    final p = await _prefs();
+    await p.setString(
+      prefsKeySubscriptionsJson,
+      jsonEncode(subscriptions.map((s) => s.toJson()).toList()),
+    );
+  }
+
+  Future<void> saveSubscription(Subscription subscription) {
+    return _runSerialized(() async {
+      final list = List<Subscription>.of(await loadSubscriptions());
+      final idx = list.indexWhere((s) => s.id == subscription.id);
+      if (idx >= 0) {
+        list[idx] = subscription;
+      } else {
+        list.add(subscription);
+      }
+      await _saveSubscriptions(list);
+    });
+  }
+
+  Future<void> recordSubscriptionError(
+    String subscriptionId,
+    String errorMessage,
+  ) {
+    return _runSerialized(() async {
+      final list = List<Subscription>.of(await loadSubscriptions());
+      final idx = list.indexWhere((s) => s.id == subscriptionId);
+      if (idx < 0) return;
+      list[idx] = list[idx].copyWith(lastError: errorMessage);
+      await _saveSubscriptions(list);
+    });
+  }
+
+  /// Atomically diffs [envelopes] into [subscription]'s profiles, preserving IDs
+  /// and favorite stars on `(protocol, server, user)` matches.
+  Future<SubscriptionSyncSummary> applySubscriptionSync({
+    required Subscription subscription,
+    required List<ProfileTransferEnvelope> envelopes,
+    int skippedInvalidLines = 0,
+    required SubscriptionSyncTrigger trigger,
+    required DateTime syncedAt,
+    void Function(int processed, int total)? onProgress,
+  }) {
+    return _runSerialized(() async {
+      final allProfiles = await loadProfiles();
+      final otherProfiles = allProfiles
+          .where((p) => p.subscriptionId != subscription.id)
+          .toList();
+      final existingSubProfiles = allProfiles
+          .where((p) => p.subscriptionId == subscription.id)
+          .toList();
+
+      final queues = <String, ListQueue<Profile>>{};
+      for (final profile in existingSubProfiles) {
+        final key = subscriptionMatchKey(
+          protocol: profile.protocol,
+          server: profile.server,
+          user: profile.user,
+        );
+        queues.putIfAbsent(key, ListQueue<Profile>.new).addLast(profile);
+      }
+
+      final usedNames = <String>{
+        for (final p in otherProfiles)
+          if (p.displayName.trim().isNotEmpty)
+            p.displayName.trim().toLowerCase(),
+      };
+      final nextSubProfiles = <Profile>[];
+      var importedCount = 0;
+      var updatedCount = 0;
+      final total = envelopes.length;
+
+      for (var i = 0; i < total; i++) {
+        final envelope = envelopes[i];
+        final key = subscriptionMatchKey(
+          protocol: envelope.protocol,
+          server: envelope.server,
+          user: envelope.user,
+        );
+        final queue = queues[key];
+        final matched = (queue != null && queue.isNotEmpty)
+            ? queue.removeFirst()
+            : null;
+        final desiredPsk = envelope.protocol.isPptp ? '' : envelope.psk;
+
+        if (matched != null) {
+          final fallbackName = envelope.displayName.trim().isEmpty
+              ? matched.displayName
+              : null;
+          final candidate = envelope.toProfile(
+            matched.id,
+            fallbackDisplayName: fallbackName,
+            subscriptionId: subscription.id,
+            favorite: matched.favorite,
+          );
+          usedNames.add(candidate.displayName.trim().toLowerCase());
+          final existingPassword = await _readSecret(
+            _passwordKey(matched.id),
+            matched.id,
+            'password',
+          );
+          final existingPsk = matched.protocol.isPptp
+              ? ''
+              : await _readSecret(_pskKey(matched.id), matched.id, 'psk');
+          final secretsChanged =
+              existingPassword == null ||
+              existingPassword != envelope.password ||
+              (!candidate.protocol.isPptp &&
+                  (existingPsk == null || existingPsk != desiredPsk));
+          final fieldsChanged = !_sameProfileFields(matched, candidate);
+          if (secretsChanged) {
+            await _secrets.write(_passwordKey(matched.id), envelope.password);
+            await _secrets.write(_pskKey(matched.id), desiredPsk);
+          }
+          if (fieldsChanged || secretsChanged) {
+            updatedCount += 1;
+            nextSubProfiles.add(candidate);
+          } else {
+            nextSubProfiles.add(matched);
+          }
+        } else {
+          final fallbackName = envelope.displayName.trim().isEmpty
+              ? nextDefaultProfileName(usedNames)
+              : null;
+          final newProfile = envelope.toProfile(
+            newProfileId(),
+            fallbackDisplayName: fallbackName,
+            subscriptionId: subscription.id,
+          );
+          usedNames.add(newProfile.displayName.trim().toLowerCase());
+          // Write secrets before saving profile list so a failed keystore write never leaves a secretless profile.
+          await _secrets.write(_passwordKey(newProfile.id), envelope.password);
+          await _secrets.write(_pskKey(newProfile.id), desiredPsk);
+          nextSubProfiles.add(newProfile);
+          importedCount += 1;
+        }
+        onProgress?.call(i + 1, total);
+      }
+
+      final removedIds = <String>[];
+      for (final queue in queues.values) {
+        for (final leftover in queue) {
+          removedIds.add(leftover.id);
+        }
+      }
+
+      await _saveProfileList(<Profile>[...otherProfiles, ...nextSubProfiles]);
+      for (final id in removedIds) {
+        await _secrets.delete(_passwordKey(id));
+        await _secrets.delete(_pskKey(id));
+      }
+
+      final lastId = await loadLastProfileId();
+      if (lastId != null && removedIds.contains(lastId)) {
+        await setLastProfileId(null);
+      }
+
+      final updatedSub = subscription.copyWith(
+        lastUpdatedAtMs: syncedAt.millisecondsSinceEpoch,
+        clearLastError: true,
+      );
+      final subs = List<Subscription>.of(await loadSubscriptions());
+      final subIdx = subs.indexWhere((s) => s.id == updatedSub.id);
+      if (subIdx >= 0) {
+        subs[subIdx] = updatedSub;
+      } else {
+        subs.add(updatedSub);
+      }
+      await _saveSubscriptions(subs);
+
+      return SubscriptionSyncSummary(
+        subscriptionId: updatedSub.id,
+        subscriptionName: updatedSub.name,
+        importedCount: importedCount,
+        updatedCount: updatedCount,
+        removedCount: removedIds.length,
+        skippedInvalidLines: skippedInvalidLines,
+        syncedAtMs: syncedAt.millisecondsSinceEpoch,
+        trigger: trigger,
+      );
+    });
+  }
+
+  Future<({int removedProfilesCount})> deleteSubscription(
+    String subscriptionId,
+  ) {
+    return _runSerialized(() async {
+      final subs = List<Subscription>.of(await loadSubscriptions());
+      subs.removeWhere((s) => s.id == subscriptionId);
+      await _saveSubscriptions(subs);
+
+      final profiles = await loadProfiles();
+      final removedIds = profiles
+          .where((p) => p.subscriptionId == subscriptionId)
+          .map((p) => p.id)
+          .toList();
+      profiles.removeWhere((p) => p.subscriptionId == subscriptionId);
+      await _saveProfileList(profiles);
+
+      for (final id in removedIds) {
+        await _secrets.delete(_passwordKey(id));
+        await _secrets.delete(_pskKey(id));
+      }
+      final lastId = await loadLastProfileId();
+      if (lastId != null && removedIds.contains(lastId)) {
+        await setLastProfileId(null);
+      }
+
+      final pending = await _loadPendingSummariesUnlocked();
+      final filtered = pending
+          .where((s) => s.subscriptionId != subscriptionId)
+          .toList();
+      if (filtered.length != pending.length) {
+        await _savePendingSummariesUnlocked(filtered);
+      }
+      return (removedProfilesCount: removedIds.length);
+    });
+  }
+
+  Future<List<SubscriptionSyncSummary>> _loadPendingSummariesUnlocked() async {
+    final p = await _prefs();
+    final raw = p.getString(prefsKeyPendingSubscriptionSummariesJson);
+    if (raw == null || raw.isEmpty) return const <SubscriptionSyncSummary>[];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const <SubscriptionSyncSummary>[];
+      return decoded
+          .map(SubscriptionSyncSummary.tryFromJson)
+          .whereType<SubscriptionSyncSummary>()
+          .toList();
+    } catch (_) {
+      return const <SubscriptionSyncSummary>[];
+    }
+  }
+
+  Future<void> _savePendingSummariesUnlocked(
+    List<SubscriptionSyncSummary> summaries,
+  ) async {
+    final p = await _prefs();
+    if (summaries.isEmpty) {
+      await p.remove(prefsKeyPendingSubscriptionSummariesJson);
+    } else {
+      await p.setString(
+        prefsKeyPendingSubscriptionSummariesJson,
+        jsonEncode(summaries.map((s) => s.toJson()).toList()),
+      );
+    }
+  }
+
+  Future<void> enqueuePendingSubscriptionSummary(
+    SubscriptionSyncSummary summary,
+  ) {
+    return _runSerialized(() async {
+      final current = List<SubscriptionSyncSummary>.of(
+        await _loadPendingSummariesUnlocked(),
+      );
+      final idx = current.indexWhere(
+        (item) => item.subscriptionId == summary.subscriptionId,
+      );
+      if (idx >= 0) {
+        current[idx] = current[idx].coalesceWith(summary);
+      } else {
+        current.add(summary);
+      }
+      await _savePendingSummariesUnlocked(current);
+    });
+  }
+
+  Future<List<SubscriptionSyncSummary>> consumePendingSubscriptionSummaries() {
+    return _runSerialized(() async {
+      final current = await _loadPendingSummariesUnlocked();
+      if (current.isNotEmpty) {
+        await _savePendingSummariesUnlocked(const <SubscriptionSyncSummary>[]);
+      }
+      return current;
+    });
   }
 }

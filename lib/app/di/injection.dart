@@ -6,6 +6,9 @@ import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_bridge.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_bridge.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_http_client.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_sync_service.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_client.dart';
 import 'package:tunnel_forge/features/onboarding/data/shared_prefs_onboarding_repository.dart';
 import 'package:tunnel_forge/features/onboarding/data/system_app_exit_controller.dart';
@@ -29,6 +32,8 @@ GetIt createAppLocator({
   ConnectivityChecker? connectivityChecker,
   VpnClient? vpnClient,
   ProfileTransferBridge? profileTransferBridge,
+  SubscriptionBridge? subscriptionBridge,
+  SubscriptionHttpClient? subscriptionHttpClient,
   AppVersionRepository? appVersionRepository,
   AppUpdateRepository? appUpdateRepository,
   OnboardingRepository? onboardingRepository,
@@ -89,6 +94,30 @@ GetIt createAppLocator({
     () => ProfileTransferRepositoryImpl(bridge: profileTransferBridge),
     dispose: (repo) => repo.dispose(),
   );
+  locator.registerLazySingleton<SubscriptionBridge>(
+    () => subscriptionBridge ?? SubscriptionBridge(),
+    dispose: (bridge) => bridge.dispose(),
+  );
+  locator.registerLazySingleton<SubscriptionHttpClient>(
+    () => subscriptionHttpClient ?? DartSubscriptionHttpClient(),
+  );
+  locator.registerLazySingleton<SubscriptionSyncService>(
+    () => SubscriptionSyncService(
+      profileStore: locator<ProfileStore>(),
+      bridge: locator<SubscriptionBridge>(),
+      httpClient: locator<SubscriptionHttpClient>(),
+      onLog: (level, message) =>
+          locator<LogsRepository>().logDart(level, 'subscriptions', message),
+    ),
+  );
+  locator.registerLazySingleton<SubscriptionsRepository>(
+    () => SubscriptionsRepositoryImpl(
+      profileStore: locator<ProfileStore>(),
+      syncService: locator<SubscriptionSyncService>(),
+      bridge: locator<SubscriptionBridge>(),
+    ),
+    dispose: (repo) => repo.dispose(),
+  );
   locator.registerSingleton<LogsRepository>(
     LogsRepositoryImpl(),
     dispose: (repo) => repo is LogsRepositoryImpl ? repo.dispose() : null,
@@ -113,6 +142,7 @@ GetIt createAppLocator({
     () => ProfilesBloc(
       locator<ProfilesRepository>(),
       locator<ProfileTransferRepository>(),
+      subscriptionsRepository: locator<SubscriptionsRepository>(),
       logsRepository: locator<LogsRepository>(),
     ),
   );

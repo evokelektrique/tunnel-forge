@@ -739,5 +739,166 @@
   "tunnelFailureAndroid6Explanation": "The tunnel closed without a user disconnect request. Export the logs if this keeps happening.",
   "tunnelFailureAndroidUnknownTitle": "Android platform error",
   "tunnelFailureGenericTitle": "Connection error",
-  "tunnelFailureGenericExplanation": "Check the error details for more information. If it keeps happening, export the logs to help find the cause."
+  "tunnelFailureGenericExplanation": "Check the error details for more information. If it keeps happening, export the logs to help find the cause.",
+  "addSubscriptionUrl": "Add a subscription URL",
+  "localTab": "Local",
+  "subscriptionDetails": "Subscription details",
+  "editSubscription": "Edit subscription",
+  "deleteSubscription": "Delete subscription",
+  "updateSubscription": "Update subscription",
+  "subscriptionName": "Name",
+  "subscriptionNameHint": "e.g. My Provider",
+  "subscriptionNameRequired": "Enter a subscription name",
+  "subscriptionUrl": "Subscription URL",
+  "subscriptionUrlHint": "https://example.com/sub.txt",
+  "subscriptionUrlRequired": "Enter a subscription URL",
+  "subscriptionUrlInvalid": "Enter a valid absolute HTTP or HTTPS URL",
+  "subscriptionUrlUnsupportedScheme": "Only HTTP and HTTPS URLs are supported",
+  "subscriptionHttpWarning": "HTTP is unencrypted. Prefer HTTPS when subscription links contain credentials.",
+  "autoUpdate": "Auto-update",
+  "autoUpdateHelp": "Refresh this subscription automatically in the background.",
+  "updateFrequency": "Update frequency",
+  "frequencyEveryHours": "{count, plural, =1{Every 1 hour} other{Every {count} hours}}",
+  "@frequencyEveryHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "frequencyEveryDays": "{count, plural, =1{Every 1 day} other{Every {count} days}}",
+  "@frequencyEveryDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "frequencyEveryMinutes": "{count, plural, =1{Every 1 minute} other{Every {count} minutes}}",
+  "@frequencyEveryMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "frequencyCustom": "Custom",
+  "intervalValue": "Every",
+  "intervalUnit": "Unit",
+  "unitMinutes": "Minutes",
+  "unitHours": "Hours",
+  "unitDays": "Days",
+  "intervalValueRequired": "Enter an update interval",
+  "intervalValueWholeNumber": "Enter a whole number",
+  "intervalMinMinutesError": "Minimum interval is {min} minutes",
+  "@intervalMinMinutesError": {
+    "placeholders": {
+      "min": {
+        "type": "int"
+      }
+    }
+  },
+  "intervalMaxDaysError": "Maximum interval is {max} days",
+  "@intervalMaxDaysError": {
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "intervalHelperMinMinutes": "Minimum {min} minutes (Android background limit).",
+  "@intervalHelperMinMinutes": {
+    "placeholders": {
+      "min": {
+        "type": "int"
+      }
+    }
+  },
+  "fetchingSubscription": "Fetching subscription...",
+  "lastUpdatedAt": "Updated {timestamp}",
+  "@lastUpdatedAt": {
+    "placeholders": {
+      "timestamp": {
+        "type": "String"
+      }
+    }
+  },
+  "neverUpdated": "Never updated",
+  "autoUpdateEvery": "Auto · {interval}",
+  "@autoUpdateEvery": {
+    "placeholders": {
+      "interval": {
+        "type": "String"
+      }
+    }
+  },
+  "autoUpdateOff": "Auto-update off",
+  "noSubscriptionProfilesYet": "No profiles in this subscription.",
+  "deleteSubscriptionQuestion": "Delete subscription?",
+  "deleteSubscriptionBody": "{count, plural, =0{This will remove \"{name}\".} =1{This will remove \"{name}\" and its 1 profile with saved credentials from this device.} other{This will remove \"{name}\" and its {count} profiles with saved credentials from this device.}}",
+  "@deleteSubscriptionBody": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "subscriptionDeleted": "Subscription removed",
+  "subscriptionSaved": "Subscription saved",
+  "couldNotDeleteSubscription": "Couldn't delete subscription",
+  "couldNotSaveSubscription": "Couldn't save subscription",
+  "subscriptionUpdatedTitle": "Subscription updated",
+  "subscriptionsUpdatedTitle": "Subscriptions updated",
+  "subscriptionNoChanges": "No changes.",
+  "subscriptionImportedCount": "Imported: {count}",
+  "@subscriptionImportedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "subscriptionUpdatedCount": "Updated: {count}",
+  "@subscriptionUpdatedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "subscriptionRemovedCount": "Removed: {count}",
+  "@subscriptionRemovedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "subscriptionSkippedInvalidLines": "{count, plural, =1{1 invalid line skipped.} other{{count} invalid lines skipped.}}",
+  "@subscriptionSkippedInvalidLines": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "subscriptionErrorNoValidProfiles": "Subscription response did not contain any valid tf:// links.",
+  "subscriptionErrorHttp": "Subscription server returned HTTP {statusCode}.",
+  "@subscriptionErrorHttp": {
+    "placeholders": {
+      "statusCode": {
+        "type": "int"
+      }
+    }
+  },
+  "subscriptionErrorTimeout": "Subscription request timed out.",
+  "subscriptionErrorNetwork": "Network error while fetching subscription.",
+  "subscriptionErrorTls": "Secure connection to the subscription server failed.",
+  "subscriptionErrorTooLarge": "Subscription response is too large.",
+  "subscriptionErrorInvalidEncoding": "Subscription response is not valid UTF-8 text.",
+  "subscriptionErrorTunnelRecovering": "VPN tunnel is reconnecting. Try again once connected or disconnected.",
+  "subscriptionErrorUnexpected": "Couldn't update subscription."
 }

@@ -126,7 +126,12 @@ class ProfileTransferEnvelope {
   final DnsProtocol dns2Protocol;
   final int mtu;
 
-  Profile toProfile(String id, {String? fallbackDisplayName}) {
+  Profile toProfile(
+    String id, {
+    String? fallbackDisplayName,
+    String? subscriptionId,
+    bool favorite = false,
+  }) {
     final trimmedName = displayName.trim();
     final trimmedFallback = fallbackDisplayName?.trim() ?? '';
     final resolvedName = trimmedName.isNotEmpty
@@ -144,6 +149,8 @@ class ProfileTransferEnvelope {
       dns2Host: Profile.normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
       dns2Protocol: dns2Protocol,
       mtu: Profile.normalizeMtu(mtu),
+      favorite: favorite,
+      subscriptionId: subscriptionId,
     );
   }
 

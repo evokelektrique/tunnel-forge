@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter/gestures.dart'
     show
         GestureDisposition,
@@ -28,6 +29,8 @@ import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_transfer.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_transfer_contract.dart';
+import 'package:tunnel_forge/features/subscriptions/domain/subscription_models.dart';
+import 'package:tunnel_forge/features/subscriptions/presentation/subscription_editor_view.dart';
 
 /// Bottom sheet listing saved profiles with select, edit, delete, and import actions.
 class ProfilePickerSheet extends StatefulWidget {
@@ -80,7 +83,8 @@ class ProfilePickerSheet extends StatefulWidget {
   State<ProfilePickerSheet> createState() => _ProfilePickerSheetState();
 }
 
-class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
+class _ProfilePickerSheetState extends State<ProfilePickerSheet>
+    with TickerProviderStateMixin {
   static const Color _kFavoriteStarLight = Color(0xFFD48806);
   static const Color _kFavoriteStarDark = Color(0xFFF5C249);
   static const BoxConstraints _kCompactButtonConstraints = BoxConstraints(
@@ -92,13 +96,103 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
   _ProfileSheetMode _mode = _ProfileSheetMode.list;
   String? _editingProfileId;
   int _editorSession = 0;
+  Subscription? _editingSubscription;
+  int _subscriptionEditorSession = 0;
+  int _lastHandledSubmissionId = 0;
+  TabController? _tabController;
+  String? _selectedSubscriptionId;
+  bool _initializedSelectedTab = false;
   bool _multiSelectMode = false;
   final Set<String> _selectedProfileIds = <String>{};
 
   ProfilesBloc get _profilesBloc => widget.profilesBloc;
 
-  bool _isMultiSelect(ProfilesState state) =>
-      _multiSelectMode && state.profiles.isNotEmpty;
+  @override
+  void initState() {
+    super.initState();
+    final initialState = _profilesBloc.state;
+    _lastHandledSubmissionId = initialState.subscriptionSubmissionId;
+    _syncTabs(initialState, initial: true);
+  }
+
+  @override
+  void dispose() {
+    _tabController?.removeListener(_handleTabChanged);
+    _tabController?.dispose();
+    super.dispose();
+  }
+
+  void _syncTabs(ProfilesState state, {bool initial = false}) {
+    final subs = state.subscriptions;
+    if (subs.isEmpty) {
+      _selectedSubscriptionId = null;
+      _tabController?.removeListener(_handleTabChanged);
+      _tabController?.dispose();
+      _tabController = null;
+      return;
+    }
+
+    if (initial || !_initializedSelectedTab) {
+      _initializedSelectedTab = true;
+      final activeId = state.activeProfileId;
+      if (activeId != null) {
+        for (final profile in state.profiles) {
+          if (profile.id == activeId) {
+            final subId = profile.subscriptionId;
+            if (subId != null && subs.any((s) => s.id == subId)) {
+              _selectedSubscriptionId = subId;
+            }
+            break;
+          }
+        }
+      }
+    } else if (_selectedSubscriptionId != null &&
+        !subs.any((s) => s.id == _selectedSubscriptionId)) {
+      _selectedSubscriptionId = null;
+    }
+
+    final totalLength = 1 + subs.length;
+    final rawIndex = _selectedSubscriptionId == null
+        ? 0
+        : subs.indexWhere((s) => s.id == _selectedSubscriptionId) + 1;
+    final targetIndex = rawIndex.clamp(0, totalLength - 1);
+
+    if (_tabController == null || _tabController!.length != totalLength) {
+      _tabController?.removeListener(_handleTabChanged);
+      _tabController?.dispose();
+      _tabController = TabController(
+        length: totalLength,
+        initialIndex: targetIndex,
+        vsync: this,
+      )..addListener(_handleTabChanged);
+    } else if (_tabController!.index != targetIndex) {
+      _tabController!.index = targetIndex;
+    }
+  }
+
+  void _handleTabChanged() {
+    final controller = _tabController;
+    if (controller == null) return;
+    final subs = _profilesBloc.state.subscriptions;
+    final idx = controller.index;
+    final nextId = (idx <= 0 || idx > subs.length) ? null : subs[idx - 1].id;
+    if (nextId == _selectedSubscriptionId) return;
+    setState(() {
+      _selectedSubscriptionId = nextId;
+      _multiSelectMode = false;
+      _selectedProfileIds.clear();
+    });
+  }
+
+  List<Profile> _visibleProfiles(ProfilesState state) {
+    if (state.subscriptions.isEmpty) return state.profiles;
+    return state.profiles
+        .where((p) => p.subscriptionId == _selectedSubscriptionId)
+        .toList();
+  }
+
+  bool _isMultiSelect(List<Profile> visibleProfiles) =>
+      _multiSelectMode && visibleProfiles.isNotEmpty;
 
   Set<String> _activeSelection(List<Profile> profiles) {
     if (_selectedProfileIds.isEmpty) return const <String>{};
@@ -159,12 +253,21 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     });
   }
 
+  void _openSubscriptionEditor({Subscription? subscription}) {
+    setState(() {
+      _mode = _ProfileSheetMode.subscriptionEditor;
+      _editingSubscription = subscription;
+      _subscriptionEditorSession += 1;
+    });
+  }
+
   void _closeEditor() {
     if (!mounted) return;
     FocusScope.of(context).unfocus();
     setState(() {
       _mode = _ProfileSheetMode.list;
       _editingProfileId = null;
+      _editingSubscription = null;
     });
   }
 
@@ -514,17 +617,18 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
   Widget _buildHeader(
     BuildContext context,
     ProfilesState state,
+    List<Profile> visibleProfiles,
     Set<String> selectedIds,
   ) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final tt = theme.textTheme;
     final t = AppL10n.of(context);
-    final isMultiSelect = _isMultiSelect(state);
+    final isMultiSelect = _isMultiSelect(visibleProfiles);
     final hasSelection = selectedIds.isNotEmpty;
     final allSelected =
-        state.profiles.isNotEmpty &&
-        selectedIds.length == state.profiles.length;
+        visibleProfiles.isNotEmpty &&
+        selectedIds.length == visibleProfiles.length;
     const compactConstraints = _kCompactButtonConstraints;
     const compactPadding = _kCompactButtonPadding;
 
@@ -536,6 +640,9 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         switch (action) {
           case _AddProfileAction.create:
             _openEditor();
+            break;
+          case _AddProfileAction.addSubscription:
+            _openSubscriptionEditor();
             break;
           case _AddProfileAction.importFile:
             await _importFromFile();
@@ -551,6 +658,13 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
           child: _PopupMenuIconLabel(
             icon: Icons.add_circle_outline,
             label: t.createNewProfile,
+          ),
+        ),
+        PopupMenuItem<_AddProfileAction>(
+          value: _AddProfileAction.addSubscription,
+          child: _PopupMenuIconLabel(
+            icon: Icons.rss_feed_outlined,
+            label: t.addSubscriptionUrl,
           ),
         ),
         PopupMenuItem<_AddProfileAction>(
@@ -612,7 +726,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
             ),
             onPressed: state.loading
                 ? null
-                : () => _toggleSelectAll(state.profiles, allSelected),
+                : () => _toggleSelectAll(visibleProfiles, allSelected),
           ),
           IconButton(
             key: const Key('multi_select_copy'),
@@ -622,7 +736,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
             icon: const Icon(Icons.copy_all_outlined),
             onPressed: state.loading || !hasSelection
                 ? null
-                : () => _copySelectedLinks(state.profiles),
+                : () => _copySelectedLinks(visibleProfiles),
           ),
           IconButton(
             key: const Key('multi_select_export'),
@@ -632,7 +746,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
             icon: const Icon(Icons.file_download_outlined),
             onPressed: state.loading || !hasSelection
                 ? null
-                : () => _exportSelectedFiles(state.profiles),
+                : () => _exportSelectedFiles(visibleProfiles),
           ),
           IconButton(
             key: const Key('multi_select_delete'),
@@ -646,7 +760,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
             onPressed: state.loading || !hasSelection
                 ? null
                 : () => _confirmDeleteProfiles(
-                    _orderedSelectedIds(state.profiles),
+                    _orderedSelectedIds(visibleProfiles),
                   ),
           ),
           addButton,
@@ -677,11 +791,14 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
   Widget _buildReorderableSection(
     BuildContext context, {
     required ProfilesState state,
+    required List<Profile> visibleProfiles,
     required List<Profile> section,
     required bool favoritesSection,
     required Set<String> selectedIds,
     required bool isMultiSelect,
     required bool atFavoriteLimit,
+    required bool filterBySubscription,
+    required String? subscriptionId,
   }) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
@@ -697,6 +814,8 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
           favoritesSection: favoritesSection,
           oldIndex: oldIndex,
           newIndex: newIndex,
+          subscriptionId: subscriptionId,
+          filterBySubscription: filterBySubscription,
         ),
       ),
       itemBuilder: (context, i) {
@@ -728,7 +847,7 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
             onHoldTriggered: () => _enterMultiSelect(profile.id),
             onTap: () {
               if (isMultiSelect) {
-                _toggleSelection(profile.id, state.profiles);
+                _toggleSelection(profile.id, visibleProfiles);
               } else {
                 _selectProfile(profile.id);
               }
@@ -820,32 +939,234 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
     );
   }
 
+  String _formatSubscriptionTimestamp(BuildContext context, DateTime dt) {
+    final local = dt.toLocal();
+    final locale = Localizations.maybeLocaleOf(context)?.toLanguageTag();
+    try {
+      return DateFormat.yMMMd(locale).add_Hm().format(local);
+    } catch (_) {
+      return DateFormat('yyyy-MM-dd HH:mm').format(local);
+    }
+  }
+
+  Future<void> _confirmDeleteSubscription(
+    Subscription subscription,
+    int profileCount,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final t = AppL10n.of(ctx);
+        return AlertDialog(
+          title: Text(t.deleteSubscriptionQuestion),
+          content: Text(
+            t.deleteSubscriptionBody(subscription.name, profileCount),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t.cancel),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error,
+                foregroundColor: Theme.of(ctx).colorScheme.onError,
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t.delete),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    _exitMultiSelect();
+    _profilesBloc.add(ProfilesSubscriptionDeleteRequested(subscription.id));
+  }
+
+  Widget _buildSubscriptionStrip(
+    BuildContext context,
+    ProfilesState state,
+    Subscription subscription,
+    int profileCount,
+  ) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final tt = theme.textTheme;
+    final t = AppL10n.of(context);
+    final updating = state.updatingSubscriptionIds.contains(subscription.id);
+    final lastUpdated = subscription.lastUpdatedAt;
+    final updatedLabel = lastUpdated == null
+        ? t.neverUpdated
+        : t.lastUpdatedAt(_formatSubscriptionTimestamp(context, lastUpdated));
+    final scheduleLabel = subscription.autoUpdate
+        ? t.autoUpdateEvery(subscription.formatIntervalLabel(t))
+        : t.autoUpdateOff;
+    final errorText = subscription.localizedLastError(t);
+
+    return Container(
+      key: ValueKey<String>('subscription_header_${subscription.id}'),
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  updatedLabel,
+                  key: ValueKey<String>(
+                    'subscription_last_updated_${subscription.id}',
+                  ),
+                  style: tt.bodySmall?.copyWith(color: cs.onSurface),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  scheduleLabel,
+                  style: tt.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    errorText,
+                    style: tt.labelSmall?.copyWith(color: cs.error),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          IconButton(
+            key: ValueKey<String>('subscription_refresh_${subscription.id}'),
+            tooltip: t.updateSubscription,
+            constraints: _kCompactButtonConstraints,
+            padding: _kCompactButtonPadding,
+            onPressed: updating || state.loading
+                ? null
+                : () => _profilesBloc.add(
+                    ProfilesSubscriptionSyncRequested(
+                      subscription.id,
+                      trigger: SubscriptionSyncTrigger.manual,
+                    ),
+                  ),
+            icon: updating
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+          ),
+          PopupMenuButton<_SubscriptionHeaderAction>(
+            key: ValueKey<String>('subscription_actions_${subscription.id}'),
+            tooltip: t.profileActions,
+            enabled: !updating && !state.loading,
+            onSelected: (action) async {
+              switch (action) {
+                case _SubscriptionHeaderAction.edit:
+                  _openSubscriptionEditor(subscription: subscription);
+                  break;
+                case _SubscriptionHeaderAction.delete:
+                  await _confirmDeleteSubscription(subscription, profileCount);
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem<_SubscriptionHeaderAction>(
+                value: _SubscriptionHeaderAction.edit,
+                child: _PopupMenuIconLabel(
+                  icon: Icons.edit_outlined,
+                  label: t.editSubscription,
+                ),
+              ),
+              PopupMenuItem<_SubscriptionHeaderAction>(
+                value: _SubscriptionHeaderAction.delete,
+                child: _PopupMenuIconLabel(
+                  icon: Icons.delete_outline,
+                  label: t.deleteSubscription,
+                  color: cs.error,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildList(BuildContext context, ProfilesState state) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final tt = theme.textTheme;
     final t = AppL10n.of(context);
-    final selectedIds = _activeSelection(state.profiles);
-    final isMultiSelect = _isMultiSelect(state);
-    final favorites = state.profiles.where((p) => p.favorite).toList();
-    final others = state.profiles.where((p) => !p.favorite).toList();
+    final hasTabs = state.subscriptions.isNotEmpty && _tabController != null;
+    final visibleProfiles = _visibleProfiles(state);
+    final selectedIds = _activeSelection(visibleProfiles);
+    final isMultiSelect = _isMultiSelect(visibleProfiles);
+    final favorites = visibleProfiles.where((p) => p.favorite).toList();
+    final others = visibleProfiles.where((p) => !p.favorite).toList();
     final atFavoriteLimit = favorites.length >= Profile.maxFavorites;
+
+    Subscription? activeSubscription;
+    if (hasTabs && _selectedSubscriptionId != null) {
+      for (final sub in state.subscriptions) {
+        if (sub.id == _selectedSubscriptionId) {
+          activeSubscription = sub;
+          break;
+        }
+      }
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildHeader(context, state, selectedIds),
+        _buildHeader(context, state, visibleProfiles, selectedIds),
+        if (hasTabs)
+          TabBar(
+            key: const Key('profile_tabs'),
+            controller: _tabController,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            tabs: [
+              Tab(key: const Key('profile_tab_local'), text: t.localTab),
+              for (final sub in state.subscriptions)
+                Tab(
+                  key: ValueKey<String>('profile_tab_${sub.id}'),
+                  text: sub.name,
+                ),
+            ],
+          ),
+        if (activeSubscription != null)
+          _buildSubscriptionStrip(
+            context,
+            state,
+            activeSubscription,
+            visibleProfiles.length,
+          ),
         if (state.loading)
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: LinearProgressIndicator(),
           ),
         Expanded(
-          child: state.profiles.isEmpty
+          child: visibleProfiles.isEmpty
               ? Padding(
                   padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
                   child: Text(
-                    t.noProfilesYet,
+                    activeSubscription != null
+                        ? t.noSubscriptionProfilesYet
+                        : t.noProfilesYet,
                     style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                   ),
                 )
@@ -855,11 +1176,14 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
                       _buildReorderableSection(
                         context,
                         state: state,
+                        visibleProfiles: visibleProfiles,
                         section: favorites,
                         favoritesSection: true,
                         selectedIds: selectedIds,
                         isMultiSelect: isMultiSelect,
                         atFavoriteLimit: atFavoriteLimit,
+                        filterBySubscription: hasTabs,
+                        subscriptionId: _selectedSubscriptionId,
                       ),
                     if (favorites.isNotEmpty && others.isNotEmpty)
                       const SliverToBoxAdapter(
@@ -874,16 +1198,67 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
                       _buildReorderableSection(
                         context,
                         state: state,
+                        visibleProfiles: visibleProfiles,
                         section: others,
                         favoritesSection: false,
                         selectedIds: selectedIds,
                         isMultiSelect: isMultiSelect,
                         atFavoriteLimit: atFavoriteLimit,
+                        filterBySubscription: hasTabs,
+                        subscriptionId: _selectedSubscriptionId,
                       ),
                   ],
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSubscriptionEditor(BuildContext context, ProfilesState state) {
+    final editing = _editingSubscription;
+    return SubscriptionEditorView(
+      key: ValueKey<String>(
+        'sub-editor:${editing?.id ?? 'new'}:$_subscriptionEditorSession',
+      ),
+      initialSubscription: editing,
+      submitting: state.subscriptionSubmitting,
+      onClose: _closeEditor,
+      onSubmit:
+          ({
+            required name,
+            required url,
+            required autoUpdate,
+            required updateIntervalMinutes,
+            required intervalUnit,
+            required urlChanged,
+            required autoUpdateNewlyEnabled,
+          }) {
+            if (editing == null) {
+              _profilesBloc.add(
+                ProfilesSubscriptionAddRequested(
+                  name: name,
+                  url: url,
+                  autoUpdate: autoUpdate,
+                  updateIntervalMinutes: updateIntervalMinutes,
+                  intervalUnit: intervalUnit,
+                ),
+              );
+            } else {
+              _profilesBloc.add(
+                ProfilesSubscriptionEditRequested(
+                  subscription: editing.copyWith(
+                    name: name,
+                    url: url,
+                    autoUpdate: autoUpdate,
+                    updateIntervalMinutes: updateIntervalMinutes,
+                    intervalUnit: intervalUnit,
+                  ),
+                  urlChanged: urlChanged,
+                  autoUpdateNewlyEnabled: autoUpdateNewlyEnabled,
+                ),
+              );
+            }
+          },
     );
   }
 
@@ -917,22 +1292,53 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
         theme.colorScheme.surfaceContainerLow;
     final listHeight = MediaQuery.sizeOf(context).height * 0.62;
     final editorHeight = MediaQuery.sizeOf(context).height * 0.9;
-    final targetHeight = _mode == _ProfileSheetMode.editor
-        ? editorHeight
-        : listHeight;
+    final targetHeight = _mode == _ProfileSheetMode.list
+        ? listHeight
+        : editorHeight;
 
     return SafeArea(
       child: Material(
         color: sheetColor,
-        child: BlocBuilder<ProfilesBloc, ProfilesState>(
+        child: BlocConsumer<ProfilesBloc, ProfilesState>(
           bloc: _profilesBloc,
+          listenWhen: (previous, current) =>
+              previous.subscriptions != current.subscriptions ||
+              previous.subscriptionSubmissionId !=
+                  current.subscriptionSubmissionId,
+          listener: (context, state) {
+            if (state.subscriptionSubmissionId != _lastHandledSubmissionId) {
+              _lastHandledSubmissionId = state.subscriptionSubmissionId;
+              if (_mode == _ProfileSheetMode.subscriptionEditor &&
+                  state.subscriptionSubmissionError == null) {
+                final savedId = state.lastSavedSubscriptionId;
+                if (savedId != null &&
+                    state.subscriptions.any((s) => s.id == savedId)) {
+                  _selectedSubscriptionId = savedId;
+                  _initializedSelectedTab = true;
+                }
+                _syncTabs(state);
+                _closeEditor();
+                return;
+              }
+            }
+            setState(() {
+              _syncTabs(state);
+            });
+          },
           builder: (context, state) {
+            final visibleProfiles = _visibleProfiles(state);
             final isMultiSelect =
-                _mode == _ProfileSheetMode.list && _isMultiSelect(state);
+                _mode == _ProfileSheetMode.list &&
+                _isMultiSelect(visibleProfiles);
             return PopScope(
-              canPop: !isMultiSelect,
+              canPop: !isMultiSelect && _mode == _ProfileSheetMode.list,
               onPopInvokedWithResult: (didPop, _) {
-                if (!didPop && isMultiSelect) _exitMultiSelect();
+                if (didPop) return;
+                if (_mode != _ProfileSheetMode.list) {
+                  if (!state.subscriptionSubmitting) _closeEditor();
+                } else if (isMultiSelect) {
+                  _exitMultiSelect();
+                }
               },
               child: AnimatedSize(
                 duration: const Duration(milliseconds: 260),
@@ -954,15 +1360,20 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet> {
                         child: SlideTransition(position: offset, child: child),
                       );
                     },
-                    child: _mode == _ProfileSheetMode.editor
-                        ? KeyedSubtree(
-                            key: const ValueKey<String>('profile-editor-mode'),
-                            child: _buildEditor(context),
-                          )
-                        : KeyedSubtree(
-                            key: const ValueKey<String>('profile-list-mode'),
-                            child: _buildList(context, state),
-                          ),
+                    child: switch (_mode) {
+                      _ProfileSheetMode.editor => KeyedSubtree(
+                        key: const ValueKey<String>('profile-editor-mode'),
+                        child: _buildEditor(context),
+                      ),
+                      _ProfileSheetMode.subscriptionEditor => KeyedSubtree(
+                        key: const ValueKey<String>('subscription-editor-mode'),
+                        child: _buildSubscriptionEditor(context, state),
+                      ),
+                      _ProfileSheetMode.list => KeyedSubtree(
+                        key: const ValueKey<String>('profile-list-mode'),
+                        child: _buildList(context, state),
+                      ),
+                    },
                   ),
                 ),
               ),
@@ -1388,8 +1799,10 @@ class _PopupMenuIconLabel extends StatelessWidget {
   }
 }
 
-enum _AddProfileAction { create, importFile, importClipboard }
+enum _AddProfileAction { create, addSubscription, importFile, importClipboard }
 
 enum _ProfileTileAction { edit, copyShareLink, exportFile, delete }
 
-enum _ProfileSheetMode { list, editor }
+enum _SubscriptionHeaderAction { edit, delete }
+
+enum _ProfileSheetMode { list, editor, subscriptionEditor }

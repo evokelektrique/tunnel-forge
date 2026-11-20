@@ -495,6 +495,7 @@ class Profile {
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
     this.mtu = defaultVpnMtu,
     this.favorite = false,
+    this.subscriptionId,
   });
 
   /// Maximum number of profiles a user can mark as favorites.
@@ -521,7 +522,15 @@ class Profile {
   final int mtu;
   final bool favorite;
 
-  Profile copyWith({bool? favorite, TunnelProtocol? protocol}) {
+  /// Null for local profiles; otherwise the owning [Subscription.id].
+  final String? subscriptionId;
+
+  Profile copyWith({
+    bool? favorite,
+    TunnelProtocol? protocol,
+    String? subscriptionId,
+    bool clearSubscriptionId = false,
+  }) {
     return Profile(
       id: id,
       displayName: displayName,
@@ -535,6 +544,9 @@ class Profile {
       dns2Protocol: dns2Protocol,
       mtu: mtu,
       favorite: favorite ?? this.favorite,
+      subscriptionId: clearSubscriptionId
+          ? null
+          : (subscriptionId ?? this.subscriptionId),
     );
   }
 
@@ -721,6 +733,8 @@ class Profile {
     'dns2Protocol': dns2Protocol.jsonValue,
     'mtu': mtu,
     'favorite': favorite,
+    if (subscriptionId != null && subscriptionId!.isNotEmpty)
+      'subscriptionId': subscriptionId,
   };
 
   static Profile? tryFromJson(Object? raw) {
@@ -760,6 +774,10 @@ class Profile {
     }
     final favorite = m['favorite'] is bool ? m['favorite'] as bool : false;
     final protocol = TunnelProtocol.fromJson(m['protocol']);
+    final rawSubId = m['subscriptionId'];
+    final subscriptionId = rawSubId is String && rawSubId.trim().isNotEmpty
+        ? rawSubId.trim()
+        : null;
     return Profile(
       id: id,
       displayName: displayName,
@@ -773,6 +791,7 @@ class Profile {
       dns2Protocol: parsedDns2Protocol,
       mtu: mtu,
       favorite: favorite,
+      subscriptionId: subscriptionId,
     );
   }
 }
