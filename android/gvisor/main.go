@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -140,17 +141,22 @@ func tf_gvisor_start(clientIPv4 unsafe.Pointer, mtu C.int) C.int {
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
+	return startStackLocked(s, linkEP, ipv4AddrFromOctets(ip))
+}
+
+func startStackLocked(s *stack.Stack, linkEP *channel.Endpoint, address tcpip.Address) C.int {
 	if err := s.CreateNIC(nicID, linkEP); err != nil {
+		s.Close()
+		linkEP.Close()
 		return -2
 	}
 	protocolAddr := tcpip.ProtocolAddress{
-		Protocol: ipv4.ProtocolNumber,
-		AddressWithPrefix: tcpip.AddressWithPrefix{
-			Address:   ipv4AddrFromOctets(ip),
-			PrefixLen: 32,
-		},
+		Protocol:          ipv4.ProtocolNumber,
+		AddressWithPrefix: tcpip.AddressWithPrefix{Address: address, PrefixLen: 32},
 	}
 	if err := s.AddProtocolAddress(nicID, protocolAddr, stack.AddressProperties{}); err != nil {
+		s.Close()
+		linkEP.Close()
 		return -3
 	}
 	s.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: nicID}})
@@ -268,6 +274,7 @@ func tf_gvisor_read_outbound(out unsafe.Pointer, maxLen C.int, timeoutMs C.int) 
 		if pkt != nil {
 			defer pkt.DecRef()
 			buf := pkt.ToBuffer()
+			defer buf.Release()
 			data := buf.Flatten()
 			if len(data) > int(maxLen) {
 				return -3
@@ -288,11 +295,7 @@ func tf_gvisor_read_outbound(out unsafe.Pointer, maxLen C.int, timeoutMs C.int) 
 //export tf_gvisor_tcp_open
 func tf_gvisor_tcp_open(remoteIPv4 unsafe.Pointer, port C.int, timeoutMs C.int) C.int {
 	state.mu.Lock()
-	openID := state.nextOpenAttemptID
-	state.nextOpenAttemptID++
-	if state.nextOpenAttemptID <= 0 {
-		state.nextOpenAttemptID = 1
-	}
+	openID := takeNextID(&state.nextOpenAttemptID)
 	state.mu.Unlock()
 	return tf_gvisor_tcp_open_cancelable(C.int(openID), remoteIPv4, port, timeoutMs)
 }
@@ -314,8 +317,8 @@ func tf_gvisor_tcp_open_cancelable(openID C.int, remoteIPv4 unsafe.Pointer, port
 		return -1
 	}
 	open := beginOpenLocked(int(openID), ip, uint16(port))
-	state.mu.Unlock()
 	if !running || s == nil {
+		state.mu.Unlock()
 		state.openFailed.Add(1)
 		state.openImmediate.Add(1)
 		finishOpenFailure(open, -2, "stack-not-running")
@@ -323,10 +326,6 @@ func tf_gvisor_tcp_open_cancelable(openID C.int, remoteIPv4 unsafe.Pointer, port
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
-	state.mu.Lock()
-	if state.pendingOpenCancels == nil {
-		state.pendingOpenCancels = make(map[int]context.CancelFunc)
-	}
 	state.pendingOpenCancels[open] = cancel
 	state.mu.Unlock()
 	// Bind only the local NIC; gVisor selects the ephemeral source port that diagnostics observe.
@@ -344,18 +343,42 @@ func tf_gvisor_tcp_open_cancelable(openID C.int, remoteIPv4 unsafe.Pointer, port
 		ipv4.ProtocolNumber,
 	)
 	if err != nil {
-		state.openFailed.Add(1)
-		switch ctx.Err() {
-		case context.DeadlineExceeded:
-			state.openTimeouts.Add(1)
-			finishOpenFailure(open, -4, "timeout")
-			return -4
-		case context.Canceled:
-			state.openCanceled.Add(1)
-			finishOpenFailure(open, -7, "client-aborted")
-			return -7
-		}
-		code, reason := classifyOpenError(err)
+		return C.int(recordDialFailure(open, ctx.Err(), err))
+	}
+
+	state.mu.Lock()
+	delete(state.pendingOpenCancels, open)
+	id := takeNextID(&state.nextID)
+	state.sessions[id] = &tcpSession{conn: conn}
+	finishOpenSuccessLocked(open, id)
+	state.mu.Unlock()
+	state.openOK.Add(1)
+	return C.int(id)
+}
+
+func takeNextID(next *int) int {
+	id := *next
+	if id == math.MaxInt32 {
+		*next = 1
+	} else {
+		*next = id + 1
+	}
+	return id
+}
+
+func recordDialFailure(open int, contextErr, err error) int {
+	state.openFailed.Add(1)
+	var code int
+	var reason string
+	switch contextErr {
+	case context.DeadlineExceeded:
+		code, reason = -4, "timeout"
+		state.openTimeouts.Add(1)
+	case context.Canceled:
+		code, reason = -7, "client-aborted"
+		state.openCanceled.Add(1)
+	default:
+		code, reason = classifyOpenError(err)
 		switch code {
 		case -5:
 			state.openResets.Add(1)
@@ -364,22 +387,9 @@ func tf_gvisor_tcp_open_cancelable(openID C.int, remoteIPv4 unsafe.Pointer, port
 		default:
 			state.openInternal.Add(1)
 		}
-		finishOpenFailure(open, code, reason)
-		return C.int(code)
 	}
-
-	state.mu.Lock()
-	delete(state.pendingOpenCancels, open)
-	id := state.nextID
-	state.nextID++
-	if state.nextID <= 0 {
-		state.nextID = 1
-	}
-	state.sessions[id] = &tcpSession{conn: conn}
-	finishOpenSuccessLocked(open, id)
-	state.mu.Unlock()
-	state.openOK.Add(1)
-	return C.int(id)
+	finishOpenFailure(open, code, reason)
+	return code
 }
 
 //export tf_gvisor_tcp_cancel_open
@@ -614,9 +624,6 @@ func tf_gvisor_last_open_diagnostics(out unsafe.Pointer, count C.int) C.int {
 	diag := state.lastOpenDiagnostics
 	state.mu.Unlock()
 	buf := unsafe.Slice((*byte)(out), int(count))
-	if len(buf) == 0 {
-		return -1
-	}
 	n := copy(buf, []byte(diag))
 	if n >= len(buf) {
 		n = len(buf) - 1
@@ -634,9 +641,6 @@ func tf_gvisor_open_diagnostics(openID C.int, out unsafe.Pointer, count C.int) C
 	diag := state.completedOpenDiags[int(openID)]
 	state.mu.Unlock()
 	buf := unsafe.Slice((*byte)(out), int(count))
-	if len(buf) == 0 {
-		return -1
-	}
 	n := copy(buf, []byte(diag))
 	if n >= len(buf) {
 		n = len(buf) - 1
