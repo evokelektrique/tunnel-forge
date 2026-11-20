@@ -463,9 +463,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                 const SizedBox(height: 8),
                 _cardTitle(t.mode),
                 _cardText(
-                  isInclusive
-                      ? t.inclusiveDescription
-                      : t.exclusiveDescription,
+                  isInclusive ? t.inclusiveDescription : t.exclusiveDescription,
                   color: widget.colorScheme.onSurfaceVariant,
                 ),
                 const SizedBox(height: 14),
@@ -505,9 +503,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     color: widget.colorScheme.onSurfaceVariant,
                   ),
                   title: _cardTitle(
-                    isInclusive
-                        ? t.selectAppsUsingVpn
-                        : t.selectAppsOutsideVpn,
+                    isInclusive ? t.selectAppsUsingVpn : t.selectAppsOutsideVpn,
                   ),
                   subtitle: _cardText(
                     splitTunnelSubtitle,
@@ -567,9 +563,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
               onChanged: widget.routingLocked
                   ? null
                   : (value) => widget.onProxySettingsChanged(
-                      widget.proxySettings.copyWith(
-                        allowLanConnections: value,
-                      ),
+                      widget.proxySettings.copyWith(allowLanConnections: value),
                     ),
             ),
             const SizedBox(height: 12),
@@ -800,7 +794,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
   Widget _sectionTitle(String text) {
     return Text(
       text,
-      style: widget.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      style: widget.textTheme.titleMedium?.copyWith(
+        fontWeight: FontWeight.w700,
+      ),
     );
   }
 
