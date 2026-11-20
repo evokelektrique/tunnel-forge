@@ -84,11 +84,23 @@ void main() {
     expect(find.byType(Divider), findsWidgets);
 
     await tester.scrollUntilVisible(
-      find.text('About'),
+      find.byKey(const Key('settings_about_card')),
       300,
       scrollable: settingsScrollView(),
     );
     expect(find.text('About'), findsOneWidget);
+
+    final aboutCard = tester.widget<Card>(
+      find.byKey(const Key('settings_about_card')),
+    );
+    final aboutChildren = (aboutCard.child! as Column).children;
+    final updateIndex = aboutChildren.indexWhere(
+      (child) => child.key == const Key('settings_update_card'),
+    );
+    final versionIndex = aboutChildren.indexWhere(
+      (child) => child.key == const Key('settings_version_footer'),
+    );
+    expect(updateIndex, lessThan(versionIndex));
   });
 
   testWidgets('proxy port fields update when persisted settings load later', (

@@ -728,21 +728,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
     );
     children.add(
       Padding(
-        key: const Key('settings_version_footer'),
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          widget.installedVersion == null
-              ? t.versionUnavailable
-              : t.version(widget.installedVersion!),
-          textAlign: TextAlign.center,
-          style: widget.textTheme.bodySmall?.copyWith(
-            color: widget.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      ),
-    );
-    children.add(
-      Padding(
         key: const Key('settings_update_card'),
         padding: _kCardContentPadding,
         child: Column(
@@ -774,6 +759,21 @@ class _SettingsPanelState extends State<SettingsPanel> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+    children.add(
+      Padding(
+        key: const Key('settings_version_footer'),
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          widget.installedVersion == null
+              ? t.versionUnavailable
+              : t.version(widget.installedVersion!),
+          textAlign: TextAlign.center,
+          style: widget.textTheme.bodySmall?.copyWith(
+            color: widget.colorScheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
