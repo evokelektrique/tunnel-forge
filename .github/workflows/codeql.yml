@@ -197,9 +197,11 @@ jobs:
             echo "sdk.dir=${android_sdk_root}"
           } > local.properties
 
-      - name: Install Android API 37
+      - name: Install Android SDK platform and CMake
         run: |
-          "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-37.0'
+          "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/cmdline-tools/latest/bin/sdkmanager" --install \
+            'platforms;android-37.0' \
+            'cmake;3.22.1'
 
       - name: Build Kotlin targets for CodeQL
         working-directory: android
