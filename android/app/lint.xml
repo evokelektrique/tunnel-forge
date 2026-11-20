@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <lint>
+    <!-- Toolchain upgrade notices depend on releases outside this checkout. -->
+    <issue id="AndroidGradlePluginVersion" severity="informational" />
     <issue id="PropertyEscape">
         <ignore regexp=".*[/\\]local\.properties$" />
     </issue>
