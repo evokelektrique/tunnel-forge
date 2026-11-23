@@ -1,5 +1,6 @@
 #include "../../android/app/src/main/cpp/ppp.c"
 #include <assert.h>
+#include <mbedtls/md4.h>
 /* Script the transport, keeping the real CHAP parser, MD5 and authentication loop. */
 static unsigned received, sent;
 static int test_mode;
@@ -149,8 +150,8 @@ int main(void) {
   (void)eacute_md4_md4;
   uint8_t eacute_u16[2] = {0xe9, 0x00};
   uint8_t h1[16], h2[16];
-  mbedtls_md4(eacute_u16, sizeof(eacute_u16), h1);
-  mbedtls_md4(h1, sizeof(h1), h2);
+  assert(mbedtls_md4_ret(eacute_u16, sizeof(eacute_u16), h1) == 0);
+  assert(mbedtls_md4_ret(h1, sizeof(h1), h2) == 0);
   assert(memcmp(hh_utf8, h2, 16) == 0);
 
   char pw_emojis[129 * 4 + 1];

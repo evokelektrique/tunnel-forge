@@ -1843,10 +1843,6 @@ static uint16_t ppp_tcp_mss_for_link_mtu(uint16_t link_mtu) {
 }
 
 /**
- * If @p pkt is an unfragmented IPv4 TCP SYN, lower TCP MSS option to @p clamp_mss when larger.
- *
- * Rewrites MSS in place and clears the TCP checksum field (caller path recomputes if needed).
-/**
  * TCP SYN MSS clamping and IPv4/L4 checksum fixups live in ppp_wire.c so host unit tests execute
  * the exact same production framing logic.
  */
