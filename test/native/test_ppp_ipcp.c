@@ -1,86 +1,19 @@
+#include "../../android/app/src/main/cpp/ppp_wire.h"
 #include "../../android/app/src/main/cpp/util_endian.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-#define PROTO_IPCP 0x8021u
-#define IPCP_OPT_IP_ADDRESS 3u
-#define IPCP_OPT_PRIMARY_DNS 129u
-#define IPCP_OPT_SECONDARY_DNS 131u
-
-static int ipcp_opts_first_ipv4_option(const uint8_t *ipcp, uint16_t ipcplen, uint8_t option_type, uint8_t ip_out[4]) {
-  if (ipcplen < 4u) return -1;
-  const uint8_t *opts = ipcp + 4u;
-  size_t rem = (size_t)ipcplen - 4u;
-  size_t i = 0;
-  while (i + 2u <= rem) {
-    uint8_t t = opts[i];
-    uint8_t ol = opts[i + 1u];
-    if (ol < 2u || i + (size_t)ol > rem) break;
-    if (t == option_type && ol >= 6u) {
-      memcpy(ip_out, opts + i + 2u, 4);
-      return 0;
-    }
-    i += (size_t)ol;
-  }
-  return -1;
-}
-
-static int ipcp_build_cr(uint8_t *out, size_t cap, uint8_t id, const uint8_t ip[4], int include_address_control,
-                         int include_ip_opt, const uint8_t primary_dns[4], int include_primary_dns_opt,
-                         const uint8_t secondary_dns[4], int include_secondary_dns_opt) {
-  size_t o = 0;
-  if (include_address_control) {
-    if (cap < 8u) return -1;
-    out[o++] = 0xff;
-    out[o++] = 0x03;
-    util_write_be16(out + o, PROTO_IPCP);
-    o += 2u;
-  } else {
-    if (cap < 6u) return -1;
-    util_write_be16(out + o, PROTO_IPCP);
-    o += 2u;
-  }
-  size_t code_off = o;
-  out[o++] = 1;
-  out[o++] = id;
-  size_t len_mark = o;
-  o += 2u;
-  if (include_ip_opt) {
-    if (o + 6u > cap) return -1;
-    out[o++] = IPCP_OPT_IP_ADDRESS;
-    out[o++] = 6;
-    memcpy(out + o, ip, 4);
-    o += 4u;
-  }
-  if (include_primary_dns_opt) {
-    if (o + 6u > cap) return -1;
-    out[o++] = IPCP_OPT_PRIMARY_DNS;
-    out[o++] = 6;
-    memcpy(out + o, primary_dns, 4);
-    o += 4u;
-  }
-  if (include_secondary_dns_opt) {
-    if (o + 6u > cap) return -1;
-    out[o++] = IPCP_OPT_SECONDARY_DNS;
-    out[o++] = 6;
-    memcpy(out + o, secondary_dns, 4);
-    o += 4u;
-  }
-  util_write_be16(out + len_mark, (uint16_t)(o - code_off));
-  return (int)o;
-}
-
 static int test_cr_contains_ip3(void) {
   uint8_t buf[32];
   uint8_t ip[4] = {192, 168, 1, 10};
   uint8_t primary_dns[4] = {1, 1, 1, 1};
   uint8_t secondary_dns[4] = {8, 8, 8, 8};
-  int n = ipcp_build_cr(buf, sizeof(buf), 1, ip, 1, 1, primary_dns, 1, secondary_dns, 1);
+  int n = ppp_ipcp_build_cr(buf, sizeof(buf), 1, ip, 1, 1, primary_dns, 1, secondary_dns, 1);
   if (n < 14) return 1;
   if (buf[0] != 0xff || buf[1] != 0x03) return 2;
-  if (util_read_be16(buf + 2) != PROTO_IPCP) return 3;
+  if (util_read_be16(buf + 2) != PPP_WIRE_PROTO_IPCP) return 3;
   if (buf[4] != 1 || buf[5] != 1) return 4;
   uint16_t l = util_read_be16(buf + 6);
   if (l != (uint16_t)(n - 4)) return 5;
@@ -98,12 +31,12 @@ static int test_small_cap_rejects_ip_option(void) {
   uint8_t ip[4] = {10, 20, 30, 40};
   uint8_t dns[4] = {1, 1, 1, 1};
 
-  if (ipcp_build_cr(buf, 25u, 1, ip, 1, 1, dns, 1, dns, 1) != -1) return 1;
-  if (ipcp_build_cr(buf, 23u, 1, ip, 0, 1, dns, 1, dns, 1) != -1) return 2;
-  if (ipcp_build_cr(buf, 7u, 1, ip, 1, 0, dns, 0, dns, 0) != -1) return 3;
-  if (ipcp_build_cr(buf, 5u, 1, ip, 0, 0, dns, 0, dns, 0) != -1) return 4;
-  if (ipcp_build_cr(buf, 26u, 1, ip, 1, 1, dns, 1, dns, 1) <= 0) return 5;
-  if (ipcp_build_cr(buf, 24u, 1, ip, 0, 1, dns, 1, dns, 1) <= 0) return 6;
+  if (ppp_ipcp_build_cr(buf, 25u, 1, ip, 1, 1, dns, 1, dns, 1) != -1) return 1;
+  if (ppp_ipcp_build_cr(buf, 23u, 1, ip, 0, 1, dns, 1, dns, 1) != -1) return 2;
+  if (ppp_ipcp_build_cr(buf, 7u, 1, ip, 1, 0, dns, 0, dns, 0) != -1) return 3;
+  if (ppp_ipcp_build_cr(buf, 5u, 1, ip, 0, 0, dns, 0, dns, 0) != -1) return 4;
+  if (ppp_ipcp_build_cr(buf, 26u, 1, ip, 1, 1, dns, 1, dns, 1) <= 0) return 5;
+  if (ppp_ipcp_build_cr(buf, 24u, 1, ip, 0, 1, dns, 1, dns, 1) <= 0) return 6;
 
   return 0;
 }
@@ -113,7 +46,7 @@ static int test_nak_updates_req_ip(void) {
       0x03, 0x01, 0x00, 0x0a, 0x03, 0x06, 10, 20, 30, 40,
   };
   uint8_t req[4] = {0, 0, 0, 0};
-  if (ipcp_opts_first_ipv4_option(nak, sizeof(nak), IPCP_OPT_IP_ADDRESS, req) != 0) return 1;
+  if (ppp_ipcp_opts_first_ipv4_option(nak, sizeof(nak), IPCP_OPT_IP_ADDRESS, req) != 0) return 1;
   if (req[0] != 10 || req[1] != 20 || req[2] != 30 || req[3] != 40) return 2;
   return 0;
 }
@@ -124,8 +57,8 @@ static int test_nak_updates_dns(void) {
   };
   uint8_t primary_dns[4] = {0, 0, 0, 0};
   uint8_t secondary_dns[4] = {0, 0, 0, 0};
-  if (ipcp_opts_first_ipv4_option(nak, sizeof(nak), IPCP_OPT_PRIMARY_DNS, primary_dns) != 0) return 1;
-  if (ipcp_opts_first_ipv4_option(nak, sizeof(nak), IPCP_OPT_SECONDARY_DNS, secondary_dns) != 0) return 2;
+  if (ppp_ipcp_opts_first_ipv4_option(nak, sizeof(nak), IPCP_OPT_PRIMARY_DNS, primary_dns) != 0) return 1;
+  if (ppp_ipcp_opts_first_ipv4_option(nak, sizeof(nak), IPCP_OPT_SECONDARY_DNS, secondary_dns) != 0) return 2;
   if (memcmp(primary_dns, (const uint8_t[]){1, 1, 1, 1}, 4) != 0) return 3;
   if (memcmp(secondary_dns, (const uint8_t[]){8, 8, 8, 8}, 4) != 0) return 4;
   return 0;
@@ -140,7 +73,7 @@ static int test_peer_cr_to_ack_flips_code(void) {
   if (total > sizeof(in)) return 1;
   uint8_t ackbuf[32];
   memcpy(ackbuf, in, total);
-  if (util_read_be16(ackbuf + prefix) != PROTO_IPCP) return 2;
+  if (util_read_be16(ackbuf + prefix) != PPP_WIRE_PROTO_IPCP) return 2;
   ackbuf[prefix + 2u] = 2;
   if (ackbuf[prefix + 2u] != 2) return 3;
   if (ackbuf[prefix + 3u] != 7) return 4;

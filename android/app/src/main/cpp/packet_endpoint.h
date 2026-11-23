@@ -63,6 +63,7 @@ void packet_endpoint_init_tun(packet_endpoint_t *endpoint, tun_packet_endpoint_c
 void packet_endpoint_init_proxy_placeholder(packet_endpoint_t *endpoint);
 /** Initialize @p ctx and wire endpoint to proxy queues; caller zeroes ctx first. */
 int packet_endpoint_init_proxy_queue(packet_endpoint_t *endpoint, proxy_packet_queue_ctx_t *ctx);
+void packet_endpoint_close_proxy_queue(proxy_packet_queue_ctx_t *ctx);
 void packet_endpoint_destroy_proxy_queue(proxy_packet_queue_ctx_t *ctx);
 /** Kotlin/app -> tunnel direction. May drop when over high-water. Returns 0 or -1. */
 int packet_endpoint_proxy_enqueue_outbound(proxy_packet_queue_ctx_t *ctx, const uint8_t *buf, size_t len);

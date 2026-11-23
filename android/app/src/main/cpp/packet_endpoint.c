@@ -7,8 +7,11 @@
 #include <fcntl.h>
 #ifdef _WIN32
 #include <io.h>
+#else
+#include <poll.h>
 #endif
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -17,6 +20,8 @@
 #define PROXY_PACKET_MAX_LEN 65535
 #define PROXY_OUTBOUND_PACKET_CAPACITY 1024u
 #define PROXY_OUTBOUND_BYTE_CAPACITY (2u * 1024u * 1024u)
+#define PROXY_INBOUND_PACKET_CAPACITY 1024u
+#define PROXY_INBOUND_BYTE_CAPACITY (2u * 1024u * 1024u)
 
 typedef struct packet_node {
   struct packet_node *next;
@@ -101,9 +106,15 @@ static int proxy_queue_signal(proxy_packet_queue_ctx_t *ctx) {
 }
 
 static void proxy_queue_consume_signal(proxy_packet_queue_ctx_t *ctx) {
+#ifdef _WIN32
   uint8_t b;
   ssize_t n = read(ctx->notify_pipe[0], &b, sizeof(b));
   (void)n;
+#else
+  uint8_t drain[64];
+  while (read(ctx->notify_pipe[0], drain, sizeof(drain)) > 0) {
+  }
+#endif
 }
 
 static ssize_t tun_packet_read(void *ctx, uint8_t *buf, size_t len) {
@@ -164,6 +175,7 @@ static ssize_t proxy_queue_read(void *ctx, uint8_t *buf, size_t len) {
   packet_node_t **outbound_head = (packet_node_t **)&queue->outbound_head;
   packet_node_t **outbound_tail = (packet_node_t **)&queue->outbound_tail;
   packet_node_t *node = packet_queue_pop(outbound_head, outbound_tail);
+  proxy_queue_consume_signal(queue);
   if (node == NULL) {
     pthread_mutex_unlock(&queue->mutex);
     errno = EAGAIN;
@@ -171,7 +183,6 @@ static ssize_t proxy_queue_read(void *ctx, uint8_t *buf, size_t len) {
   }
   queue->outbound_count--;
   queue->outbound_bytes -= node->len;
-  proxy_queue_consume_signal(queue);
   const size_t original_len = node->len;
   const size_t copy_len = node->len > len ? len : node->len;
   memcpy(buf, node->data, copy_len);
@@ -201,6 +212,14 @@ static int proxy_queue_write(void *ctx, const uint8_t *buf, size_t len) {
     pthread_mutex_unlock(&queue->mutex);
     free(node);
     errno = ECANCELED;
+    return -1;
+  }
+  if (queue->inbound_count >= PROXY_INBOUND_PACKET_CAPACITY ||
+      queue->inbound_bytes + len > PROXY_INBOUND_BYTE_CAPACITY) {
+    queue->inbound_drops++;
+    pthread_mutex_unlock(&queue->mutex);
+    free(node);
+    errno = ENOBUFS;
     return -1;
   }
   packet_queue_push((packet_node_t **)&queue->inbound_head, (packet_node_t **)&queue->inbound_tail, node);
@@ -313,6 +332,15 @@ int packet_endpoint_init_proxy_queue(packet_endpoint_t *endpoint, proxy_packet_q
   return 0;
 }
 
+void packet_endpoint_close_proxy_queue(proxy_packet_queue_ctx_t *ctx) {
+  if (ctx == NULL)
+    return;
+  pthread_mutex_lock(&ctx->mutex);
+  ctx->closing = 1;
+  pthread_cond_broadcast(&ctx->inbound_cond);
+  pthread_mutex_unlock(&ctx->mutex);
+}
+
 void packet_endpoint_destroy_proxy_queue(proxy_packet_queue_ctx_t *ctx) {
   if (ctx == NULL)
     return;
@@ -371,7 +399,7 @@ int packet_endpoint_proxy_enqueue_outbound(proxy_packet_queue_ctx_t *ctx, const 
   ctx->outbound_bytes += len;
   if (ctx->outbound_count > ctx->outbound_high_water)
     ctx->outbound_high_water = ctx->outbound_count;
-  const int rc = proxy_queue_signal(ctx);
+  const int rc = (ctx->outbound_count == 1u) ? proxy_queue_signal(ctx) : 0;
   pthread_mutex_unlock(&ctx->mutex);
   if (rc != 0)
     return -1;
@@ -429,4 +457,59 @@ ssize_t packet_endpoint_proxy_dequeue_inbound_wait(proxy_packet_queue_ctx_t *ctx
     return -1;
   }
   return (ssize_t)copy_len;
+}
+
+int packet_endpoint_run_audit_check(int item_id, char *err_buf, size_t err_cap) {
+  if (item_id != 5) {
+    snprintf(err_buf, err_cap, "unsupported packet_endpoint audit item=%d", item_id);
+    return -1;
+  }
+  packet_endpoint_t ep;
+  proxy_packet_queue_ctx_t ctx;
+  if (packet_endpoint_init_proxy_queue(&ep, &ctx) != 0) {
+    snprintf(err_buf, err_cap, "init_proxy_queue failed errno=%d", errno);
+    return -1;
+  }
+  const uint8_t pkt[] = {1, 2, 3, 4};
+  if (packet_endpoint_proxy_enqueue_outbound(&ctx, pkt, sizeof(pkt)) != 0 ||
+      packet_endpoint_proxy_enqueue_outbound(&ctx, pkt, sizeof(pkt)) != 0) {
+    packet_endpoint_destroy_proxy_queue(&ctx);
+    snprintf(err_buf, err_cap, "enqueue_outbound failed");
+    return -1;
+  }
+  uint8_t out[16];
+  if (packet_endpoint_read(&ep, out, sizeof(out)) != (ssize_t)sizeof(pkt) ||
+      packet_endpoint_read(&ep, out, sizeof(out)) != (ssize_t)sizeof(pkt)) {
+    packet_endpoint_destroy_proxy_queue(&ctx);
+    snprintf(err_buf, err_cap, "packet_endpoint_read failed");
+    return -1;
+  }
+#ifndef _WIN32
+  struct pollfd pfd = {.fd = packet_endpoint_poll_fd(&ep), .events = POLLIN};
+  int pr = poll(&pfd, 1, 0);
+  if (pr != 0) {
+    packet_endpoint_destroy_proxy_queue(&ctx);
+    snprintf(err_buf, err_cap, "notify_pipe still readable after draining both packets (poll=%d revents=0x%x)", pr,
+             (unsigned)pfd.revents);
+    return -1;
+  }
+#endif
+  for (size_t i = 0; i < 1024u; i++) {
+    if (packet_endpoint_proxy_enqueue_inbound(&ctx, pkt, sizeof(pkt)) != 0) {
+      packet_endpoint_destroy_proxy_queue(&ctx);
+      snprintf(err_buf, err_cap, "inbound enqueue failed early at i=%zu errno=%d", i, errno);
+      return -1;
+    }
+  }
+  errno = 0;
+  int rc1025 = packet_endpoint_proxy_enqueue_inbound(&ctx, pkt, sizeof(pkt));
+  int err1025 = errno;
+  size_t drops = ctx.inbound_drops;
+  packet_endpoint_destroy_proxy_queue(&ctx);
+  if (rc1025 != -1 || err1025 != ENOBUFS || drops != 1u) {
+    snprintf(err_buf, err_cap, "1025th inbound enqueue rc=%d errno=%d drops=%zu (expected -1, ENOBUFS=%d, drops=1)",
+             rc1025, err1025, drops, ENOBUFS);
+    return -1;
+  }
+  return 0;
 }

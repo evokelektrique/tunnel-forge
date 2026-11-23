@@ -1,6 +1,9 @@
 #include "packet_endpoint.h"
 
 #include <errno.h>
+#ifndef _WIN32
+#include <poll.h>
+#endif
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,6 +13,8 @@
 
 #define EXPECT_OUTBOUND_PACKET_CAPACITY 1024u
 #define EXPECT_OUTBOUND_BYTE_CAPACITY (2u * 1024u * 1024u)
+#define EXPECT_INBOUND_PACKET_CAPACITY 1024u
+#define EXPECT_INBOUND_BYTE_CAPACITY (2u * 1024u * 1024u)
 #define MAX_PACKET_LEN 65535u
 
 typedef struct {
@@ -163,6 +168,77 @@ static int test_destroy_wakes_waiting_inbound_dequeue(void) {
   return 0;
 }
 
+static int test_notify_pipe_multi_enqueue_drains_all(void) {
+  packet_endpoint_t endpoint;
+  proxy_packet_queue_ctx_t ctx;
+  if (init_queue(&endpoint, &ctx) != 0) return 1;
+
+  const uint8_t p1[] = {1, 2};
+  const uint8_t p2[] = {3, 4, 5};
+  const uint8_t p3[] = {6};
+  if (packet_endpoint_proxy_enqueue_outbound(&ctx, p1, sizeof(p1)) != 0) return 2;
+  if (packet_endpoint_proxy_enqueue_outbound(&ctx, p2, sizeof(p2)) != 0) return 3;
+  if (packet_endpoint_proxy_enqueue_outbound(&ctx, p3, sizeof(p3)) != 0) return 4;
+
+  uint8_t out[8] = {0};
+  if (packet_endpoint_read(&endpoint, out, sizeof(out)) != (ssize_t)sizeof(p1) || memcmp(out, p1, sizeof(p1)) != 0) {
+    return 5;
+  }
+  if (packet_endpoint_read(&endpoint, out, sizeof(out)) != (ssize_t)sizeof(p2) || memcmp(out, p2, sizeof(p2)) != 0) {
+    return 6;
+  }
+  if (packet_endpoint_read(&endpoint, out, sizeof(out)) != (ssize_t)sizeof(p3) || memcmp(out, p3, sizeof(p3)) != 0) {
+    return 7;
+  }
+  if (ctx.outbound_count != 0u || ctx.outbound_bytes != 0u) return 8;
+#ifndef _WIN32
+  if (packet_endpoint_read(&endpoint, out, sizeof(out)) != -1 || errno != EAGAIN) return 9;
+  struct pollfd pfd = {.fd = packet_endpoint_poll_fd(&endpoint), .events = POLLIN, .revents = 0};
+  if (poll(&pfd, 1, 0) != 0) return 10;
+#endif
+  packet_endpoint_destroy_proxy_queue(&ctx);
+  return 0;
+}
+
+static int test_inbound_count_cap_returns_enobufs(void) {
+  packet_endpoint_t endpoint;
+  proxy_packet_queue_ctx_t ctx;
+  if (init_queue(&endpoint, &ctx) != 0) return 1;
+
+  const uint8_t packet[] = {0x42};
+  for (size_t i = 0; i < EXPECT_INBOUND_PACKET_CAPACITY; i++) {
+    if (packet_endpoint_write(&endpoint, packet, sizeof(packet)) != 0) return 2;
+  }
+  if (packet_endpoint_write(&endpoint, packet, sizeof(packet)) == 0) return 3;
+  if (errno != ENOBUFS) return 4;
+  if (ctx.inbound_drops != 1u || ctx.inbound_high_water != EXPECT_INBOUND_PACKET_CAPACITY) return 5;
+
+  packet_endpoint_destroy_proxy_queue(&ctx);
+  return 0;
+}
+
+static int test_inbound_byte_cap_returns_enobufs(void) {
+  packet_endpoint_t endpoint;
+  proxy_packet_queue_ctx_t ctx;
+  if (init_queue(&endpoint, &ctx) != 0) return 1;
+
+  uint8_t *packet = (uint8_t *)malloc(MAX_PACKET_LEN);
+  if (packet == NULL) return 2;
+  memset(packet, 0x3c, MAX_PACKET_LEN);
+
+  const size_t allowed_packets = EXPECT_INBOUND_BYTE_CAPACITY / MAX_PACKET_LEN;
+  for (size_t i = 0; i < allowed_packets; i++) {
+    if (packet_endpoint_write(&endpoint, packet, MAX_PACKET_LEN) != 0) return 3;
+  }
+  if (ctx.inbound_bytes != allowed_packets * MAX_PACKET_LEN) return 4;
+  if (packet_endpoint_write(&endpoint, packet, MAX_PACKET_LEN) == 0) return 5;
+  if (errno != ENOBUFS || ctx.inbound_drops != 1u) return 6;
+
+  free(packet);
+  packet_endpoint_destroy_proxy_queue(&ctx);
+  return 0;
+}
+
 int main(void) {
   int rc = test_fifo_and_byte_counters();
   if (rc != 0) {
@@ -192,6 +268,21 @@ int main(void) {
   rc = test_destroy_wakes_waiting_inbound_dequeue();
   if (rc != 0) {
     fprintf(stderr, "test_destroy_wakes_waiting_inbound_dequeue failed: %d\n", rc);
+    return rc;
+  }
+  rc = test_notify_pipe_multi_enqueue_drains_all();
+  if (rc != 0) {
+    fprintf(stderr, "test_notify_pipe_multi_enqueue_drains_all failed: %d\n", rc);
+    return rc;
+  }
+  rc = test_inbound_count_cap_returns_enobufs();
+  if (rc != 0) {
+    fprintf(stderr, "test_inbound_count_cap_returns_enobufs failed: %d\n", rc);
+    return rc;
+  }
+  rc = test_inbound_byte_cap_returns_enobufs();
+  if (rc != 0) {
+    fprintf(stderr, "test_inbound_byte_cap_returns_enobufs failed: %d\n", rc);
     return rc;
   }
   puts("test_packet_endpoint: ok");

@@ -49,6 +49,8 @@ static void test_esp_round_trip(uint8_t cipher, size_t key_len) {
   assert(plaintext_len == sizeof(payload) && memcmp(plaintext, payload, plaintext_len) == 0);
   plaintext_len = sizeof(plaintext);
   assert(esp_try_decrypt(&receiver, datagram, (size_t)sent, plaintext, &plaintext_len) == -1);
+  esp_keys_cleanup(&sender);
+  esp_keys_cleanup(&receiver);
 }
 
 int main(void) {

@@ -29,8 +29,10 @@
 #include <unistd.h>
 
 #define LOG_TAG "tunnel_engine"
+#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
 static unsigned s_ike_keymap_log_once;
 static unsigned s_ike_keymat_variants_log_once;
+#endif
 
 #ifndef TUNNEL_FORGE_KEYMAT_VARIANT
 #define TUNNEL_FORGE_KEYMAT_VARIANT 1
@@ -353,9 +355,9 @@ static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len
 }
 
 static int isakmp_3des_decrypt(const uint8_t key24[24], const uint8_t iv_in[8], const uint8_t *ct, size_t ct_len,
-                               uint8_t *plain, size_t *plain_len, uint8_t iv_out[8]);
+                               uint8_t *plain, size_t plain_cap, size_t *plain_len, uint8_t iv_out[8]);
 static int isakmp_aes128_decrypt(const uint8_t key16[16], const uint8_t iv_in[16], const uint8_t *ct, size_t ct_len,
-                                 uint8_t *plain, size_t *plain_len, uint8_t iv_out[16]);
+                                 uint8_t *plain, size_t plain_cap, size_t *plain_len, uint8_t iv_out[16]);
 
 /** Send Quick Mode msg3 on the NAT-T socket (optional 4-byte RFC 3948 prefix). */
 static int ike_send_qm3_payload(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *pkt,
@@ -403,10 +405,10 @@ static int ike_is_duplicate_qm2_retransmit(int p1_aes, const uint8_t *aeskey, co
   size_t dec_len = 0;
   uint8_t iv_out[16];
   if (p1_aes) {
-    if (isakmp_aes128_decrypt(aeskey, qm1_tail, in + 28, enc_len, dec, &dec_len, iv_out) != 0)
+    if (isakmp_aes128_decrypt(aeskey, qm1_tail, in + 28, enc_len, dec, sizeof(dec), &dec_len, iv_out) != 0)
       return 0;
   } else {
-    if (isakmp_3des_decrypt(deskey, qm1_tail, in + 28, enc_len, dec, &dec_len, iv_out) != 0)
+    if (isakmp_3des_decrypt(deskey, qm1_tail, in + 28, enc_len, dec, sizeof(dec), &dec_len, iv_out) != 0)
       return 0;
   }
   size_t walk = 0;
@@ -662,7 +664,9 @@ static int isakmp_3des_encrypt(const uint8_t key24[24], uint8_t iv_io[8], const 
 }
 
 static int isakmp_3des_decrypt(const uint8_t key24[24], const uint8_t iv_in[8], const uint8_t *ct, size_t ct_len,
-                               uint8_t *plain, size_t *plain_len, uint8_t iv_out[8]) {
+                               uint8_t *plain, size_t plain_cap, size_t *plain_len, uint8_t iv_out[8]) {
+  if (ct == NULL || plain == NULL || plain_len == NULL || ct_len == 0u || ct_len > plain_cap || (ct_len % 8u) != 0u)
+    return -1;
   uint8_t iv[8];
   memcpy(iv, iv_in, 8);
   mbedtls_cipher_context_t ciph;
@@ -752,7 +756,7 @@ static int info_has_invalid_hash_notify(const uint8_t *pkt, int pkt_len, int p1_
     } else {
       qm_first_iv_aes(msg5_last_block, mid, iv);
     }
-    dec_ok = (isakmp_aes128_decrypt(aeskey16, iv, pkt + 28, enc_len, plain, &plain_len, iv_out) == 0);
+    dec_ok = (isakmp_aes128_decrypt(aeskey16, iv, pkt + 28, enc_len, plain, sizeof(plain), &plain_len, iv_out) == 0);
   } else {
     uint8_t iv8[8];
     if (mid == 0) {
@@ -760,7 +764,7 @@ static int info_has_invalid_hash_notify(const uint8_t *pkt, int pkt_len, int p1_
     } else {
       qm_first_iv_sha1(msg5_last_block, mid, iv8);
     }
-    dec_ok = (isakmp_3des_decrypt(deskey24, iv8, pkt + 28, enc_len, plain, &plain_len, iv_out) == 0);
+    dec_ok = (isakmp_3des_decrypt(deskey24, iv8, pkt + 28, enc_len, plain, sizeof(plain), &plain_len, iv_out) == 0);
   }
   if (!dec_ok)
     return -1;
@@ -818,7 +822,9 @@ static int isakmp_aes128_encrypt(const uint8_t key16[16], uint8_t iv_io[16], con
 }
 
 static int isakmp_aes128_decrypt(const uint8_t key16[16], const uint8_t iv_in[16], const uint8_t *ct, size_t ct_len,
-                                 uint8_t *plain, size_t *plain_len, uint8_t iv_out[16]) {
+                                 uint8_t *plain, size_t plain_cap, size_t *plain_len, uint8_t iv_out[16]) {
+  if (ct == NULL || plain == NULL || plain_len == NULL || ct_len == 0u || ct_len > plain_cap || (ct_len % 16u) != 0u)
+    return -1;
   uint8_t iv[16];
   memcpy(iv, iv_in, 16);
   mbedtls_cipher_context_t ciph;
@@ -1225,6 +1231,206 @@ static int keymat_expand_ikev1(const uint8_t *skd, size_t skd_len, const uint8_t
     memcpy(out + off, block, take);
     off += take;
   }
+  return 0;
+}
+
+static int ike_install_esp_keymat(esp_keys_t *esp, const uint8_t *skeyid_d, size_t skeyid_d_len, uint32_t spi_i,
+                                  uint32_t spi_r, const uint8_t *ni_qm, size_t ni_qm_len, const uint8_t *nr_qm,
+                                  size_t nr_qm_len, uint8_t cipher, size_t esp_enc_key_len, const uint8_t ip_us[4],
+                                  const uint8_t ip_peer[4]) {
+  if (esp == NULL || skeyid_d == NULL || ni_qm == NULL || nr_qm == NULL || ni_qm_len > 64u || nr_qm_len > 64u ||
+      esp_enc_key_len > 24u)
+    return -1;
+  const size_t esp_keymat_len = esp_enc_key_len + 20u;
+  uint8_t keymat_a_i[44], keymat_a_r[44];
+  {
+    /* Variant A: per-SA, seed = proto|spi|Ni|Nr */
+    uint8_t seed_r[1 + 4 + 64 + 64], seed_i[1 + 4 + 64 + 64];
+    size_t sl_r = 0, sl_i = 0;
+    seed_r[sl_r++] = 3;
+    util_write_be32(seed_r + sl_r, spi_r);
+    sl_r += 4;
+    memcpy(seed_r + sl_r, ni_qm, ni_qm_len);
+    sl_r += ni_qm_len;
+    memcpy(seed_r + sl_r, nr_qm, nr_qm_len);
+    sl_r += nr_qm_len;
+    seed_i[sl_i++] = 3;
+    util_write_be32(seed_i + sl_i, spi_i);
+    sl_i += 4;
+    memcpy(seed_i + sl_i, ni_qm, ni_qm_len);
+    sl_i += ni_qm_len;
+    memcpy(seed_i + sl_i, nr_qm, nr_qm_len);
+    sl_i += nr_qm_len;
+    if (keymat_expand_ikev1(skeyid_d, skeyid_d_len, seed_r, sl_r, keymat_a_r, esp_keymat_len) != 0 ||
+        keymat_expand_ikev1(skeyid_d, skeyid_d_len, seed_i, sl_i, keymat_a_i, esp_keymat_len) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant A failed");
+      return -1;
+    }
+  }
+#if (defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT) || TUNNEL_FORGE_KEYMAT_VARIANT == 2
+  uint8_t keymat_b_i[44], keymat_b_r[44];
+  {
+    /* Variant B: one stream, seed = proto|spi_i|spi_r|Ni|Nr, split to i/r blocks */
+    uint8_t seed[1 + 4 + 4 + 64 + 64];
+    size_t sl = 0;
+    seed[sl++] = 3;
+    util_write_be32(seed + sl, spi_i);
+    sl += 4;
+    util_write_be32(seed + sl, spi_r);
+    sl += 4;
+    memcpy(seed + sl, ni_qm, ni_qm_len);
+    sl += ni_qm_len;
+    memcpy(seed + sl, nr_qm, nr_qm_len);
+    sl += nr_qm_len;
+    uint8_t stream[88];
+    if (keymat_expand_ikev1(skeyid_d, skeyid_d_len, seed, sl, stream, esp_keymat_len * 2u) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant B failed");
+      return -1;
+    }
+    memcpy(keymat_b_i, stream, esp_keymat_len);
+    memcpy(keymat_b_r, stream + esp_keymat_len, esp_keymat_len);
+    mbedtls_platform_zeroize(stream, sizeof(stream));
+  }
+#endif
+#if (defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT) || TUNNEL_FORGE_KEYMAT_VARIANT == 3
+  uint8_t keymat_c_i[44], keymat_c_r[44];
+  {
+    /* Variant C: one stream, seed = proto|spi_i|spi_r|Nr|Ni, split to i/r blocks */
+    uint8_t seed[1 + 4 + 4 + 64 + 64];
+    size_t sl = 0;
+    seed[sl++] = 3;
+    util_write_be32(seed + sl, spi_i);
+    sl += 4;
+    util_write_be32(seed + sl, spi_r);
+    sl += 4;
+    memcpy(seed + sl, nr_qm, nr_qm_len);
+    sl += nr_qm_len;
+    memcpy(seed + sl, ni_qm, ni_qm_len);
+    sl += ni_qm_len;
+    uint8_t stream[88];
+    if (keymat_expand_ikev1(skeyid_d, skeyid_d_len, seed, sl, stream, esp_keymat_len * 2u) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant C failed");
+      return -1;
+    }
+    memcpy(keymat_c_i, stream, esp_keymat_len);
+    memcpy(keymat_c_r, stream + esp_keymat_len, esp_keymat_len);
+    mbedtls_platform_zeroize(stream, sizeof(stream));
+  }
+#endif
+
+  const uint8_t *keymat_i = keymat_a_i;
+  const uint8_t *keymat_r = keymat_a_r;
+  enum { KEYMAT_VARIANT_A = 1, KEYMAT_VARIANT_B = 2, KEYMAT_VARIANT_C = 3 };
+  const int active_keymat_variant = TUNNEL_FORGE_KEYMAT_VARIANT;
+#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
+  const char *keymat_variant = "A";
+#endif
+#if (defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT) || TUNNEL_FORGE_KEYMAT_VARIANT == 2
+  if (active_keymat_variant == KEYMAT_VARIANT_B) {
+    keymat_i = keymat_b_i;
+    keymat_r = keymat_b_r;
+#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
+    keymat_variant = "B";
+#endif
+  }
+#endif
+#if (defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT) || TUNNEL_FORGE_KEYMAT_VARIANT == 3
+  if (active_keymat_variant == KEYMAT_VARIANT_C) {
+    keymat_i = keymat_c_i;
+    keymat_r = keymat_c_r;
+#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
+    keymat_variant = "C";
+#endif
+  }
+#endif
+  (void)active_keymat_variant;
+
+  /* Libreswan transport-mode SA directions are opposite of local "initiator/responder" labels:
+   * client outbound must use the peer's inbound SPI/material from QM2. */
+  esp->spi_i = spi_r;
+  esp->spi_r = spi_i;
+  esp->enc_key_len = esp_enc_key_len;
+  esp->auth_key_len = 20;
+  esp->cipher = cipher;
+  memcpy(esp->ip_src, ip_us, 4);
+  memcpy(esp->ip_dst, ip_peer, 4);
+  memcpy(esp->enc_key, keymat_r, esp_enc_key_len);
+  memcpy(esp->auth_key, keymat_r + esp_enc_key_len, 20);
+  memcpy(esp->enc_key + esp_enc_key_len, keymat_i, esp_enc_key_len);
+  memcpy(esp->auth_key + 20, keymat_i + esp_enc_key_len, 20);
+  esp->seq_i = 1;
+  esp->replay_bitmap = 0;
+  esp->replay_top = 0;
+  esp->outbound_profile = 0;
+
+#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
+  if (s_ike_keymat_variants_log_once == 0) {
+    s_ike_keymat_variants_log_once = 1;
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                      "IKE keymat probe: build=kmat-v3 macro=%d active=%s spi_i=%08x spi_r=%08x", active_keymat_variant,
+                      keymat_variant, (unsigned)spi_i, (unsigned)spi_r);
+    tunnel_engine_log(
+        ANDROID_LOG_DEBUG, LOG_TAG,
+        "IKE keymat A cipher=%u: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
+        (unsigned)cipher, keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3], keymat_a_r[esp_enc_key_len],
+        keymat_a_r[esp_enc_key_len + 1], keymat_a_r[esp_enc_key_len + 2], keymat_a_r[esp_enc_key_len + 3],
+        keymat_a_i[0], keymat_a_i[1], keymat_a_i[2], keymat_a_i[3], keymat_a_i[esp_enc_key_len],
+        keymat_a_i[esp_enc_key_len + 1], keymat_a_i[esp_enc_key_len + 2], keymat_a_i[esp_enc_key_len + 3]);
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat A K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
+                      keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3], keymat_a_r[esp_enc_key_len],
+                      keymat_a_r[esp_enc_key_len + 1], keymat_a_r[esp_enc_key_len + 2],
+                      keymat_a_r[esp_enc_key_len + 3]);
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                      "IKE keymat B: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
+                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[esp_enc_key_len],
+                      keymat_b_r[esp_enc_key_len + 1], keymat_b_r[esp_enc_key_len + 2], keymat_b_r[esp_enc_key_len + 3],
+                      keymat_b_i[0], keymat_b_i[1], keymat_b_i[2], keymat_b_i[3], keymat_b_i[esp_enc_key_len],
+                      keymat_b_i[esp_enc_key_len + 1], keymat_b_i[esp_enc_key_len + 2],
+                      keymat_b_i[esp_enc_key_len + 3]);
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat B K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
+                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[esp_enc_key_len],
+                      keymat_b_r[esp_enc_key_len + 1], keymat_b_r[esp_enc_key_len + 2],
+                      keymat_b_r[esp_enc_key_len + 3]);
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                      "IKE keymat C: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
+                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[esp_enc_key_len],
+                      keymat_c_r[esp_enc_key_len + 1], keymat_c_r[esp_enc_key_len + 2], keymat_c_r[esp_enc_key_len + 3],
+                      keymat_c_i[0], keymat_c_i[1], keymat_c_i[2], keymat_c_i[3], keymat_c_i[esp_enc_key_len],
+                      keymat_c_i[esp_enc_key_len + 1], keymat_c_i[esp_enc_key_len + 2],
+                      keymat_c_i[esp_enc_key_len + 3]);
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat C K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
+                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[esp_enc_key_len],
+                      keymat_c_r[esp_enc_key_len + 1], keymat_c_r[esp_enc_key_len + 2],
+                      keymat_c_r[esp_enc_key_len + 3]);
+  }
+  tunnel_engine_log(
+      ANDROID_LOG_DEBUG, LOG_TAG,
+      "DEBUG_ESP_KEYMAT: spi_i=%08x spi_r=%08x variant=%s - compare keymat_* to gateway `ip xfrm state` (enc+auth)",
+      (unsigned)spi_i, (unsigned)spi_r, keymat_variant);
+  ike_hex_dump("keymat_i out(enc|auth)", keymat_i, esp_keymat_len, esp_keymat_len);
+  ike_hex_dump("keymat_r in(enc|auth)", keymat_r, esp_keymat_len, esp_keymat_len);
+  if (s_ike_keymap_log_once == 0) {
+    s_ike_keymap_log_once = 1;
+    tunnel_engine_log(
+        ANDROID_LOG_DEBUG, LOG_TAG,
+        "IKE keymap one-shot: cipher=%u client_out_spi=%08x client_in_spi=%08x out_enc=%02x%02x%02x%02x "
+        "out_auth=%02x%02x%02x%02x in_enc=%02x%02x%02x%02x in_auth=%02x%02x%02x%02x",
+        (unsigned)esp->cipher, (unsigned)esp->spi_i, (unsigned)esp->spi_r, esp->enc_key[0], esp->enc_key[1],
+        esp->enc_key[2], esp->enc_key[3], esp->auth_key[0], esp->auth_key[1], esp->auth_key[2], esp->auth_key[3],
+        esp->enc_key[esp->enc_key_len], esp->enc_key[esp->enc_key_len + 1], esp->enc_key[esp->enc_key_len + 2],
+        esp->enc_key[esp->enc_key_len + 3], esp->auth_key[20], esp->auth_key[21], esp->auth_key[22], esp->auth_key[23]);
+  }
+#endif
+  mbedtls_platform_zeroize(keymat_a_i, sizeof(keymat_a_i));
+  mbedtls_platform_zeroize(keymat_a_r, sizeof(keymat_a_r));
+#if (defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT) || TUNNEL_FORGE_KEYMAT_VARIANT == 2
+  mbedtls_platform_zeroize(keymat_b_i, sizeof(keymat_b_i));
+  mbedtls_platform_zeroize(keymat_b_r, sizeof(keymat_b_r));
+#endif
+#if (defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT) || TUNNEL_FORGE_KEYMAT_VARIANT == 3
+  mbedtls_platform_zeroize(keymat_c_i, sizeof(keymat_c_i));
+  mbedtls_platform_zeroize(keymat_c_r, sizeof(keymat_c_r));
+#endif
   return 0;
 }
 
@@ -1888,13 +2094,13 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     const uint8_t *iv6_in = msg5_iv_out;
     uint8_t iv6_out[16];
     if (ike->p1_aes) {
-      if (isakmp_aes128_decrypt(aeskey, iv6_in, in + 28, enc6_len, dec6, &dec6_len, iv6_out) != 0) {
+      if (isakmp_aes128_decrypt(aeskey, iv6_in, in + 28, enc6_len, dec6, sizeof(dec6), &dec6_len, iv6_out) != 0) {
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM msg6: AES decrypt failed");
         goto fail_fd;
       }
       memcpy(p1_last_block, iv6_out, 16);
     } else {
-      if (isakmp_3des_decrypt(deskey, iv6_in, in + 28, enc6_len, dec6, &dec6_len, iv6_out) != 0) {
+      if (isakmp_3des_decrypt(deskey, iv6_in, in + 28, enc6_len, dec6, sizeof(dec6), &dec6_len, iv6_out) != 0) {
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM msg6: 3DES decrypt failed");
         goto fail_fd;
       }
@@ -2146,12 +2352,16 @@ qm2_received:
       uint8_t info_iv[16];
       if (ike->p1_aes) {
         qm_first_iv_aes(p1_last_block, info_mid, info_iv);
-        isakmp_aes128_decrypt(aeskey, info_iv, in + 28, info_enc_len, info_plain, &info_plain_len, info_iv_out);
+        if (isakmp_aes128_decrypt(aeskey, info_iv, in + 28, info_enc_len, info_plain, sizeof(info_plain),
+                                  &info_plain_len, info_iv_out) != 0)
+          goto fail_fd;
       } else {
         uint8_t iv8[8];
         qm_first_iv_sha1(p1_last_block, info_mid, iv8);
         memcpy(info_iv, iv8, 8);
-        isakmp_3des_decrypt(deskey, info_iv, in + 28, info_enc_len, info_plain, &info_plain_len, info_iv_out);
+        if (isakmp_3des_decrypt(deskey, info_iv, in + 28, info_enc_len, info_plain, sizeof(info_plain), &info_plain_len,
+                                info_iv_out) != 0)
+          goto fail_fd;
       }
       if (info_plain_len < 24 || in[16] != IKE_PT_HASH || util_read_be16(info_plain + 2) != 24)
         goto fail_fd;
@@ -2230,12 +2440,12 @@ qm2_received:
   size_t dec_len = 0;
   uint8_t qm2_iv_out[16];
   if (ike->p1_aes) {
-    if (isakmp_aes128_decrypt(aeskey, qm1_tail, in + 28, enc_len, dec_qm, &dec_len, qm2_iv_out) != 0) {
+    if (isakmp_aes128_decrypt(aeskey, qm1_tail, in + 28, enc_len, dec_qm, sizeof(dec_qm), &dec_len, qm2_iv_out) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode: AES decrypt msg2 failed (wrong P1 key/IV?)");
       goto fail_fd;
     }
   } else {
-    if (isakmp_3des_decrypt(deskey, qm1_tail, in + 28, enc_len, dec_qm, &dec_len, qm2_iv_out) != 0) {
+    if (isakmp_3des_decrypt(deskey, qm1_tail, in + 28, enc_len, dec_qm, sizeof(dec_qm), &dec_len, qm2_iv_out) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode: 3DES decrypt msg2 failed");
       goto fail_fd;
     }
@@ -2423,175 +2633,10 @@ qm2_received:
     goto fail_fd;
   }
 
-  /* KEYMAT interop matrix (A/B/C):
-   * A: per-SPI seeds (IKEv1-style expansion), B/C: single-stream split variants.
-   * AES needs 16+20 bytes per direction; 3DES needs 24+20 bytes. */
   const size_t esp_enc_key_len = qm_selection.enc_key_len;
-  const size_t esp_keymat_len = esp_enc_key_len + 20;
-  const size_t esp_keymat_total_len = esp_keymat_len * 2;
-  uint8_t keymat_a_i[44], keymat_a_r[44];
-  uint8_t keymat_b_i[44], keymat_b_r[44];
-  uint8_t keymat_c_i[44], keymat_c_r[44];
-  {
-    /* Variant A: per-SA, seed = proto|spi|Ni|Nr */
-    uint8_t seed_r[1 + 4 + 16 + 64], seed_i[1 + 4 + 16 + 64];
-    size_t sl_r = 0, sl_i = 0;
-    seed_r[sl_r++] = 3;
-    util_write_be32(seed_r + sl_r, spi_r);
-    sl_r += 4;
-    memcpy(seed_r + sl_r, ni_qm, sizeof(ni_qm));
-    sl_r += sizeof(ni_qm);
-    memcpy(seed_r + sl_r, nr_qm, nr_qm_len);
-    sl_r += nr_qm_len;
-    seed_i[sl_i++] = 3;
-    util_write_be32(seed_i + sl_i, spi_i);
-    sl_i += 4;
-    memcpy(seed_i + sl_i, ni_qm, sizeof(ni_qm));
-    sl_i += sizeof(ni_qm);
-    memcpy(seed_i + sl_i, nr_qm, nr_qm_len);
-    sl_i += nr_qm_len;
-    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed_r, sl_r, keymat_a_r, esp_keymat_len) != 0 ||
-        keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed_i, sl_i, keymat_a_i, esp_keymat_len) != 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant A failed");
-      goto fail_fd;
-    }
-  }
-  {
-    /* Variant B: one stream, seed = proto|spi_i|spi_r|Ni|Nr, split to i/r blocks */
-    uint8_t seed[1 + 4 + 4 + 16 + 64];
-    size_t sl = 0;
-    seed[sl++] = 3;
-    util_write_be32(seed + sl, spi_i);
-    sl += 4;
-    util_write_be32(seed + sl, spi_r);
-    sl += 4;
-    memcpy(seed + sl, ni_qm, sizeof(ni_qm));
-    sl += sizeof(ni_qm);
-    memcpy(seed + sl, nr_qm, nr_qm_len);
-    sl += nr_qm_len;
-    uint8_t stream[88];
-    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed, sl, stream, esp_keymat_total_len) != 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant B failed");
-      goto fail_fd;
-    }
-    memcpy(keymat_b_i, stream, esp_keymat_len);
-    memcpy(keymat_b_r, stream + esp_keymat_len, esp_keymat_len);
-  }
-  {
-    /* Variant C: one stream, seed = proto|spi_i|spi_r|Nr|Ni, split to i/r blocks */
-    uint8_t seed[1 + 4 + 4 + 16 + 64];
-    size_t sl = 0;
-    seed[sl++] = 3;
-    util_write_be32(seed + sl, spi_i);
-    sl += 4;
-    util_write_be32(seed + sl, spi_r);
-    sl += 4;
-    memcpy(seed + sl, nr_qm, nr_qm_len);
-    sl += nr_qm_len;
-    memcpy(seed + sl, ni_qm, sizeof(ni_qm));
-    sl += sizeof(ni_qm);
-    uint8_t stream[88];
-    if (keymat_expand_ikev1(skeyid_d, sizeof(skeyid_d), seed, sl, stream, esp_keymat_total_len) != 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: keymat expansion variant C failed");
-      goto fail_fd;
-    }
-    memcpy(keymat_c_i, stream, esp_keymat_len);
-    memcpy(keymat_c_r, stream + esp_keymat_len, esp_keymat_len);
-  }
-
-  const uint8_t *keymat_i = keymat_a_i;
-  const uint8_t *keymat_r = keymat_a_r;
-  const char *keymat_variant = "A";
-  enum { KEYMAT_VARIANT_A = 1, KEYMAT_VARIANT_B = 2, KEYMAT_VARIANT_C = 3 };
-  const int active_keymat_variant = TUNNEL_FORGE_KEYMAT_VARIANT;
-  if (active_keymat_variant == KEYMAT_VARIANT_B) {
-    keymat_i = keymat_b_i;
-    keymat_r = keymat_b_r;
-    keymat_variant = "B";
-  } else if (active_keymat_variant == KEYMAT_VARIANT_C) {
-    keymat_i = keymat_c_i;
-    keymat_r = keymat_c_r;
-    keymat_variant = "C";
-  }
-
-  /* Libreswan transport-mode SA directions are opposite of local "initiator/responder" labels:
-   * client outbound must use the peer's inbound SPI/material from QM2. */
-  esp->spi_i = spi_r;
-  esp->spi_r = spi_i;
-  esp->enc_key_len = esp_enc_key_len;
-  esp->auth_key_len = 20;
-  esp->cipher = qm_selection.cipher;
-  memcpy(esp->ip_src, ip_us, 4);
-  memcpy(esp->ip_dst, ip_peer, 4);
-  // Outbound (us->peer): use responder material (keymat_r / spi_r from QM2 parse).
-  memcpy(esp->enc_key, keymat_r, esp_enc_key_len);
-  memcpy(esp->auth_key, keymat_r + esp_enc_key_len, 20);
-  // Inbound (peer->us): use initiator material (keymat_i / spi_i we proposed).
-  memcpy(esp->enc_key + esp_enc_key_len, keymat_i, esp_enc_key_len);
-  memcpy(esp->auth_key + 20, keymat_i + esp_enc_key_len, 20);
-  esp->seq_i = 1;
-  esp->replay_bitmap = 0;
-  esp->replay_top = 0;
-  esp->outbound_profile = 0;
-  if (s_ike_keymat_variants_log_once == 0) {
-    s_ike_keymat_variants_log_once = 1;
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                      "IKE keymat probe: build=kmat-v3 macro=%d active=%s spi_i=%08x spi_r=%08x", active_keymat_variant,
-                      keymat_variant, (unsigned)spi_i, (unsigned)spi_r);
-    tunnel_engine_log(
-        ANDROID_LOG_DEBUG, LOG_TAG,
-        "IKE keymat A cipher=%u: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
-        (unsigned)qm_selection.cipher, keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3],
-        keymat_a_r[esp_enc_key_len], keymat_a_r[esp_enc_key_len + 1], keymat_a_r[esp_enc_key_len + 2],
-        keymat_a_r[esp_enc_key_len + 3], keymat_a_i[0], keymat_a_i[1], keymat_a_i[2], keymat_a_i[3],
-        keymat_a_i[esp_enc_key_len], keymat_a_i[esp_enc_key_len + 1], keymat_a_i[esp_enc_key_len + 2],
-        keymat_a_i[esp_enc_key_len + 3]);
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat A K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_a_r[0], keymat_a_r[1], keymat_a_r[2], keymat_a_r[3], keymat_a_r[esp_enc_key_len],
-                      keymat_a_r[esp_enc_key_len + 1], keymat_a_r[esp_enc_key_len + 2],
-                      keymat_a_r[esp_enc_key_len + 3]);
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                      "IKE keymat B: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[esp_enc_key_len],
-                      keymat_b_r[esp_enc_key_len + 1], keymat_b_r[esp_enc_key_len + 2], keymat_b_r[esp_enc_key_len + 3],
-                      keymat_b_i[0], keymat_b_i[1], keymat_b_i[2], keymat_b_i[3], keymat_b_i[esp_enc_key_len],
-                      keymat_b_i[esp_enc_key_len + 1], keymat_b_i[esp_enc_key_len + 2],
-                      keymat_b_i[esp_enc_key_len + 3]);
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat B K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_b_r[0], keymat_b_r[1], keymat_b_r[2], keymat_b_r[3], keymat_b_r[esp_enc_key_len],
-                      keymat_b_r[esp_enc_key_len + 1], keymat_b_r[esp_enc_key_len + 2],
-                      keymat_b_r[esp_enc_key_len + 3]);
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                      "IKE keymat C: out=%02x%02x%02x%02x/%02x%02x%02x%02x in=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[esp_enc_key_len],
-                      keymat_c_r[esp_enc_key_len + 1], keymat_c_r[esp_enc_key_len + 2], keymat_c_r[esp_enc_key_len + 3],
-                      keymat_c_i[0], keymat_c_i[1], keymat_c_i[2], keymat_c_i[3], keymat_c_i[esp_enc_key_len],
-                      keymat_c_i[esp_enc_key_len + 1], keymat_c_i[esp_enc_key_len + 2],
-                      keymat_c_i[esp_enc_key_len + 3]);
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE keymat C K1/K2 out=%02x%02x%02x%02x/%02x%02x%02x%02x",
-                      keymat_c_r[0], keymat_c_r[1], keymat_c_r[2], keymat_c_r[3], keymat_c_r[esp_enc_key_len],
-                      keymat_c_r[esp_enc_key_len + 1], keymat_c_r[esp_enc_key_len + 2],
-                      keymat_c_r[esp_enc_key_len + 3]);
-  }
-
-#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
-  tunnel_engine_log(
-      ANDROID_LOG_DEBUG, LOG_TAG,
-      "DEBUG_ESP_KEYMAT: spi_i=%08x spi_r=%08x variant=%s - compare keymat_* to gateway `ip xfrm state` (enc+auth)",
-      (unsigned)spi_i, (unsigned)spi_r, keymat_variant);
-  ike_hex_dump("keymat_i out(enc|auth)", keymat_i, esp_keymat_len, esp_keymat_len);
-  ike_hex_dump("keymat_r in(enc|auth)", keymat_r, esp_keymat_len, esp_keymat_len);
-#endif
-  if (s_ike_keymap_log_once == 0) {
-    s_ike_keymap_log_once = 1;
-    tunnel_engine_log(
-        ANDROID_LOG_DEBUG, LOG_TAG,
-        "IKE keymap one-shot: cipher=%u client_out_spi=%08x client_in_spi=%08x out_enc=%02x%02x%02x%02x "
-        "out_auth=%02x%02x%02x%02x in_enc=%02x%02x%02x%02x in_auth=%02x%02x%02x%02x",
-        (unsigned)esp->cipher, (unsigned)esp->spi_i, (unsigned)esp->spi_r, esp->enc_key[0], esp->enc_key[1],
-        esp->enc_key[2], esp->enc_key[3], esp->auth_key[0], esp->auth_key[1], esp->auth_key[2], esp->auth_key[3],
-        esp->enc_key[esp->enc_key_len], esp->enc_key[esp->enc_key_len + 1], esp->enc_key[esp->enc_key_len + 2],
-        esp->enc_key[esp->enc_key_len + 3], esp->auth_key[20], esp->auth_key[21], esp->auth_key[22], esp->auth_key[23]);
+  if (ike_install_esp_keymat(esp, skeyid_d, sizeof(skeyid_d), spi_i, spi_r, ni_qm, sizeof(ni_qm), nr_qm, nr_qm_len,
+                             qm_selection.cipher, esp_enc_key_len, ip_us, ip_peer) != 0) {
+    goto fail_fd;
   }
 
   memcpy(&ike->peer, &peer_active, peer_active_len);
@@ -2641,4 +2686,50 @@ int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_k
   }
   tunnel_log("ikev1_connect: IPsec+IKE path psk_len=%zu", strlen(psk));
   return ipsec_negotiate(server, psk, ike, esp);
+}
+
+int ikev1_run_audit_check(int item_id, char *err_buf, size_t err_cap) {
+  if (item_id == 1) {
+    uint8_t key[24] = {0x11};
+    uint8_t iv[16] = {0x22};
+    uint8_t ct[272] = {0};
+    uint8_t buf[1024];
+    size_t plain_len = 0;
+    uint8_t iv_out[16];
+    memset(buf, 0xA5, sizeof(buf));
+    int rc_aes = isakmp_aes128_decrypt(key, iv, ct, sizeof(ct), buf, 256u, &plain_len, iv_out);
+    if (rc_aes == 0 || buf[256] != 0xA5) {
+      snprintf(err_buf, err_cap, "AES decrypt accepted oversized ct_len=%zu > cap=256 (rc=%d canary=0x%02x)",
+               sizeof(ct), rc_aes, (unsigned)buf[256]);
+      return -1;
+    }
+    memset(buf, 0xA5, sizeof(buf));
+    int rc_3des = isakmp_3des_decrypt(key, iv, ct, 264u, buf, 256u, &plain_len, iv_out);
+    if (rc_3des == 0 || buf[256] != 0xA5) {
+      snprintf(err_buf, err_cap, "3DES decrypt accepted oversized ct_len=264 > cap=256 (rc=%d canary=0x%02x)", rc_3des,
+               (unsigned)buf[256]);
+      return -1;
+    }
+    return 0;
+  }
+  if (item_id == 3) {
+    esp_keys_t esp;
+    memset(&esp, 0, sizeof(esp));
+    uint8_t skd[20] = {1, 2, 3, 4};
+    uint8_t ni[16] = {5}, nr[16] = {6};
+    uint8_t ip_us[4] = {192, 0, 2, 1}, ip_peer[4] = {192, 0, 2, 2};
+    if (ike_install_esp_keymat(&esp, skd, sizeof(skd), 0x11223344u, 0x55667788u, ni, sizeof(ni), nr, sizeof(nr),
+                               ESP_CIPHER_AES_CBC, 16u, ip_us, ip_peer) != 0) {
+      snprintf(err_buf, err_cap, "ike_install_esp_keymat failed");
+      return -1;
+    }
+#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
+    snprintf(err_buf, err_cap, "TUNNEL_FORGE_DEBUG_ESP_KEYMAT is enabled in default debug build");
+    return -1;
+#else
+    return 0;
+#endif
+  }
+  snprintf(err_buf, err_cap, "unsupported ikev1 audit item=%d", item_id);
+  return -1;
 }

@@ -109,22 +109,4 @@ JavaVM *engine_get_java_vm(void);
 int engine_jni_init(JNIEnv *env);
 void engine_jni_cleanup(JNIEnv *env);
 
-/** Dataplane counters for tunnel_run_loop (optional; used from tunnel_loop.c + ppp.c). */
-void engine_dp_note_tun_rx(void);
-void engine_dp_note_encap_ok(void);
-void engine_dp_note_encap_fail(void);
-void engine_dp_note_esp_rx(void);
-void engine_dp_note_esp_plain_ok(void);
-void engine_dp_note_esp_plain_fail(void);
-void engine_dp_note_tun_ipv4_outbound(const uint8_t *packet, size_t nbytes);
-void engine_dp_note_tun_ipv4_inbound(const uint8_t *packet, size_t nbytes);
-void engine_dp_note_tun_ipv4_inbound_accepted(size_t nbytes);
-void engine_dp_note_tun_ipv4_inbound_trimmed(size_t original_len, size_t trimmed_len);
-void engine_dp_note_tun_ipv4_inbound_malformed(size_t nbytes);
-void engine_dp_note_tun_ipv4_outbound_bad_l4_checksum(uint8_t proto);
-void engine_dp_note_tun_ipv4_outbound_checksum_fixup(uint8_t proto);
-void engine_dp_note_tun_ipv4_written(size_t nbytes);
-void engine_dp_note_tun_ipv4_protocol(uint8_t proto);
-void engine_dp_maybe_log_summary(time_t now);
-
 #endif

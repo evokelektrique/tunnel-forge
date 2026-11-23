@@ -7,6 +7,8 @@
  * material when split keys are used; see esp_udp.c.
  */
 
+#include <mbedtls/cipher.h>
+#include <mbedtls/md.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/socket.h>
@@ -15,6 +17,27 @@ enum {
   ESP_CIPHER_3DES_CBC = 3,
   ESP_CIPHER_AES_CBC = 12,
 };
+
+typedef struct {
+  int rx_md_ready;
+  int rx_cipher_ready;
+  int tx_cipher_ready;
+  int tx_md_ready;
+  uint8_t rx_cipher_id;
+  size_t rx_enc_len;
+  uint8_t rx_enc_key[32];
+  size_t rx_auth_len;
+  uint8_t rx_auth_key[32];
+  uint8_t tx_cipher_id;
+  size_t tx_enc_len;
+  uint8_t tx_enc_key[32];
+  size_t tx_auth_len;
+  uint8_t tx_auth_key[32];
+  mbedtls_md_context_t rx_md;
+  mbedtls_cipher_context_t rx_cipher;
+  mbedtls_cipher_context_t tx_cipher;
+  mbedtls_md_context_t tx_md;
+} esp_crypto_cache_t;
 
 typedef struct {
   // Outbound and inbound keys are stored back-to-back: 16+16 for AES or
@@ -42,7 +65,17 @@ typedef struct {
   uint8_t ip_src[4];
   /** Peer tunnel IPv4 for the inner IP header on encrypt. */
   uint8_t ip_dst[4];
+  /** Lazily initialized per-direction cipher/HMAC contexts; reset on struct copy, freed on close. */
+  esp_crypto_cache_t cache;
 } esp_keys_t;
+
+/** Reset cached crypto metadata after shallow struct copy without freeing the source contexts. */
+void esp_keys_reset_cache(esp_keys_t *k);
+
+/** Free cached mbedTLS contexts and zeroize all ESP keys in @p k. */
+void esp_keys_cleanup(esp_keys_t *k);
+
+int esp_run_audit_check(int item_id, char *err_buf, size_t err_cap);
 
 /**
  * Decrypt/validate inbound ESP (or pass-through when enc_key_len == 0).

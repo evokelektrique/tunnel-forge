@@ -24,12 +24,12 @@ int main(void) {
   size_t encrypted_len, decoded_len;
   assert(isakmp_aes128_encrypt(key, iv, plain, sizeof(plain), encrypted, &encrypted_len) == 0);
   memset(iv, 0, sizeof(iv));
-  assert(isakmp_aes128_decrypt(key, iv, encrypted, encrypted_len, decoded, &decoded_len, tail) == 0);
+  assert(isakmp_aes128_decrypt(key, iv, encrypted, encrypted_len, decoded, sizeof(decoded), &decoded_len, tail) == 0);
   assert(decoded_len >= sizeof(plain) && memcmp(decoded, plain, sizeof(plain)) == 0);
   memset(iv, 0, sizeof(iv));
   assert(isakmp_3des_encrypt(key, iv, plain, sizeof(plain), encrypted, &encrypted_len) == 0);
   memset(iv, 0, sizeof(iv));
-  assert(isakmp_3des_decrypt(key, iv, encrypted, encrypted_len, decoded, &decoded_len, tail) == 0);
+  assert(isakmp_3des_decrypt(key, iv, encrypted, encrypted_len, decoded, sizeof(decoded), &decoded_len, tail) == 0);
   assert(decoded_len >= sizeof(plain) && memcmp(decoded, plain, sizeof(plain)) == 0);
 
   /* Yamaha RTX1220 MM2 leaves Next Payload = Transform (3) on its single selected Transform. */

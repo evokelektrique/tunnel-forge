@@ -32,17 +32,6 @@ object VpnBridge {
         System.loadLibrary("tunnel_engine")
     }
 
-    @JvmStatic
-    external fun nativeRunTunnel(
-        tunFd: Int,
-        server: String,
-        user: String,
-        password: String,
-        psk: String,
-        tunMtu: Int,
-        protocol: Int,
-    ): Int
-
     /**
      * On success, fills [outClientIpv4] with four octets 0–255 (PPP IPCP local IPv4) when non-null and length ≥ 4.
      */
@@ -112,9 +101,6 @@ object VpnBridge {
     external fun nativeGvisorReadOutbound(maxLen: Int, timeoutMs: Int): ByteArray?
 
     @JvmStatic
-    external fun nativeGvisorTcpOpen(remoteIpv4: IntArray, port: Int, timeoutMs: Int): Int
-
-    @JvmStatic
     external fun nativeGvisorTcpOpenCancelable(openId: Int, remoteIpv4: IntArray, port: Int, timeoutMs: Int): Int
 
     @JvmStatic
@@ -131,9 +117,6 @@ object VpnBridge {
 
     @JvmStatic
     external fun nativeGvisorStats(): IntArray
-
-    @JvmStatic
-    external fun nativeGvisorLastOpenDiagnostics(): String
 
     @JvmStatic
     external fun nativeGvisorOpenDiagnostics(openId: Int): String
@@ -158,4 +141,8 @@ object VpnBridge {
 
     @JvmStatic
     external fun nativeStopTunnel()
+
+    @androidx.annotation.VisibleForTesting
+    @JvmStatic
+    external fun nativeRunAuditCheck(itemId: Int): String?
 }

@@ -7,10 +7,11 @@
 
 #include "engine.h"
 #include "esp_udp.h"
-#include "nat_t_keepalive.h"
 #include "ipv4_dataplane.h"
+#include "nat_t_keepalive.h"
 #include "ppp_mppe.h"
 #include "ppp_mschap.h"
+#include "ppp_wire.h"
 
 #include <android/log.h>
 #include <errno.h>
@@ -25,26 +26,20 @@
 #include <unistd.h>
 
 #define LOG_TAG "tunnel_engine"
-#define PROTO_IP 0x0021u
-#define PROTO_LCP 0xc021u
-#define PROTO_PAP 0xc023u
-#define PROTO_CHAP 0xc223u
-#define PROTO_IPCP 0x8021u
+#define PROTO_IP PPP_WIRE_PROTO_IP
+#define PROTO_LCP PPP_WIRE_PROTO_LCP
+#define PROTO_PAP PPP_WIRE_PROTO_PAP
+#define PROTO_CHAP PPP_WIRE_PROTO_CHAP
+#define PROTO_IPCP PPP_WIRE_PROTO_IPCP
 #define PROTO_CCP PPP_PROTO_CCP
 #define PROTO_MPPE_DATA PPP_PROTO_MPPE_DATA
 /** IPv6CP (IANA / RFC 5072); gateway may offer after IPv4 IPCP - we send LCP Protocol-Reject. */
 #define PROTO_IPV6CP 0x8057u
 #define LCP_CODE_PROTOCOL_REJECT 8u
-#define LCP_CODE_ECHO_REQUEST 9u
-#define LCP_CODE_ECHO_REPLY 10u
+#define LCP_CODE_ECHO_REQUEST PPP_LCP_CODE_ECHO_REQUEST
+#define LCP_CODE_ECHO_REPLY PPP_LCP_CODE_ECHO_REPLY
 #define CCP_CODE_RESET_REQUEST 14u
 #define CCP_CODE_RESET_ACK 15u
-
-typedef enum {
-  PPP_AUTH_PAP = 0,
-  PPP_AUTH_MSCHAPV2,
-  PPP_AUTH_CHAP_MD5,
-} ppp_auth_kind_t;
 
 static const char *ppp_auth_name(ppp_auth_kind_t auth) {
   switch (auth) {
@@ -312,65 +307,6 @@ static int urandom_bytes(uint8_t *b, size_t n) {
   return r == (ssize_t)n ? 0 : -1;
 }
 
-static int lcp_build_cr(uint8_t *out, size_t cap, uint8_t id, ppp_auth_kind_t auth, uint16_t mru,
-                        int include_address_control, int include_accm, int include_auth, int include_mru) {
-  size_t o = 0;
-  if (include_address_control) {
-    if (cap < 40)
-      return -1;
-    out[o++] = 0xff;
-    out[o++] = 0x03;
-    util_write_be16(out + o, PROTO_LCP);
-    o += 2;
-  } else {
-    /* Peer LCP over L2TP often omits Address/Control (ACFC); runtime logs showed c0 21... then silence after
-     * our aligned CR still used ff 03. */
-    if (cap < 36)
-      return -1;
-    util_write_be16(out + o, PROTO_LCP);
-    o += 2;
-  }
-  size_t code_off = o;
-  out[o++] = 1;
-  out[o++] = id;
-  size_t len_mark = o;
-  o += 2;
-  if (include_mru) {
-    out[o++] = 1;
-    out[o++] = 4;
-    util_write_be16(out + o, mru);
-    o += 2;
-  }
-  if (include_accm) {
-    /* ACCM 00 00 00 00: keep this unless peer explicitly Configure-Rejects it. */
-    out[o++] = 2;
-    out[o++] = 6;
-    util_write_be32(out + o, 0u);
-    o += 4u;
-  }
-  if (include_auth) {
-    out[o++] = 3;
-    if (auth == PPP_AUTH_PAP) {
-      out[o++] = 4;
-      util_write_be16(out + o, PROTO_PAP);
-      o += 2;
-    } else if (auth == PPP_AUTH_MSCHAPV2) {
-      out[o++] = 5;
-      out[o++] = 0xc2;
-      out[o++] = 0x23;
-      out[o++] = 0x81;
-    } else {
-      /* RFC 1994 CHAP: Authentication-Protocol 0xc223 + algorithm 0x05 (MD5-Challenge). */
-      out[o++] = 5;
-      out[o++] = 0xc2;
-      out[o++] = 0x23;
-      out[o++] = 0x05;
-    }
-  }
-  util_write_be16(out + len_mark, (uint16_t)(o - code_off));
-  return (int)o;
-}
-
 /** Authentication-Protocol option (type 3, [opt] = type byte) this client implements: PAP, CHAP-MD5, MS-CHAPv2. */
 static int lcp_auth_option_supported(const uint8_t *opt, uint8_t ol) {
   if (ol < 4u)
@@ -457,37 +393,6 @@ static void lcp_peer_cr_note_pfc(const uint8_t *lcp, size_t lcp_len, int *lcp_pf
     if (t == 7u) {
       *lcp_pfc_out = 1;
       return;
-    }
-    i += (size_t)ol;
-  }
-}
-
-static void lcp_apply_conf_reject(const uint8_t *lcp, size_t lcp_len, int *include_accm, int *include_auth,
-                                  int *removed_accm, int *removed_auth, int *include_mru) {
-  if (removed_accm != NULL)
-    *removed_accm = 0;
-  if (removed_auth != NULL)
-    *removed_auth = 0;
-  if (lcp_len < 6u)
-    return;
-  const uint8_t *opt = lcp + 4u;
-  size_t rem = lcp_len - 4u;
-  size_t i = 0;
-  while (i + 2u <= rem) {
-    uint8_t t = opt[i];
-    uint8_t ol = opt[i + 1u];
-    if (ol < 2u || i + (size_t)ol > rem)
-      break;
-    if (t == 1u && include_mru != NULL)
-      *include_mru = 0;
-    if (t == 2u && include_accm != NULL && *include_accm) {
-      *include_accm = 0;
-      if (removed_accm != NULL)
-        *removed_accm = 1;
-    } else if (t == 3u && include_auth != NULL && *include_auth) {
-      *include_auth = 0;
-      if (removed_auth != NULL)
-        *removed_auth = 1;
     }
     i += (size_t)ol;
   }
@@ -618,7 +523,7 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
    * Configure-Request (pppd on EdgeOS/USG Naks or ignores a client-proposed MS-CHAPv2). */
   int lcp_auth_in_cr = 0;
   /* Phase 1: send initial Configure-Request. */
-  int plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, 1, lcp_accm_in_cr, lcp_auth_in_cr, lcp_mru_in_cr);
+  int plen = ppp_lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, 1, lcp_accm_in_cr, lcp_auth_in_cr, lcp_mru_in_cr);
   if (plen < 0)
     return -1;
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: send Configure-Request id=%u auth=%s mru=%u", (unsigned)id,
@@ -754,8 +659,8 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
       if (lcp_len >= 4u && 2u + (size_t)lcp_len <= len) {
         int removed_accm = 0;
         int removed_auth = 0;
-        lcp_apply_conf_reject(p + 2u, (size_t)lcp_len, &lcp_accm_in_cr, &lcp_auth_in_cr, &removed_accm, &removed_auth,
-                              &lcp_mru_in_cr);
+        ppp_lcp_apply_conf_reject(p + 2u, (size_t)lcp_len, &lcp_accm_in_cr, &lcp_auth_in_cr, &removed_accm,
+                                  &removed_auth, &lcp_mru_in_cr);
         if (removed_accm || removed_auth) {
           tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                             "ppp lcp: Configure-Reject removed opts accm=%d auth=%d (next CR accm=%d auth=%d mru=%d)",
@@ -764,8 +669,8 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
       }
       got_ack = 0;
       id++;
-      plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr,
-                          lcp_mru_in_cr);
+      plen = ppp_lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr,
+                              lcp_mru_in_cr);
       if (plen < 0)
         return -1;
       tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: resend after Configure-Reject id=%u bytes=%d",
@@ -780,7 +685,7 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
       if (lcp_len >= 4 && 2u + (size_t)lcp_len <= len)
         lcp_auth_in_cr = 0; /* auth is decided by the server's CR, never by ours */
       if (lcp_len >= 4 && 2u + (size_t)lcp_len <= len) {
-        if (lcp_nak_wants_pap(p + 6, (size_t)lcp_len - 6)) {
+        if (lcp_nak_wants_pap(p + 6, (size_t)lcp_len - 4u)) {
           auth = PPP_AUTH_PAP;
         } else {
           auth = PPP_AUTH_CHAP_MD5;
@@ -790,8 +695,8 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
       }
       got_ack = 0;
       id++;
-      plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr,
-                          lcp_mru_in_cr);
+      plen = ppp_lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, lcp_out_include_ac, lcp_accm_in_cr, lcp_auth_in_cr,
+                              lcp_mru_in_cr);
       if (plen < 0)
         return -1;
       tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: received NAK, resend Configure-Request id=%u auth=%s",
@@ -905,8 +810,12 @@ static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *u
     if (urandom_bytes(peer_chal, sizeof(peer_chal)) != 0)
       return -1;
     uint8_t val49[49];
-    if (ppp_mschapv2_response_value(user, password, auth_chal, peer_chal, val49) != 0)
+    if (ppp_mschapv2_response_value(user, password, auth_chal, peer_chal, val49) != 0) {
+      mbedtls_platform_zeroize(val49, sizeof(val49));
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                        "ppp: MS-CHAPv2 rejected password (exceeds RFC 2759 256 UTF-16LE char limit or invalid)");
       return -1;
+    }
 
     uint8_t hash_hash[16];
     int have_hash_hash =
@@ -926,7 +835,14 @@ static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *u
     out[o++] = 49;
     memcpy(out + o, val49, 49);
     o += 49;
-    size_t ulen = strlen(user);
+    size_t ulen = user != NULL ? strlen(user) : 0u;
+    if (user == NULL || o + ulen > sizeof(out)) {
+      mbedtls_platform_zeroize(val49, sizeof(val49));
+      mbedtls_platform_zeroize(hash_hash, sizeof(hash_hash));
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: MS-CHAPv2 username exceeds response packet limit (%zu bytes)",
+                        ulen);
+      return -1;
+    }
     memcpy(out + o, user, ulen);
     o += ulen;
     util_write_be16(out + lenpos, (uint16_t)(o - chap_start));
@@ -1042,7 +958,7 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
     if (chap_md5_response(chap_id, password, chal, vs, md) != 0)
       return -1;
 
-    uint8_t out[256];
+    uint8_t out[512];
     size_t o = 0;
     out[o++] = 0xff;
     out[o++] = 0x03;
@@ -1056,7 +972,12 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
     out[o++] = 16;
     memcpy(out + o, md, 16);
     o += 16;
-    size_t ulen = strlen(user);
+    size_t ulen = user != NULL ? strlen(user) : 0u;
+    if (user == NULL || o + ulen > sizeof(out)) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: CHAP-MD5 username exceeds response packet limit (%zu bytes)",
+                        ulen);
+      return -1;
+    }
     memcpy(out + o, user, ulen);
     o += ulen;
     util_write_be16(out + lenpos, (uint16_t)(o - chap_start));
@@ -1102,7 +1023,9 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
 }
 
 static int ppp_auth_pap_transport(ppp_transport_t *transport, const char *user, const char *password) {
-  uint8_t pap[128];
+  if (user == NULL || password == NULL)
+    return -1;
+  uint8_t pap[528];
   size_t o = 0;
   pap[o++] = 0xff;
   pap[o++] = 0x03;
@@ -1115,6 +1038,12 @@ static int ppp_auth_pap_transport(ppp_transport_t *transport, const char *user, 
   o += 2;
   size_t ulen = strlen(user);
   size_t pwlen = strlen(password);
+  if (ulen > 255u || pwlen > 255u || o + 2u + ulen + pwlen > sizeof(pap)) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                      "ppp: PAP credentials exceed RFC 1334 255-byte limit (user=%zu password=%zu)", ulen, pwlen);
+    mbedtls_platform_zeroize(pap, sizeof(pap));
+    return -1;
+  }
   pap[o++] = (uint8_t)ulen;
   memcpy(pap + o, user, ulen);
   o += ulen;
@@ -1123,14 +1052,15 @@ static int ppp_auth_pap_transport(ppp_transport_t *transport, const char *user, 
   o += pwlen;
   util_write_be16(pap + lenpos, (uint16_t)(o - codepos));
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp auth: start pap");
+  int rc = -1;
   if (ppp_transport_send(transport, pap, o) < 0)
-    return -1;
+    goto out;
 
   uint8_t in[4096];
   for (int i = 0; i < 12; i++) {
     int n = ppp_transport_recv(transport, in, sizeof(in), 5000);
     if (n == -2 || tunnel_should_stop())
-      return -1;
+      goto out;
     if (n < 7)
       continue;
     const uint8_t *p = in;
@@ -1141,44 +1071,23 @@ static int ppp_auth_pap_transport(ppp_transport_t *transport, const char *user, 
       uint16_t pap_len = util_read_be16(p + 4);
       if (pap_len >= 5 && (size_t)pap_len + 2 <= len && p[6] <= pap_len - 5) {
         tunnel_set_failure(5, 3, 0);
-        return -1;
+        goto out;
       }
     }
     if (len >= 4 && util_read_be16(p) == PROTO_PAP && p[2] == 2) {
       ppp_log_rx_summary(p, len, "auth-pap-ack");
-      return 0;
+      rc = 0;
+      goto out;
     }
   }
-  return -1;
+out:
+  mbedtls_platform_zeroize(pap, sizeof(pap));
+  return rc;
 }
 
 static int ipcp_ipv4_is_zero(const uint8_t ip[4]) { return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0; }
 
 /** [ipcp] starts at IPCP Code byte; [ipcplen] is RFC 1661 Length field (Code+Id+Len+Options). */
-#define IPCP_OPT_IP_ADDRESS 3u
-#define IPCP_OPT_PRIMARY_DNS 129u
-#define IPCP_OPT_SECONDARY_DNS 131u
-
-static int ipcp_opts_first_ipv4_option(const uint8_t *ipcp, uint16_t ipcplen, uint8_t option_type, uint8_t ip_out[4]) {
-  if (ipcplen < 4u)
-    return -1;
-  const uint8_t *opts = ipcp + 4u;
-  size_t rem = (size_t)ipcplen - 4u;
-  size_t i = 0;
-  while (i + 2u <= rem) {
-    uint8_t t = opts[i];
-    uint8_t ol = opts[i + 1u];
-    if (ol < 2u || i + (size_t)ol > rem)
-      break;
-    if (t == option_type && ol >= 6u) {
-      memcpy(ip_out, opts + i + 2u, 4);
-      return 0;
-    }
-    i += (size_t)ol;
-  }
-  return -1;
-}
-
 static void ipcp_apply_conf_reject_opts(const uint8_t *ipcp, uint16_t ipcplen, int *include_ip_opt,
                                         int *include_primary_dns_opt, int *include_secondary_dns_opt) {
   if (ipcplen < 4u)
@@ -1199,56 +1108,6 @@ static void ipcp_apply_conf_reject_opts(const uint8_t *ipcp, uint16_t ipcplen, i
       *include_secondary_dns_opt = 0;
     i += (size_t)ol;
   }
-}
-
-static int ipcp_build_cr(uint8_t *out, size_t cap, uint8_t id, const uint8_t ip[4], int include_address_control,
-                         int include_ip_opt, const uint8_t primary_dns[4], int include_primary_dns_opt,
-                         const uint8_t secondary_dns[4], int include_secondary_dns_opt) {
-  size_t o = 0;
-  if (include_address_control) {
-    if (cap < 8u)
-      return -1;
-    out[o++] = 0xff;
-    out[o++] = 0x03;
-    util_write_be16(out + o, PROTO_IPCP);
-    o += 2u;
-  } else {
-    if (cap < 6u)
-      return -1;
-    util_write_be16(out + o, PROTO_IPCP);
-    o += 2u;
-  }
-  size_t code_off = o;
-  out[o++] = 1;
-  out[o++] = id;
-  size_t len_mark = o;
-  o += 2u;
-  if (include_ip_opt) {
-    if (o + 6u > cap)
-      return -1;
-    out[o++] = IPCP_OPT_IP_ADDRESS;
-    out[o++] = 6;
-    memcpy(out + o, ip, 4);
-    o += 4u;
-  }
-  if (include_primary_dns_opt) {
-    if (o + 6u > cap)
-      return -1;
-    out[o++] = IPCP_OPT_PRIMARY_DNS;
-    out[o++] = 6;
-    memcpy(out + o, primary_dns, 4);
-    o += 4u;
-  }
-  if (include_secondary_dns_opt) {
-    if (o + 6u > cap)
-      return -1;
-    out[o++] = IPCP_OPT_SECONDARY_DNS;
-    out[o++] = 6;
-    memcpy(out + o, secondary_dns, 4);
-    o += 4u;
-  }
-  util_write_be16(out + len_mark, (uint16_t)(o - code_off));
-  return (int)o;
 }
 
 /**
@@ -1404,8 +1263,8 @@ static int ppp_ipcp_negotiate_transport(ppp_transport_t *transport, ppp_session_
 
   uint8_t pkt[64];
   /* Phase 1: send initial IPCP Configure-Request. */
-  int plen = ipcp_build_cr(pkt, sizeof(pkt), id, req_ip, ipcp_out_include_ac, include_ip_opt, req_primary_dns,
-                           include_primary_dns_opt, req_secondary_dns, include_secondary_dns_opt);
+  int plen = ppp_ipcp_build_cr(pkt, sizeof(pkt), id, req_ip, ipcp_out_include_ac, include_ip_opt, req_primary_dns,
+                               include_primary_dns_opt, req_secondary_dns, include_secondary_dns_opt);
   if (plen < 0)
     return -1;
   tunnel_engine_log(
@@ -1614,7 +1473,7 @@ static int ppp_ipcp_negotiate_transport(ppp_transport_t *transport, ppp_session_
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp ipcp peer framing addr_ctl=%d", ipcp_out_include_ac);
       }
       uint8_t peer_gw[4];
-      if (ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_IP_ADDRESS, peer_gw) == 0) {
+      if (ppp_ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_IP_ADDRESS, peer_gw) == 0) {
         memcpy(ppp->peer_ip, peer_gw, 4);
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp ipcp: peer Configure-Request IP=%u.%u.%u.%u",
                           (unsigned)peer_gw[0], (unsigned)peer_gw[1], (unsigned)peer_gw[2], (unsigned)peer_gw[3]);
@@ -1645,7 +1504,7 @@ static int ppp_ipcp_negotiate_transport(ppp_transport_t *transport, ppp_session_
 
     if (code == 2 && rid == id) {
       /* Our Configure-Ack: commit negotiated addressing and DNS values. */
-      if (ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_IP_ADDRESS, ppp->local_ip) != 0) {
+      if (ppp_ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_IP_ADDRESS, ppp->local_ip) != 0) {
         memcpy(ppp->local_ip, req_ip, 4);
       }
       /* Compatibility fallback for peers that acknowledge but leave local IP unset/zero. */
@@ -1657,14 +1516,14 @@ static int ppp_ipcp_negotiate_transport(ppp_transport_t *transport, ppp_session_
       }
       ppp->have_ip = 1;
       if (include_primary_dns_opt &&
-          ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_PRIMARY_DNS, ppp->primary_dns) != 0) {
+          ppp_ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_PRIMARY_DNS, ppp->primary_dns) != 0) {
         memcpy(ppp->primary_dns, req_primary_dns, 4);
       }
       if (!ipcp_ipv4_is_zero(ppp->primary_dns)) {
         ppp->have_primary_dns = 1;
       }
       if (include_secondary_dns_opt &&
-          ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_SECONDARY_DNS, ppp->secondary_dns) != 0) {
+          ppp_ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_SECONDARY_DNS, ppp->secondary_dns) != 0) {
         memcpy(ppp->secondary_dns, req_secondary_dns, 4);
       }
       if (!ipcp_ipv4_is_zero(ppp->secondary_dns)) {
@@ -1688,24 +1547,24 @@ static int ppp_ipcp_negotiate_transport(ppp_transport_t *transport, ppp_session_
 
     if (code == 3 && rid == id) {
       /* Configure-Nak: adopt peer-suggested values and resend next Configure-Request. */
-      if (ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_IP_ADDRESS, req_ip) == 0) {
+      if (ppp_ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_IP_ADDRESS, req_ip) == 0) {
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp ipcp: Configure-Nak id=%u suggested=%u.%u.%u.%u",
                           (unsigned)rid, (unsigned)req_ip[0], (unsigned)req_ip[1], (unsigned)req_ip[2],
                           (unsigned)req_ip[3]);
       }
-      if (ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_PRIMARY_DNS, req_primary_dns) == 0) {
+      if (ppp_ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_PRIMARY_DNS, req_primary_dns) == 0) {
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp ipcp: Configure-Nak id=%u primary_dns=%u.%u.%u.%u",
                           (unsigned)rid, (unsigned)req_primary_dns[0], (unsigned)req_primary_dns[1],
                           (unsigned)req_primary_dns[2], (unsigned)req_primary_dns[3]);
       }
-      if (ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_SECONDARY_DNS, req_secondary_dns) == 0) {
+      if (ppp_ipcp_opts_first_ipv4_option(ipcp_msg, ipcplen, IPCP_OPT_SECONDARY_DNS, req_secondary_dns) == 0) {
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp ipcp: Configure-Nak id=%u secondary_dns=%u.%u.%u.%u",
                           (unsigned)rid, (unsigned)req_secondary_dns[0], (unsigned)req_secondary_dns[1],
                           (unsigned)req_secondary_dns[2], (unsigned)req_secondary_dns[3]);
       }
       id++;
-      plen = ipcp_build_cr(pkt, sizeof(pkt), id, req_ip, ipcp_out_include_ac, include_ip_opt, req_primary_dns,
-                           include_primary_dns_opt, req_secondary_dns, include_secondary_dns_opt);
+      plen = ppp_ipcp_build_cr(pkt, sizeof(pkt), id, req_ip, ipcp_out_include_ac, include_ip_opt, req_primary_dns,
+                               include_primary_dns_opt, req_secondary_dns, include_secondary_dns_opt);
       if (plen < 0)
         return -1;
       if (ppp_transport_send(transport, pkt, (size_t)plen) < 0)
@@ -1725,8 +1584,8 @@ static int ppp_ipcp_negotiate_transport(ppp_transport_t *transport, ppp_session_
       ipcp_apply_conf_reject_opts(ipcp_msg, ipcplen, &include_ip_opt, &include_primary_dns_opt,
                                   &include_secondary_dns_opt);
       id++;
-      plen = ipcp_build_cr(pkt, sizeof(pkt), id, req_ip, ipcp_out_include_ac, include_ip_opt, req_primary_dns,
-                           include_primary_dns_opt, req_secondary_dns, include_secondary_dns_opt);
+      plen = ppp_ipcp_build_cr(pkt, sizeof(pkt), id, req_ip, ipcp_out_include_ac, include_ip_opt, req_primary_dns,
+                               include_primary_dns_opt, req_secondary_dns, include_secondary_dns_opt);
       if (plen < 0)
         return -1;
       if (ppp_transport_send(transport, pkt, (size_t)plen) < 0)
@@ -1771,154 +1630,16 @@ static uint16_t ppp_tcp_mss_for_link_mtu(uint16_t link_mtu) {
  * If @p pkt is an unfragmented IPv4 TCP SYN, lower TCP MSS option to @p clamp_mss when larger.
  *
  * Rewrites MSS in place and clears the TCP checksum field (caller path recomputes if needed).
- *
- * @return 1 if MSS was clamped, 0 if not applicable or already within limit.
- */
-static int ppp_clamp_tcp_syn_mss(uint8_t *pkt, size_t len, uint16_t clamp_mss, uint16_t *old_mss_out,
-                                 uint16_t *new_mss_out) {
-  if (pkt == NULL || len < 20u || clamp_mss == 0u)
-    return 0;
-  if ((pkt[0] >> 4) != 4u)
-    return 0;
-  unsigned ihl = (unsigned)(pkt[0] & 0x0fu) * 4u;
-  if (ihl < 20u || ihl > len)
-    return 0;
-  uint16_t tot_len_be = util_read_be16(pkt + 2);
-  if (tot_len_be < (uint16_t)ihl)
-    return 0;
-  size_t ip_len = (size_t)tot_len_be;
-  if (ip_len > len)
-    return 0;
-  uint16_t frag = util_read_be16(pkt + 6);
-  if ((frag & 0x3fffu) != 0u)
-    return 0;
-  if (pkt[9] != TF_IPPROTO_TCP)
-    return 0;
-
-  size_t l4_len = ip_len - ihl;
-  if (l4_len < 20u || ihl + l4_len > len)
-    return 0;
-  uint8_t *l4 = pkt + ihl;
-  unsigned tcp_hlen = (unsigned)(l4[12] >> 4) * 4u;
-  if (tcp_hlen < 20u || tcp_hlen > l4_len)
-    return 0;
-  if ((l4[13] & 0x02u) == 0u)
-    return 0;
-
-  size_t opt = 20u;
-  while (opt < tcp_hlen) {
-    uint8_t kind = l4[opt];
-    if (kind == 0u)
-      break;
-    if (kind == 1u) {
-      opt++;
-      continue;
-    }
-    if (opt + 1u >= tcp_hlen)
-      break;
-    uint8_t olen = l4[opt + 1u];
-    if (olen < 2u || opt + (size_t)olen > tcp_hlen)
-      break;
-    /* TCP option kind 2: Maximum Segment Size (4 bytes). */
-    if (kind == 2u && olen == 4u) {
-      uint16_t old_mss = util_read_be16(l4 + opt + 2u);
-      if (old_mss > clamp_mss) {
-        util_write_be16(l4 + opt + 2u, clamp_mss);
-        util_write_be16(l4 + 16u, 0u);
-        if (old_mss_out != NULL)
-          *old_mss_out = old_mss;
-        if (new_mss_out != NULL)
-          *new_mss_out = clamp_mss;
-        return 1;
-      }
-      return 0;
-    }
-    opt += (size_t)olen;
-  }
-  return 0;
-}
-
 /**
- * Android VPN TUN often delivers IPv4 with header / TCP / UDP checksum 0 (offload semantics).
- * LNS stacks may drop those; normalize before PPP encapsulation.
- *
- * Returns non-zero when any checksum was filled and reports the fixed L4 protocol when available.
- * This path intentionally updates counters without emitting per-packet debug logs.
+ * TCP SYN MSS clamping and IPv4/L4 checksum fixups live in ppp_wire.c so host unit tests execute
+ * the exact same production framing logic.
  */
-static int ppp_fix_tun_ipv4_checksums(uint8_t *pkt, size_t len, uint8_t *fixed_proto_out) {
-  if (len < 20u)
-    return 0;
-  if ((pkt[0] >> 4) != 4u)
-    return 0;
-  unsigned ihl = (unsigned)(pkt[0] & 0x0fu) * 4u;
-  if (ihl < 20u || ihl > len)
-    return 0;
-  uint16_t tot_len_be = util_read_be16(pkt + 2);
-  if (tot_len_be < (uint16_t)ihl)
-    return 0;
-  size_t ip_len = (size_t)tot_len_be;
-  if (ip_len > len)
-    return 0;
-  int fixed = 0;
-
-  if (util_read_be16(pkt + 10) == 0u) {
-    util_write_be16(pkt + 10, 0);
-    uint32_t sum = tf_csum_acc_bytes(0, pkt, ihl);
-    util_write_be16(pkt + 10, tf_inet_checksum_fold(sum));
-    fixed = 1;
-  }
-
-  uint16_t frag = util_read_be16(pkt + 6);
-  unsigned frag_off = (unsigned)(frag & 0x1fffu);
-  if (frag_off != 0u)
-    return fixed;
-
-  uint8_t proto = pkt[9];
-  if (fixed && fixed_proto_out != NULL)
-    *fixed_proto_out = proto;
-  size_t l4_len = ip_len - ihl;
-  if (l4_len < 8u || ihl + l4_len > len)
-    return fixed;
-  uint8_t *l4 = pkt + ihl;
-
-  if (proto == TF_IPPROTO_UDP) {
-    if (util_read_be16(l4 + 6) != 0u)
-      return fixed;
-    uint32_t sum = 0;
-    sum = tf_csum_acc_bytes(sum, pkt + 12, 4);
-    sum = tf_csum_acc_bytes(sum, pkt + 16, 4);
-    sum += (uint32_t)TF_IPPROTO_UDP;
-    sum += (uint32_t)l4_len;
-    sum = tf_csum_acc_bytes(sum, l4, l4_len);
-    uint16_t c = tf_inet_checksum_fold(sum);
-    if (c == 0u)
-      c = 0xffffu;
-    util_write_be16(l4 + 6, c);
-    fixed = 1;
-    if (fixed_proto_out != NULL)
-      *fixed_proto_out = proto;
-  } else if (proto == TF_IPPROTO_TCP) {
-    if (l4_len < 20u)
-      return fixed;
-    if (util_read_be16(l4 + 16) != 0u)
-      return fixed;
-    uint32_t sum = 0;
-    sum = tf_csum_acc_bytes(sum, pkt + 12, 4);
-    sum = tf_csum_acc_bytes(sum, pkt + 16, 4);
-    sum += (uint32_t)TF_IPPROTO_TCP;
-    sum += (uint32_t)l4_len;
-    sum = tf_csum_acc_bytes(sum, l4, l4_len);
-    util_write_be16(l4 + 16, tf_inet_checksum_fold(sum));
-    fixed = 1;
-    if (fixed_proto_out != NULL)
-      *fixed_proto_out = proto;
-  }
-  return fixed;
-}
 
 /* --- Exported PPP API (negotiate, TUN egress, inbound dispatch) --- */
 
-static size_t ppp_write_frame_prefix(uint8_t *buf, size_t cap, uint16_t proto, const ppp_session_t *ppp);
+static size_t ppp_session_frame_prefix(uint8_t *buf, size_t cap, uint16_t proto, const ppp_session_t *ppp) {
+  return ppp_write_frame_prefix(buf, cap, proto, ppp != NULL && ppp->lcp_acfc, ppp != NULL && ppp->lcp_pfc);
+}
 
 void ppp_session_clear_secrets(ppp_session_t *ppp) {
   if (ppp == NULL)
@@ -1993,13 +1714,11 @@ int ppp_encapsulate_and_send_over_transport(ppp_transport_t *transport, ppp_sess
     return -1;
   uint8_t ip_copy[4000];
   memcpy(ip_copy, ip_packet, len);
-  engine_dp_note_tun_ipv4_outbound(ip_packet, len);
   tf_ipv4_info_t ipv4_info;
   int ipv4_valid = tf_ipv4_parse(ip_copy, len, &ipv4_info) == 0;
   if (ipv4_valid) {
     tf_l4_checksum_result_t checksum_status = tf_ipv4_l4_checksum_status(ip_copy, len, &ipv4_info);
     if (checksum_status == TF_L4_CHECKSUM_INVALID) {
-      engine_dp_note_tun_ipv4_outbound_bad_l4_checksum(ipv4_info.protocol);
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp outbound invalid l4 checksum proto=%u len=%zu total_len=%zu",
                         (unsigned)ipv4_info.protocol, len, ipv4_info.total_len);
     }
@@ -2016,16 +1735,14 @@ int ppp_encapsulate_and_send_over_transport(ppp_transport_t *transport, ppp_sess
     }
   }
   uint8_t fixed_proto = 0u;
-  if (ppp_fix_tun_ipv4_checksums(ip_copy, len, &fixed_proto)) {
-    engine_dp_note_tun_ipv4_outbound_checksum_fixup(fixed_proto);
-  }
+  (void)ppp_fix_tun_ipv4_checksums(ip_copy, len, &fixed_proto);
 
   uint8_t buf[4096];
   if (ppp != NULL && ppp->mppe.enabled) {
     uint8_t plain[4010];
     util_write_be16(plain, PROTO_IP);
     memcpy(plain + 2u, ip_copy, len);
-    size_t prefix = ppp_write_frame_prefix(buf, sizeof(buf), PROTO_MPPE_DATA, ppp);
+    size_t prefix = ppp_session_frame_prefix(buf, sizeof(buf), PROTO_MPPE_DATA, ppp);
     if (prefix == 0u)
       return -1;
     int elen = ppp_mppe_encrypt(&ppp->mppe, plain, 2u + len, buf + prefix, sizeof(buf) - prefix);
@@ -2034,7 +1751,7 @@ int ppp_encapsulate_and_send_over_transport(ppp_transport_t *transport, ppp_sess
     return ppp_transport_send(transport, buf, prefix + (size_t)elen);
   }
 
-  size_t prefix = ppp_write_frame_prefix(buf, sizeof(buf), PROTO_IP, ppp);
+  size_t prefix = ppp_session_frame_prefix(buf, sizeof(buf), PROTO_IP, ppp);
   if (prefix == 0u || len + prefix > sizeof(buf))
     return -1;
   memcpy(buf + prefix, ip_copy, len);
@@ -2049,38 +1766,6 @@ int ppp_encapsulate_and_send(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   return ppp_encapsulate_and_send_over_transport(&transport, ppp, ip_packet, len);
 }
 
-static size_t ppp_write_frame_prefix(uint8_t *buf, size_t cap, uint16_t proto, const ppp_session_t *ppp) {
-  if (buf == NULL)
-    return 0u;
-  int compress_proto = ppp != NULL && ppp->lcp_pfc && proto <= 0x00ffu && (proto & 0x0001u) != 0u;
-  if (ppp != NULL && ppp->lcp_acfc) {
-    if (compress_proto) {
-      if (cap < 1u)
-        return 0u;
-      buf[0] = (uint8_t)proto;
-      return 1u;
-    }
-    if (cap < 2u)
-      return 0u;
-    util_write_be16(buf, proto);
-    return 2u;
-  }
-  if (compress_proto) {
-    if (cap < 3u)
-      return 0u;
-    buf[0] = 0xff;
-    buf[1] = 0x03;
-    buf[2] = (uint8_t)proto;
-    return 3u;
-  }
-  if (cap < 4u)
-    return 0u;
-  buf[0] = 0xff;
-  buf[1] = 0x03;
-  util_write_be16(buf + 2u, proto);
-  return 4u;
-}
-
 /** RFC 1661 LCP Code 8 Protocol-Reject: peer used a network protocol we do not implement. */
 static int ppp_send_lcp_protocol_reject_transport(ppp_transport_t *transport, ppp_session_t *ppp,
                                                   uint16_t rejected_proto, const uint8_t *rejected_info,
@@ -2089,7 +1774,7 @@ static int ppp_send_lcp_protocol_reject_transport(ppp_transport_t *transport, pp
     return -1;
   uint8_t buf[256];
   const size_t lcp_fixed = 6; /* code + id + length + rejected_protocol */
-  const size_t ppp_prefix = ppp_write_frame_prefix(buf, sizeof(buf), PROTO_LCP, ppp);
+  const size_t ppp_prefix = ppp_session_frame_prefix(buf, sizeof(buf), PROTO_LCP, ppp);
   if (ppp_prefix == 0u)
     return -1;
   size_t ilen = rejected_info_len;
@@ -2117,34 +1802,21 @@ static int ppp_send_lcp_protocol_reject_transport(ppp_transport_t *transport, pp
 /** RFC 1661 LCP Echo-Reply: answer peer keepalive on the data channel. */
 static int ppp_send_lcp_echo_reply_transport(ppp_transport_t *transport, ppp_session_t *ppp, const uint8_t *req_lcp,
                                              size_t req_len) {
-  if (transport == NULL || req_len < 4)
-    return -1;
-  if (req_lcp[0] != (uint8_t)LCP_CODE_ECHO_REQUEST)
-    return -1;
-  uint8_t id = req_lcp[1];
-  uint16_t lcp_len = util_read_be16(req_lcp + 2);
-  if (lcp_len < 8 || (size_t)lcp_len > req_len)
+  if (transport == NULL)
     return -1;
   uint8_t buf[256];
-  const size_t ppp_prefix = ppp_write_frame_prefix(buf, sizeof(buf), PROTO_LCP, ppp);
-  if (ppp_prefix == 0u || ppp_prefix + (size_t)lcp_len > sizeof(buf))
+  int total = ppp_build_lcp_echo_reply_frame(buf, sizeof(buf), req_lcp, req_len, ppp != NULL && ppp->lcp_acfc,
+                                             ppp != NULL && ppp->lcp_pfc);
+  if (total <= 0)
     return -1;
-
-  buf[ppp_prefix + 0u] = (uint8_t)LCP_CODE_ECHO_REPLY;
-  buf[ppp_prefix + 1u] = id;
-  util_write_be16(buf + ppp_prefix + 2u, lcp_len);
-  /* We never negotiated Magic-Number, so the reply value stays zero per RFC 1661 section 5.8. */
-  util_write_be32(buf + ppp_prefix + 4u, 0u);
-  if (lcp_len > 8u)
-    memcpy(buf + ppp_prefix + 8u, req_lcp + 8u, (size_t)lcp_len - 8u);
-  return ppp_transport_send(transport, buf, ppp_prefix + (size_t)lcp_len);
+  return ppp_transport_send(transport, buf, (size_t)total);
 }
 
 static int ppp_send_ccp_reset_transport(ppp_transport_t *transport, ppp_session_t *ppp, uint8_t code, uint8_t id) {
   if (transport == NULL)
     return -1;
   uint8_t buf[16];
-  const size_t ppp_prefix = ppp_write_frame_prefix(buf, sizeof(buf), PROTO_CCP, ppp);
+  const size_t ppp_prefix = ppp_session_frame_prefix(buf, sizeof(buf), PROTO_CCP, ppp);
   if (ppp_prefix == 0u || ppp_prefix + 4u > sizeof(buf))
     return -1;
   buf[ppp_prefix + 0u] = code;
@@ -2159,7 +1831,7 @@ int ppp_send_lcp_echo_request_over_transport(ppp_transport_t *transport, ppp_ses
     return -1;
   }
   uint8_t buf[32];
-  const size_t ppp_prefix = ppp_write_frame_prefix(buf, sizeof(buf), PROTO_LCP, ppp);
+  const size_t ppp_prefix = ppp_session_frame_prefix(buf, sizeof(buf), PROTO_LCP, ppp);
   if (ppp_prefix == 0u || ppp_prefix + 8u > sizeof(buf))
     return -1;
   buf[ppp_prefix + 0u] = (uint8_t)LCP_CODE_ECHO_REQUEST;
@@ -2185,7 +1857,6 @@ int ppp_send_lcp_echo_request(int esp_fd, esp_keys_t *esp, const struct sockaddr
 static int ppp_deliver_ipv4_payload(const uint8_t *p, size_t len, packet_endpoint_t *endpoint) {
   tf_ipv4_info_t ipv4_info;
   if (tf_ipv4_parse(p, len, &ipv4_info) != 0) {
-    engine_dp_note_tun_ipv4_inbound_malformed(len);
     tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp inbound malformed ipv4 dropped len=%zu", len);
     return 0;
   }
@@ -2194,13 +1865,10 @@ static int ppp_deliver_ipv4_payload(const uint8_t *p, size_t len, packet_endpoin
    * to TUN/gVisor so trailing bytes do not become part of the packet stream.
    */
   size_t write_len = ipv4_info.total_len;
-  engine_dp_note_tun_ipv4_inbound(p, write_len);
   if (write_len < len) {
-    engine_dp_note_tun_ipv4_inbound_trimmed(len, write_len);
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp inbound ipv4 trimmed original_len=%zu total_len=%zu", len,
                       write_len);
   }
-  engine_dp_note_tun_ipv4_inbound_accepted(write_len);
   if (packet_endpoint_write(endpoint, p, write_len) != 0) {
     static time_t s_last_tun_write_warn;
     time_t now = time(NULL);
@@ -2210,10 +1878,6 @@ static int ppp_deliver_ipv4_payload(const uint8_t *p, size_t len, packet_endpoin
                         endpoint != NULL && endpoint->name != NULL ? endpoint->name : "unknown", errno, write_len);
     }
     return -1;
-  }
-  engine_dp_note_tun_ipv4_written(write_len);
-  if (write_len >= 10u) {
-    engine_dp_note_tun_ipv4_protocol(p[9]);
   }
   return 0;
 }
@@ -2272,8 +1936,10 @@ int ppp_dispatch_ppp_frame_over_transport(ppp_transport_t *transport, ppp_sessio
     return 0;
   }
 
-  /* 0x0021: deliver IPv4 datagram to TUN (or proxy endpoint). */
+  /* 0x0021: deliver IPv4 datagram to TUN (or proxy endpoint) only when MPPE is not active. */
   if (proto == PROTO_IP) {
+    if (ppp != NULL && ppp->mppe.enabled)
+      return 0;
     return ppp_deliver_ipv4_payload(p, len, endpoint);
   }
   /* 0x8057: IPv6CP not supported; signal with LCP Protocol-Reject. */
@@ -2332,4 +1998,182 @@ int ppp_dispatch_ppp_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *p
     transport_ptr = &transport;
   }
   return ppp_dispatch_ppp_frame_over_transport(transport_ptr, ppp, frame, len, endpoint);
+}
+
+typedef struct {
+  const uint8_t *frames[8];
+  size_t lens[8];
+  size_t count;
+  size_t idx;
+  size_t tx_count;
+} audit_ppp_mock_t;
+
+static int audit_ppp_mock_send(void *ctx, const uint8_t *ppp, size_t len) {
+  (void)ppp;
+  (void)len;
+  audit_ppp_mock_t *m = (audit_ppp_mock_t *)ctx;
+  m->tx_count++;
+  return 0;
+}
+
+static int audit_ppp_mock_recv(void *ctx, uint8_t *out, size_t cap, int timeout_ms) {
+  (void)timeout_ms;
+  audit_ppp_mock_t *m = (audit_ppp_mock_t *)ctx;
+  if (m->idx >= m->count)
+    return -1;
+  size_t flen = m->lens[m->idx];
+  if (flen > cap)
+    return -1;
+  memcpy(out, m->frames[m->idx], flen);
+  m->idx++;
+  return (int)flen;
+}
+
+typedef struct {
+  size_t write_count;
+} audit_ep_ctx_t;
+
+static int audit_ep_write(void *ctx, const uint8_t *buf, size_t len) {
+  (void)buf;
+  (void)len;
+  audit_ep_ctx_t *ep = (audit_ep_ctx_t *)ctx;
+  ep->write_count++;
+  return 0;
+}
+
+int ppp_run_audit_check(int item_id, char *err_buf, size_t err_cap) {
+  if (item_id == 2) {
+    static const uint8_t peer_cr[] = {0xff, 0x03, 0xc0, 0x21, 0x01, 0x01, 0x00, 0x04};
+    static const uint8_t peer_nak_pap[] = {0xff, 0x03, 0xc0, 0x21, 0x03, 0x01, 0x00, 0x08, 0x03, 0x04, 0xc0, 0x23};
+    static const uint8_t peer_ack[] = {0xff, 0x03, 0xc0, 0x21, 0x02, 0x02, 0x00, 0x04};
+    audit_ppp_mock_t mock = {
+        .frames = {peer_cr, peer_nak_pap, peer_ack},
+        .lens = {sizeof(peer_cr), sizeof(peer_nak_pap), sizeof(peer_ack)},
+        .count = 3,
+    };
+    ppp_transport_t t = {.ctx = &mock, .send_frame = audit_ppp_mock_send, .recv_frame = audit_ppp_mock_recv};
+    ppp_session_t sess;
+    memset(&sess, 0, sizeof(sess));
+    sess.link_mtu = 1500;
+    ppp_auth_kind_t auth = PPP_AUTH_MSCHAPV2;
+    if (ppp_lcp_negotiate_transport(&t, &auth, &sess) != 0) {
+      snprintf(err_buf, err_cap, "ppp_lcp_negotiate_transport failed");
+      return -1;
+    }
+    if (auth != PPP_AUTH_PAP) {
+      snprintf(err_buf, err_cap, "8-byte PAP Configure-Nak yielded auth=%d (%s), expected PPP_AUTH_PAP(%d)", (int)auth,
+               ppp_auth_name(auth), (int)PPP_AUTH_PAP);
+      return -1;
+    }
+    /* Empty 4-byte Configure-Nak must not underflow. */
+    static const uint8_t empty_nak[] = {0xff, 0x03, 0xc0, 0x21, 0x03, 0x01, 0x00, 0x04};
+    audit_ppp_mock_t mock2 = {
+        .frames = {peer_cr, empty_nak, peer_ack},
+        .lens = {sizeof(peer_cr), sizeof(empty_nak), sizeof(peer_ack)},
+        .count = 3,
+    };
+    ppp_transport_t t2 = {.ctx = &mock2, .send_frame = audit_ppp_mock_send, .recv_frame = audit_ppp_mock_recv};
+    ppp_auth_kind_t auth2 = PPP_AUTH_MSCHAPV2;
+    if (ppp_lcp_negotiate_transport(&t2, &auth2, &sess) != 0 || auth2 != PPP_AUTH_CHAP_MD5) {
+      snprintf(err_buf, err_cap, "4-byte empty Configure-Nak failed auth2=%d", (int)auth2);
+      return -1;
+    }
+    /* Oversized username/password must be rejected without overflow or send. */
+    char big_user[500];
+    memset(big_user, 'u', sizeof(big_user) - 1u);
+    big_user[sizeof(big_user) - 1u] = '\0';
+    audit_ppp_mock_t mock_pap = {.count = 0};
+    ppp_transport_t t_pap = {.ctx = &mock_pap, .send_frame = audit_ppp_mock_send, .recv_frame = audit_ppp_mock_recv};
+    if (ppp_auth_pap_transport(&t_pap, big_user, "pw") != -1 || mock_pap.tx_count != 0u) {
+      snprintf(err_buf, err_cap, "PAP accepted oversized username tx=%zu", mock_pap.tx_count);
+      return -1;
+    }
+    if (ppp_auth_pap_transport(&t_pap, "user", big_user) != -1 || mock_pap.tx_count != 0u) {
+      snprintf(err_buf, err_cap, "PAP accepted oversized password tx=%zu", mock_pap.tx_count);
+      return -1;
+    }
+    static const uint8_t chap_chal[28] = {0xff, 0x03, 0xc2, 0x23, 0x01, 0x01, 0x00, 0x18, 0x10, 1,  2,  3,   4,   5,
+                                          6,    7,    8,    9,    10,   11,   12,   13,   14,   15, 16, 's', 'r', 'v'};
+    audit_ppp_mock_t mock_chap = {.frames = {chap_chal}, .lens = {sizeof(chap_chal)}, .count = 1};
+    ppp_transport_t t_chap = {.ctx = &mock_chap, .send_frame = audit_ppp_mock_send, .recv_frame = audit_ppp_mock_recv};
+    if (ppp_auth_chap_md5_transport(&t_chap, big_user, "pw") != -1 || mock_chap.tx_count != 0u) {
+      snprintf(err_buf, err_cap, "CHAP-MD5 accepted oversized username tx=%zu", mock_chap.tx_count);
+      return -1;
+    }
+    audit_ppp_mock_t mock_ms = {.frames = {chap_chal}, .lens = {sizeof(chap_chal)}, .count = 1};
+    ppp_transport_t t_ms = {.ctx = &mock_ms, .send_frame = audit_ppp_mock_send, .recv_frame = audit_ppp_mock_recv};
+    if (ppp_auth_mschapv2_transport(&t_ms, big_user, "pw", NULL) != -1 || mock_ms.tx_count != 0u) {
+      snprintf(err_buf, err_cap, "MS-CHAPv2 accepted oversized username tx=%zu", mock_ms.tx_count);
+      return -1;
+    }
+    /* RFC 1994 CHAP-MD5 must accept 255-byte username (matching RFC 1334 PAP). */
+    char user255[256];
+    memset(user255, 'u', 255);
+    user255[255] = '\0';
+    static const uint8_t chap_success[] = {0xff, 0x03, 0xc2, 0x23, 0x03, 0x01, 0x00, 0x04};
+    audit_ppp_mock_t mock_chap255 = {
+        .frames = {chap_chal, chap_success},
+        .lens = {sizeof(chap_chal), sizeof(chap_success)},
+        .count = 2,
+    };
+    ppp_transport_t t_chap255 = {
+        .ctx = &mock_chap255, .send_frame = audit_ppp_mock_send, .recv_frame = audit_ppp_mock_recv};
+    if (ppp_auth_chap_md5_transport(&t_chap255, user255, "pw") != 0 || mock_chap255.tx_count != 1u) {
+      snprintf(err_buf, err_cap, "CHAP-MD5 rejected valid 255-byte username tx=%zu", mock_chap255.tx_count);
+      return -1;
+    }
+    /* RFC 2759 MS-CHAPv2 accepts <= 256 UTF-16LE code units and rejects > 256 without silent truncation. */
+    char pw257[258];
+    memset(pw257, 'p', 257);
+    pw257[257] = '\0';
+    audit_ppp_mock_t mock_ms_pw = {.frames = {chap_chal}, .lens = {sizeof(chap_chal)}, .count = 1};
+    ppp_transport_t t_ms_pw = {
+        .ctx = &mock_ms_pw, .send_frame = audit_ppp_mock_send, .recv_frame = audit_ppp_mock_recv};
+    if (ppp_auth_mschapv2_transport(&t_ms_pw, "user", pw257, NULL) != -1 || mock_ms_pw.tx_count != 0u) {
+      snprintf(err_buf, err_cap, "MS-CHAPv2 accepted 257-char password tx=%zu", mock_ms_pw.tx_count);
+      return -1;
+    }
+    uint8_t chal16[16] = {1}, pchal16[16] = {2}, val49[49], hh16[16];
+    if (ppp_mschapv2_response_value("user", pw257, chal16, pchal16, val49) != -1 ||
+        ppp_mschapv2_nt_password_hash_hash(pw257, hh16) != -1) {
+      snprintf(err_buf, err_cap, "MS-CHAPv2 primitive truncated >256-char password instead of rejecting");
+      return -1;
+    }
+    return 0;
+  }
+  if (item_id == 4) {
+    audit_ep_ctx_t ep_ctx = {0};
+    packet_endpoint_t ep = {.ctx = &ep_ctx, .write_packet = audit_ep_write, .name = "audit"};
+    static const uint8_t cleartext_ip_frame[] = {
+        0xff, 0x03, 0x00, 0x21, 0x45, 0x00, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00,
+        0x40, 0x11, 0x00, 0x00, 10,   0,    0,    1,    10,   0,    0,    2,
+    };
+    ppp_session_t sess;
+    memset(&sess, 0, sizeof(sess));
+    uint8_t hh[16] = {1};
+    uint8_t ntr[24] = {2};
+    if (ppp_mppe_init_client(&sess.mppe, hh, ntr, 0) != 0) {
+      snprintf(err_buf, err_cap, "ppp_mppe_init_client failed");
+      return -1;
+    }
+    (void)ppp_dispatch_ppp_frame_over_transport(NULL, &sess, cleartext_ip_frame, sizeof(cleartext_ip_frame), &ep);
+    if (ep_ctx.write_count != 0u) {
+      ppp_mppe_zero(&sess.mppe);
+      snprintf(err_buf, err_cap, "cleartext PROTO_IP delivered while mppe.enabled=1 (inbound_count=%zu)",
+               ep_ctx.write_count);
+      return -1;
+    }
+    ppp_mppe_zero(&sess.mppe);
+    /* Verify cleartext PROTO_IP still delivers when MPPE is disabled. */
+    memset(&sess, 0, sizeof(sess));
+    if (ppp_dispatch_ppp_frame_over_transport(NULL, &sess, cleartext_ip_frame, sizeof(cleartext_ip_frame), &ep) != 0 ||
+        ep_ctx.write_count != 1u) {
+      snprintf(err_buf, err_cap, "cleartext PROTO_IP failed when mppe.enabled=0 (inbound_count=%zu)",
+               ep_ctx.write_count);
+      return -1;
+    }
+    return 0;
+  }
+  snprintf(err_buf, err_cap, "unsupported ppp audit item=%d", item_id);
+  return -1;
 }

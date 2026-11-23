@@ -138,6 +138,7 @@ static int64_t monotonic_ms(void) {
 
 int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_ipv4[4], int protect_vpn,
                     const char *bind_iface) {
+  signal(SIGPIPE, SIG_IGN);
   if (r == NULL || peer_ipv4 == NULL || !pptp_is_safe_helper_path(helper_path)) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "pptp root: invalid helper path len=%zu",
                       helper_path != NULL ? strlen(helper_path) : 0u);
@@ -252,6 +253,7 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
     pptp_root_stop(r);
     return TUNNEL_EXIT_ROOT_DENIED;
   }
+  (void)set_nonblock(r->to_helper_fd);
 
   /* Phase 7: read the fixed-size reply frame; give up after 30 s, on stop request, or on helper EOF. */
   uint8_t reply[HELPER_REPLY_LEN] = {0};
@@ -370,11 +372,32 @@ void pptp_root_stop(pptp_root_t *r) {
     }
     if (!reaped) {
       (void)kill(r->pid, SIGKILL);
-      (void)waitpid(r->pid, &status, 0);
+      for (int i = 0; i < 5; i++) {
+        pid_t w = waitpid(r->pid, &status, WNOHANG);
+        if (w == r->pid || (w < 0 && errno == ECHILD))
+          break;
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 10000000L};
+        (void)nanosleep(&ts, NULL);
+      }
     }
     r->pid = -1;
   }
   r->rx_len = 0u;
+}
+
+static void drain_helper_rx_nonblock(pptp_root_t *r) {
+  if (r->from_helper_fd < 0)
+    return;
+  while (r->rx_len < sizeof(r->rx_buf)) {
+    ssize_t n = read(r->from_helper_fd, r->rx_buf + r->rx_len, sizeof(r->rx_buf) - r->rx_len);
+    if (n > 0) {
+      r->rx_len += (size_t)n;
+      continue;
+    }
+    if (n < 0 && errno == EINTR)
+      continue;
+    break;
+  }
 }
 
 int pptp_root_send_gre(pptp_root_t *r, const uint8_t *gre, size_t gre_len) {
@@ -385,7 +408,45 @@ int pptp_root_send_gre(pptp_root_t *r, const uint8_t *gre, size_t gre_len) {
   uint8_t frame[2u + HELPER_MAX_FRAME];
   util_write_be16(frame, (uint16_t)gre_len);
   memcpy(frame + 2u, gre, gre_len);
-  return write_all_fd(r->to_helper_fd, frame, 2u + gre_len);
+  const size_t total = 2u + gre_len;
+  size_t off = 0u;
+  const int64_t deadline = monotonic_ms() + 50LL;
+  while (off < total) {
+    ssize_t n = write(r->to_helper_fd, frame + off, total - off);
+    if (n > 0) {
+      off += (size_t)n;
+      continue;
+    }
+    if (n < 0 && errno == EINTR)
+      continue;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      int64_t rem = (off == 0u) ? (deadline - monotonic_ms()) : 1000LL;
+      if (rem <= 0) {
+        errno = ENOBUFS;
+        return -1;
+      }
+      struct pollfd fds[2];
+      nfds_t nfds = 1u;
+      fds[0].fd = r->to_helper_fd;
+      fds[0].events = POLLOUT;
+      if (r->from_helper_fd >= 0 && r->rx_len < sizeof(r->rx_buf)) {
+        fds[1].fd = r->from_helper_fd;
+        fds[1].events = POLLIN;
+        nfds = 2u;
+      }
+      int pr = poll(fds, nfds, (int)rem);
+      if (nfds == 2u && (fds[1].revents & POLLIN) != 0)
+        drain_helper_rx_nonblock(r);
+      if (pr <= 0) {
+        if (pr == 0)
+          errno = (off == 0u) ? ENOBUFS : ETIMEDOUT;
+        return -1;
+      }
+      continue;
+    }
+    return -1;
+  }
+  return 0;
 }
 
 int pptp_root_has_buffered_frame(const pptp_root_t *r) {
@@ -454,4 +515,62 @@ int pptp_root_read_gre(pptp_root_t *r, uint8_t *out, size_t cap) {
     r->rx_len += (size_t)n;
     return pop_buffered_frame(r, out, cap);
   }
+}
+
+int pptp_root_run_audit_check(int item_id, char *err_buf, size_t err_cap) {
+  if (item_id != 7) {
+    snprintf(err_buf, err_cap, "unsupported pptp_root audit item=%d", item_id);
+    return -1;
+  }
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  if (sigaction(SIGPIPE, NULL, &sa) != 0 || sa.sa_handler != SIG_IGN) {
+    snprintf(err_buf, err_cap, "SIGPIPE handler is not SIG_IGN (handler=%p)", (void *)sa.sa_handler);
+    return -1;
+  }
+
+  /* Full non-blocking pipe must return within 150 ms with ENOBUFS, not block 1000 ms. */
+  int fds[2] = {-1, -1};
+  if (pipe(fds) != 0) {
+    snprintf(err_buf, err_cap, "pipe failed errno=%d", errno);
+    return -1;
+  }
+  (void)set_nonblock(fds[1]);
+  uint8_t fill[4096];
+  memset(fill, 0x55, sizeof(fill));
+  while (write(fds[1], fill, sizeof(fill)) > 0) {
+  }
+  pptp_root_t r;
+  pptp_root_init(&r);
+  r.to_helper_fd = fds[1];
+  uint8_t gre[64] = {0x30, 0x01};
+  int64_t t0 = monotonic_ms();
+  int send_rc = pptp_root_send_gre(&r, gre, sizeof(gre));
+  int send_err = errno;
+  int64_t elapsed = monotonic_ms() - t0;
+  close(fds[0]);
+  close(fds[1]);
+  if (send_rc != -1 || send_err != ENOBUFS || elapsed > 200) {
+    snprintf(err_buf, err_cap, "full-pipe send rc=%d errno=%d elapsed=%lldms (want -1, ENOBUFS=%d, <=200ms)", send_rc,
+             send_err, (long long)elapsed, ENOBUFS);
+    return -1;
+  }
+
+  /* Closed read end must return -1 with EPIPE without raising SIGPIPE. */
+  if (pipe(fds) != 0) {
+    snprintf(err_buf, err_cap, "pipe2 failed errno=%d", errno);
+    return -1;
+  }
+  close(fds[0]);
+  pptp_root_init(&r);
+  r.to_helper_fd = fds[1];
+  errno = 0;
+  send_rc = pptp_root_send_gre(&r, gre, sizeof(gre));
+  send_err = errno;
+  close(fds[1]);
+  if (send_rc != -1 || send_err != EPIPE) {
+    snprintf(err_buf, err_cap, "closed-pipe send rc=%d errno=%d (want -1, EPIPE=%d)", send_rc, send_err, EPIPE);
+    return -1;
+  }
+  return 0;
 }

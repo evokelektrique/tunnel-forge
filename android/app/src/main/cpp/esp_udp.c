@@ -15,9 +15,11 @@
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/md.h>
+#include <mbedtls/platform_util.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define LOG_TAG "tunnel_engine"
 
@@ -243,6 +245,83 @@ static const mbedtls_cipher_info_t *esp_cipher_info(const esp_keys_t *k, size_t 
   }
 }
 
+void esp_keys_reset_cache(esp_keys_t *k) {
+  if (k == NULL)
+    return;
+  memset(&k->cache, 0, sizeof(k->cache));
+}
+
+void esp_keys_cleanup(esp_keys_t *k) {
+  if (k == NULL)
+    return;
+  if (k->cache.rx_md_ready)
+    mbedtls_md_free(&k->cache.rx_md);
+  if (k->cache.rx_cipher_ready)
+    mbedtls_cipher_free(&k->cache.rx_cipher);
+  if (k->cache.tx_cipher_ready)
+    mbedtls_cipher_free(&k->cache.tx_cipher);
+  if (k->cache.tx_md_ready)
+    mbedtls_md_free(&k->cache.tx_md);
+  mbedtls_platform_zeroize(k, sizeof(*k));
+}
+
+static int esp_ensure_md_ctx(int *ready, mbedtls_md_context_t *ctx, size_t *cached_len, uint8_t *cached_key,
+                             const uint8_t *key, size_t key_len) {
+  if (key_len > 32u)
+    return -1;
+  if (*ready && *cached_len == key_len && (key_len == 0u || memcmp(cached_key, key, key_len) == 0))
+    return 0;
+  if (*ready) {
+    mbedtls_md_free(ctx);
+    *ready = 0;
+  }
+  const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+  mbedtls_md_init(ctx);
+  if (mbedtls_md_setup(ctx, md, 1) != 0 || mbedtls_md_hmac_starts(ctx, key, key_len) != 0) {
+    mbedtls_md_free(ctx);
+    return -1;
+  }
+  *cached_len = key_len;
+  if (key_len > 0u)
+    memcpy(cached_key, key, key_len);
+  *ready = 1;
+  return 0;
+}
+
+static int esp_ensure_cipher_ctx(int *ready, mbedtls_cipher_context_t *ctx, uint8_t *cached_id, size_t *cached_len,
+                                 uint8_t *cached_key, uint8_t cipher_id, const mbedtls_cipher_info_t *info,
+                                 const uint8_t *key, size_t key_len, mbedtls_operation_t op) {
+  if (key_len > 32u)
+    return -3;
+  if (*ready && *cached_id == cipher_id && *cached_len == key_len &&
+      (key_len == 0u || memcmp(cached_key, key, key_len) == 0)) {
+    return 0;
+  }
+  if (*ready) {
+    mbedtls_cipher_free(ctx);
+    *ready = 0;
+  }
+  mbedtls_cipher_init(ctx);
+  if (mbedtls_cipher_setup(ctx, info) != 0) {
+    mbedtls_cipher_free(ctx);
+    return -2;
+  }
+  if (mbedtls_cipher_setkey(ctx, key, (int)key_len * 8, op) != 0) {
+    mbedtls_cipher_free(ctx);
+    return -3;
+  }
+  if (mbedtls_cipher_set_padding_mode(ctx, MBEDTLS_PADDING_NONE) != 0) {
+    mbedtls_cipher_free(ctx);
+    return -4;
+  }
+  *cached_id = cipher_id;
+  *cached_len = key_len;
+  if (key_len > 0u)
+    memcpy(cached_key, key, key_len);
+  *ready = 1;
+  return 0;
+}
+
 /**
  * Validate and decrypt one inbound ESP datagram into its inner L2TP payload.
  *
@@ -394,23 +473,19 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
    * CBC decrypt must not run on packets that fail this check.
    */
   uint8_t mac_calc[32];
-  const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
-  mbedtls_md_context_t ctx;
-  mbedtls_md_init(&ctx);
-  if (mbedtls_md_setup(&ctx, md, 1) != 0) {
-    mbedtls_md_free(&ctx);
-    esp_fail_capture(ESP_FAIL_MD_SETUP, in_len, esp_head, 8, 0, 0, 0, 0, 0);
-    return -1;
-  }
   const uint8_t *auth_start = in;
   if (k->udp_encap && in_len >= 4u && util_read_be32(in) == 0u) {
     auth_start = in + 4;
   }
   const uint8_t *auth_in = k->auth_key_len ? k->auth_key + k->auth_key_len : k->auth_key;
-  mbedtls_md_hmac_starts(&ctx, auth_in, k->auth_key_len);
-  mbedtls_md_hmac_update(&ctx, auth_start, (size_t)(icv - auth_start));
-  mbedtls_md_hmac_finish(&ctx, mac_calc);
-  mbedtls_md_free(&ctx);
+  if (esp_ensure_md_ctx(&k->cache.rx_md_ready, &k->cache.rx_md, &k->cache.rx_auth_len, k->cache.rx_auth_key, auth_in,
+                        k->auth_key_len) != 0 ||
+      mbedtls_md_hmac_reset(&k->cache.rx_md) != 0 ||
+      mbedtls_md_hmac_update(&k->cache.rx_md, auth_start, (size_t)(icv - auth_start)) != 0 ||
+      mbedtls_md_hmac_finish(&k->cache.rx_md, mac_calc) != 0) {
+    esp_fail_capture(ESP_FAIL_MD_SETUP, in_len, esp_head, 8, 0, 0, 0, 0, 0);
+    return -1;
+  }
   if (memcmp(mac_calc, icv, icv_len) != 0) {
     s_esp_drop_stats.hmac_mismatch++;
     esp_fail_capture(ESP_FAIL_HMAC, in_len, esp_head, 8, 0, 0, 0, 0, 0);
@@ -424,48 +499,33 @@ int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *ou
    * mbedTLS padding is disabled because ESP has its own trailer layout:
    * payload || 1,2,3... padding || pad length || next header.
    */
-  mbedtls_cipher_context_t ciph;
-  mbedtls_cipher_init(&ciph);
   const uint8_t *enc_in = k->enc_key_len ? k->enc_key + k->enc_key_len : k->enc_key;
-  if (mbedtls_cipher_setup(&ciph, info) != 0) {
-    mbedtls_cipher_free(&ciph);
-    esp_fail_capture(ESP_FAIL_CIPHER_SETUP, in_len, esp_head, 8, 0, 0, 0, 0, 0);
-    return -1;
-  }
-  if (mbedtls_cipher_setkey(&ciph, enc_in, (int)k->enc_key_len * 8, MBEDTLS_DECRYPT) != 0) {
-    mbedtls_cipher_free(&ciph);
-    esp_fail_capture(ESP_FAIL_CIPHER_SETKEY, in_len, esp_head, 8, 0, 0, 0, 0, 0);
-    return -1;
-  }
-  if (mbedtls_cipher_set_padding_mode(&ciph, MBEDTLS_PADDING_NONE) != 0) {
-    mbedtls_cipher_free(&ciph);
-    esp_fail_capture(ESP_FAIL_CIPHER_PADMODE, in_len, esp_head, 8, 0, 0, 0, 0, 0);
+  int cipher_rc = esp_ensure_cipher_ctx(&k->cache.rx_cipher_ready, &k->cache.rx_cipher, &k->cache.rx_cipher_id,
+                                        &k->cache.rx_enc_len, k->cache.rx_enc_key, k->cipher, info, enc_in,
+                                        k->enc_key_len, MBEDTLS_DECRYPT);
+  if (cipher_rc != 0) {
+    esp_fail_kind_t kind = ESP_FAIL_CIPHER_SETUP;
+    if (cipher_rc == -3)
+      kind = ESP_FAIL_CIPHER_SETKEY;
+    else if (cipher_rc == -4)
+      kind = ESP_FAIL_CIPHER_PADMODE;
+    esp_fail_capture(kind, in_len, esp_head, 8, 0, 0, 0, 0, 0);
     return -1;
   }
   if (ct_len > *out_len) {
-    mbedtls_cipher_free(&ciph);
     esp_fail_capture(ESP_FAIL_OUT_CAP, in_len, esp_head, 8, 0, 0, ct_len, *out_len, 0);
     return -1;
   }
-  uint8_t tmp[4096];
-  if (ct_len > sizeof(tmp)) {
-    mbedtls_cipher_free(&ciph);
-    esp_fail_capture(ESP_FAIL_CT_OVERSIZE, in_len, esp_head, 8, 0, 0, ct_len, 0, 0);
-    return -1;
-  }
-  memcpy(tmp, ct, ct_len);
   size_t olen = 0;
   uint8_t ivbuf[16];
   memcpy(ivbuf, iv, block_size);
   if (ct_len == 0 || (ct_len % block_size) != 0 ||
-      mbedtls_cipher_crypt(&ciph, ivbuf, block_size, tmp, ct_len, out, &olen) != 0) {
-    mbedtls_cipher_free(&ciph);
+      mbedtls_cipher_crypt(&k->cache.rx_cipher, ivbuf, block_size, ct, ct_len, out, &olen) != 0) {
     s_esp_drop_stats.cipher_decrypt_failed++;
     esp_fail_capture(ESP_FAIL_CIPHER, in_len, esp_head, 8, 0, 0, 0, 0, 0);
     tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp decrypt drop: cbc decrypt failed cipher=%u", (unsigned)k->cipher);
     return -1;
   }
-  mbedtls_cipher_free(&ciph);
 
   /**
    * Step 5: validate the ESP trailer and unwrap transport-mode UDP.
@@ -651,40 +711,30 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
   tmp[esp_plain_len + pad_len] = (uint8_t)pad_len;
   tmp[esp_plain_len + pad_len + 1] = 17; /* Next Header: UDP */
 
-  mbedtls_cipher_context_t ciph;
-  mbedtls_cipher_init(&ciph);
-  if (mbedtls_cipher_setup(&ciph, info) != 0 ||
-      mbedtls_cipher_setkey(&ciph, k->enc_key, (int)k->enc_key_len * 8, MBEDTLS_ENCRYPT) != 0) {
-    mbedtls_cipher_free(&ciph);
-    return -1;
-  }
-  if (mbedtls_cipher_set_padding_mode(&ciph, MBEDTLS_PADDING_NONE) != 0) {
-    mbedtls_cipher_free(&ciph);
+  if (esp_ensure_cipher_ctx(&k->cache.tx_cipher_ready, &k->cache.tx_cipher, &k->cache.tx_cipher_id,
+                            &k->cache.tx_enc_len, k->cache.tx_enc_key, k->cipher, info, k->enc_key, k->enc_key_len,
+                            MBEDTLS_ENCRYPT) != 0) {
     return -1;
   }
   size_t olen = 0;
   uint8_t ivcopy[16];
   memcpy(ivcopy, iv, block_size);
-  if (mbedtls_cipher_crypt(&ciph, ivcopy, block_size, tmp, ct_len, buf + off, &olen) != 0) {
-    mbedtls_cipher_free(&ciph);
+  if (mbedtls_cipher_crypt(&k->cache.tx_cipher, ivcopy, block_size, tmp, ct_len, buf + off, &olen) != 0) {
     return -1;
   }
-  mbedtls_cipher_free(&ciph);
   off += olen;
 
   /* Integrity covers ESP header + IV + ciphertext; 96-bit truncation appended as ICV. */
-  const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
-  mbedtls_md_context_t mctx;
-  mbedtls_md_init(&mctx);
-  if (mbedtls_md_setup(&mctx, md, 1) != 0) {
-    mbedtls_md_free(&mctx);
+  if (esp_ensure_md_ctx(&k->cache.tx_md_ready, &k->cache.tx_md, &k->cache.tx_auth_len, k->cache.tx_auth_key,
+                        k->auth_key, k->auth_key_len) != 0 ||
+      mbedtls_md_hmac_reset(&k->cache.tx_md) != 0 ||
+      mbedtls_md_hmac_update(&k->cache.tx_md, buf + esp_start, off - esp_start) != 0) {
     return -1;
   }
-  mbedtls_md_hmac_starts(&mctx, k->auth_key, k->auth_key_len);
-  mbedtls_md_hmac_update(&mctx, buf + esp_start, off - esp_start);
   uint8_t mac[20];
-  mbedtls_md_hmac_finish(&mctx, mac);
-  mbedtls_md_free(&mctx);
+  if (mbedtls_md_hmac_finish(&k->cache.tx_md, mac) != 0) {
+    return -1;
+  }
   memcpy(buf + off, mac, 12);
   off += 12;
   ssize_t sent = sendto(fd, buf, off, 0, peer, peer_len);
@@ -709,4 +759,77 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
     errno = saved_errno;
   }
   return (int)sent;
+}
+
+int esp_run_audit_check(int item_id, char *err_buf, size_t err_cap) {
+  if (item_id != 16) {
+    snprintf(err_buf, err_cap, "unexpected esp audit item_id=%d", item_id);
+    return -1;
+  }
+  esp_keys_t sender = {0};
+  esp_keys_t receiver = {0};
+  sender.cipher = ESP_CIPHER_AES_CBC;
+  sender.enc_key_len = 16u;
+  sender.auth_key_len = 20u;
+  sender.spi_i = 0x12345678u;
+  sender.seq_i = 1u;
+  sender.udp_encap = 1;
+  memset(sender.enc_key, 0x31, 16u);
+  memset(sender.auth_key, 0x42, 20u);
+
+  receiver.cipher = ESP_CIPHER_AES_CBC;
+  receiver.enc_key_len = 16u;
+  receiver.auth_key_len = 20u;
+  receiver.spi_r = sender.spi_i;
+  receiver.udp_encap = 1;
+  memcpy(receiver.enc_key + 16u, sender.enc_key, 16u);
+  memcpy(receiver.auth_key + 20u, sender.auth_key, 20u);
+
+  int sockets[2] = {-1, -1};
+  if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sockets) != 0) {
+    snprintf(err_buf, err_cap, "socketpair failed errno=%d", errno);
+    return -1;
+  }
+  int rc = 0;
+  for (int i = 0; i < 1000; i++) {
+    uint8_t payload[16] = {0x40, 0x02, 0, 10, 0, 1, 0, 1, 0xff, 0x03};
+    payload[10] = (uint8_t)(i & 0xff);
+    payload[11] = (uint8_t)((i >> 8) & 0xff);
+    int sent = esp_encrypt_send(sockets[0], &sender, NULL, 0, payload, sizeof(payload));
+    if (sent <= 0) {
+      snprintf(err_buf, err_cap, "esp_encrypt_send failed iter=%d", i);
+      rc = -1;
+      break;
+    }
+    uint8_t datagram[256];
+    ssize_t rcvd = recv(sockets[1], datagram, sizeof(datagram), MSG_DONTWAIT);
+    if (rcvd != sent) {
+      snprintf(err_buf, err_cap, "recv mismatch iter=%d rcvd=%zd sent=%d", i, rcvd, sent);
+      rc = -1;
+      break;
+    }
+    uint8_t plain[256];
+    size_t plain_len = sizeof(plain);
+    if (esp_try_decrypt(&receiver, datagram, (size_t)rcvd, plain, &plain_len) != 0 || plain_len != sizeof(payload) ||
+        memcmp(plain, payload, sizeof(payload)) != 0) {
+      snprintf(err_buf, err_cap, "esp_try_decrypt mismatch iter=%d", i);
+      rc = -1;
+      break;
+    }
+  }
+  close(sockets[0]);
+  close(sockets[1]);
+  if (rc == 0 && (!sender.cache.tx_cipher_ready || !sender.cache.tx_md_ready || !receiver.cache.rx_cipher_ready ||
+                  !receiver.cache.rx_md_ready)) {
+    snprintf(err_buf, err_cap, "expected ESP crypto contexts to remain cached");
+    rc = -1;
+  }
+  esp_keys_cleanup(&sender);
+  esp_keys_cleanup(&receiver);
+  if (rc == 0 && (sender.cache.tx_cipher_ready || sender.cache.tx_md_ready || receiver.cache.rx_cipher_ready ||
+                  receiver.cache.rx_md_ready || sender.enc_key[0] != 0 || receiver.enc_key[16] != 0)) {
+    snprintf(err_buf, err_cap, "esp_keys_cleanup failed to clear contexts/keys");
+    rc = -1;
+  }
+  return rc;
 }

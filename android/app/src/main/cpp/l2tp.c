@@ -282,6 +282,7 @@ static void ingest_peer_ns(l2tp_session_t *s, uint16_t peer_ns) { s->recv_nr_exp
 static int esp_prepare_profile_variant(const esp_keys_t *src, esp_keys_t *dst, int swap_direction,
                                        int swap_split_order) {
   *dst = *src;
+  esp_keys_reset_cache(dst);
   if ((src->enc_key_len != 16 && src->enc_key_len != 24) || src->auth_key_len != 20)
     return -1;
   if (src->spi_i == 0 || src->spi_r == 0)
@@ -638,6 +639,7 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
         continue;
       }
       if (send_ctrl(esp_fd, &esp_alt, peer, peer_len, s, avps, ao) != 0) {
+        esp_keys_cleanup(&esp_alt);
         tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp: alternate SCCRQ send failed (%s)", tries[ti].name);
         continue;
       }
@@ -645,7 +647,9 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
       ilen = recv_ctrl_update_nr(esp_fd, esp, &esp_alt, in, sizeof(in), 15000, s, &mt, NULL, NULL, &used_alt);
       if (ilen >= 0) {
         if (used_alt) {
+          esp_keys_cleanup(esp);
           *esp = esp_alt;
+          esp_keys_reset_cache(&esp_alt);
           tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                             "l2tp: SCCRP received with fallback profile=%s spi_out=%08x spi_in=%08x", tries[ti].name,
                             (unsigned)esp->spi_i, (unsigned)esp->spi_r);
@@ -659,6 +663,7 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
         tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp: SCCRP not received with fallback profile=%s",
                           tries[ti].name);
       }
+      esp_keys_cleanup(&esp_alt);
     }
   }
   if (ilen < 0)

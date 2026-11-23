@@ -99,6 +99,31 @@ static int helper_write_all(int fd, const uint8_t *buf, size_t len) {
   return off == len ? 0 : -1;
 }
 
+/* Non-blocking frame write for data plane: returns 0 written, 1 dropped (pipe full before any byte), -1 fatal. */
+static int helper_write_frame_nonblock(int fd, const uint8_t *buf, size_t len) {
+  size_t off = 0u;
+  while (off < len && !g_helper_stop) {
+    ssize_t n = write(fd, buf + off, len - off);
+    if (n > 0) {
+      off += (size_t)n;
+      continue;
+    }
+    if (n < 0 && errno == EINTR)
+      continue;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (off == 0u)
+        return 1;
+      struct pollfd pfd = {.fd = fd, .events = POLLOUT};
+      int pr = poll(&pfd, 1, 200);
+      if (pr <= 0)
+        return -1;
+      continue;
+    }
+    return -1;
+  }
+  return off == len ? 0 : -1;
+}
+
 static void helper_send_reply(uint32_t status, uint32_t err_no) {
   uint8_t reply[HELPER_REPLY_LEN];
   reply[0] = HELPER_MAGIC_0;
@@ -182,6 +207,7 @@ int main(void) {
   helper_send_reply(HELPER_STATUS_OK, 0u);
 
   helper_set_nonblock(STDIN_FILENO);
+  helper_set_nonblock(STDOUT_FILENO);
   helper_set_nonblock(gre_fd);
 
   uint8_t pipe_rx[8192];
@@ -259,7 +285,7 @@ int main(void) {
     }
 
     if ((fds[1].revents & POLLIN) != 0) {
-      for (;;) {
+      for (int burst = 0; burst < 64; burst++) {
         ssize_t n = recv(gre_fd, raw_buf, sizeof(raw_buf), 0);
         if (n < 0) {
           if (errno == EINTR)
@@ -288,8 +314,12 @@ int main(void) {
           continue;
         helper_write_be16(out_frame, (uint16_t)gre_len);
         memcpy(out_frame + 2u, raw_buf + ihl, gre_len);
-        if (helper_write_all(STDOUT_FILENO, out_frame, 2u + gre_len) != 0) {
+        int wrc = helper_write_frame_nonblock(STDOUT_FILENO, out_frame, 2u + gre_len);
+        if (wrc < 0) {
           g_helper_stop = 1;
+          break;
+        }
+        if (wrc > 0) {
           break;
         }
       }

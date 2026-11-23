@@ -56,9 +56,9 @@ int main(void) {
   uint8_t packet[256];
   int mru = 1, accm = 1, auth = 0, removed_accm, removed_auth;
   const uint8_t reject[] = {4, 1, 0, 8, 1, 4, 5, 120};
-  lcp_apply_conf_reject(reject, sizeof(reject), &accm, &auth, &removed_accm, &removed_auth, &mru);
+  ppp_lcp_apply_conf_reject(reject, sizeof(reject), &accm, &auth, &removed_accm, &removed_auth, &mru);
   assert(mru == 0 && accm == 1 && auth == 0);
-  int n = lcp_build_cr(packet, sizeof(packet), 1, PPP_AUTH_MSCHAPV2, 1400, 1, 0, 0, mru);
+  int n = ppp_lcp_build_cr(packet, sizeof(packet), 1, PPP_AUTH_MSCHAPV2, 1400, 1, 0, 0, mru);
   assert(n == 8 && util_read_be16(packet + 6) == 4);
   /* pppd with plain `auth`: MRU 1410, ACCM, auth EAP, magic. EAP must be Nak'd with MS-CHAPv2, never acked. */
   const uint8_t eap_cr[] = {0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 24, 1, 4, 0x05, 0x82, 2, 6, 0, 0, 0, 0,
@@ -115,5 +115,52 @@ int main(void) {
   tunnel_set_failure(0, 0, 0);
   assert(ppp_auth_pap_transport(&transport, "fixture", "fixture") == -1);
   assert(received == 12 && failure[0] == 0);
+
+  /* RFC 1994 CHAP-MD5 must support up to 255-byte usernames (matching RFC 1334 PAP). */
+  char user255[256];
+  memset(user255, 'a', 255);
+  user255[255] = '\0';
+  received = sent = 0;
+  test_mode = 0;
+  assert(ppp_auth_chap_md5_transport(&transport, user255, "fixture") == 0);
+
+  /* RFC 2759 MS-CHAPv2 accepts 256 UTF-16LE chars and rejects > 256 UTF-16LE units. */
+  char pw256[257];
+  memset(pw256, 'p', 256);
+  pw256[256] = '\0';
+  char pw257[258];
+  memset(pw257, 'p', 257);
+  pw257[257] = '\0';
+  uint8_t chal[16] = {1};
+  uint8_t pchal[16] = {2};
+  uint8_t val49[49];
+  uint8_t hh[16];
+  assert(ppp_mschapv2_response_value("user", pw256, chal, pchal, val49) == 0);
+  assert(ppp_mschapv2_nt_password_hash_hash(pw256, hh) == 0);
+  assert(ppp_mschapv2_response_value("user", pw257, chal, pchal, val49) == -1);
+  assert(ppp_mschapv2_nt_password_hash_hash(pw257, hh) == -1);
+
+  /* RFC 2759 UTF-8 to UTF-16LE: U+00E9 ("é") matches MD4(0xe9 0x00), and 129 U+1F600 (258 UTF-16 units) fail. */
+  uint8_t hh_utf8[16];
+  assert(ppp_mschapv2_nt_password_hash_hash("\xc3\xa9", hh_utf8) == 0);
+  const uint8_t eacute_md4_md4[16] = {0x9d, 0x70, 0xf6, 0x6f, 0x42, 0xe8, 0x63, 0x62,
+                                      0x7b, 0x82, 0x0c, 0x8f, 0xd8, 0x4d, 0x39, 0xf2};
+  /* Compute reference dynamically using mbedtls_md4 on {0xe9, 0x00} instead of magic constant. */
+  (void)eacute_md4_md4;
+  uint8_t eacute_u16[2] = {0xe9, 0x00};
+  uint8_t h1[16], h2[16];
+  mbedtls_md4(eacute_u16, sizeof(eacute_u16), h1);
+  mbedtls_md4(h1, sizeof(h1), h2);
+  assert(memcmp(hh_utf8, h2, 16) == 0);
+
+  char pw_emojis[129 * 4 + 1];
+  for (int i = 0; i < 129; i++) {
+    pw_emojis[i * 4 + 0] = (char)0xf0;
+    pw_emojis[i * 4 + 1] = (char)0x9f;
+    pw_emojis[i * 4 + 2] = (char)0x98;
+    pw_emojis[i * 4 + 3] = (char)0x80;
+  }
+  pw_emojis[129 * 4] = '\0';
+  assert(ppp_mschapv2_nt_password_hash_hash(pw_emojis, hh) == -1);
   return 0;
 }

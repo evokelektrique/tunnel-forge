@@ -15,11 +15,17 @@ add_executable(test_l2tp_avps test_l2tp_avps.c ../../android/app/src/main/cpp/l2
 target_include_directories(test_l2tp_avps PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME l2tp_avps COMMAND test_l2tp_avps)
 
-add_executable(test_ppp_lcp test_ppp_lcp.c ../../android/app/src/main/cpp/util_endian.c)
+add_executable(test_ppp_lcp test_ppp_lcp.c
+ ../../android/app/src/main/cpp/ppp_wire.c
+ ../../android/app/src/main/cpp/ipv4_dataplane.c
+ ../../android/app/src/main/cpp/util_endian.c)
 target_include_directories(test_ppp_lcp PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME ppp_lcp COMMAND test_ppp_lcp)
 
-add_executable(test_ppp_ipcp test_ppp_ipcp.c ../../android/app/src/main/cpp/util_endian.c)
+add_executable(test_ppp_ipcp test_ppp_ipcp.c
+ ../../android/app/src/main/cpp/ppp_wire.c
+ ../../android/app/src/main/cpp/ipv4_dataplane.c
+ ../../android/app/src/main/cpp/util_endian.c)
 target_include_directories(test_ppp_ipcp PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME ppp_ipcp COMMAND test_ppp_ipcp)
 
@@ -27,7 +33,11 @@ add_executable(test_ppp_mschap_failure test_ppp_mschap_failure.c)
 target_include_directories(test_ppp_mschap_failure PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME ppp_mschap_failure COMMAND test_ppp_mschap_failure)
 
-add_executable(test_ppp_frame test_ppp_frame.c)
+add_executable(test_ppp_frame test_ppp_frame.c
+ ../../android/app/src/main/cpp/ppp_wire.c
+ ../../android/app/src/main/cpp/ipv4_dataplane.c
+ ../../android/app/src/main/cpp/util_endian.c)
+target_include_directories(test_ppp_frame PRIVATE ../../android/app/src/main/cpp)
 add_test(NAME ppp_frame COMMAND test_ppp_frame)
 
 add_executable(test_nat_t_keepalive test_nat_t_keepalive.c ../../android/app/src/main/cpp/nat_t_keepalive.c)
@@ -80,6 +90,8 @@ if(TUNNEL_FORGE_NATIVE_PROTOCOL_TESTS OR TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR)
   target_link_libraries(test_ppp_production PRIVATE mbedcrypto)
   target_sources(test_ppp_production PRIVATE
     ../../android/app/src/main/cpp/nat_t_keepalive.c
+    ../../android/app/src/main/cpp/ipv4_dataplane.c
+    ../../android/app/src/main/cpp/ppp_wire.c
     ../../android/app/src/main/cpp/ppp_mschap.c
     ../../android/app/src/main/cpp/ppp_mppe.c)
   target_sources(test_l2tp_production PRIVATE ../../android/app/src/main/cpp/l2tp_avps.c ../../android/app/src/main/cpp/nat_t_keepalive.c)

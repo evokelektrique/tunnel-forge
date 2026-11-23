@@ -68,8 +68,21 @@ void engine_set_pptp_runtime_config(const char *helper_path, const char *bind_if
 
 static proxy_packet_queue_ctx_t g_proxy_queue;
 static atomic_int g_proxy_bridge_active;
+static atomic_int g_proxy_bridge_users;
 static proxy_packet_queue_ctx_t g_vpn_dns_queue;
 static atomic_int g_vpn_dns_bridge_active;
+static atomic_int g_vpn_dns_users;
+
+static void tunnel_teardown_proxy_queue(atomic_int *active_flag, atomic_int *users_count,
+                                        proxy_packet_queue_ctx_t *ctx) {
+  atomic_store(active_flag, 0);
+  packet_endpoint_close_proxy_queue(ctx);
+  while (atomic_load(users_count) > 0) {
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000L};
+    (void)nanosleep(&ts, NULL);
+  }
+  packet_endpoint_destroy_proxy_queue(ctx);
+}
 static atomic_int g_vpn_dns_tun_fd = ATOMIC_VAR_INIT(-1);
 static uint8_t g_vpn_dns_ipv4[4];
 static atomic_int g_vpn_dns_intercept_enabled;
@@ -323,11 +336,14 @@ static void tunnel_close_active_session(const char *reason, int send_teardown) {
   ppp_session_clear_secrets(&g_state.ppp);
   if (g_state.protocol == TUNNEL_PROTOCOL_PPTP) {
     pptp_close(&g_state.pptp, send_teardown);
+    esp_keys_cleanup(&g_state.esp);
     g_state.ready = 0;
     return;
   }
-  if (g_state.ike.esp_fd < 0)
+  if (g_state.ike.esp_fd < 0) {
+    esp_keys_cleanup(&g_state.esp);
     return;
+  }
   if (send_teardown && g_state.l2tp.tunnel_id != 0) {
     if (l2tp_send_teardown(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer, g_state.ike.peer_len,
                            &g_state.l2tp) != 0) {
@@ -335,6 +351,7 @@ static void tunnel_close_active_session(const char *reason, int send_teardown) {
                         reason != NULL ? reason : "unknown");
     }
   }
+  esp_keys_cleanup(&g_state.esp);
   close(g_state.ike.esp_fd);
   g_state.ike.esp_fd = -1;
   g_state.ready = 0;
@@ -707,8 +724,7 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
     }
 
     if (pr == 0) {
-      /* Idle tick: emit periodic counters and send NAT-T keepalive when due. */
-      engine_dp_maybe_log_summary(time(NULL));
+      /* Idle tick: send NAT-T keepalive when due. */
       if (!is_pptp && g_state.esp.udp_encap && g_state.esp.enc_key_len) {
         time_t now = time(NULL);
         if (nat_t_keepalive_is_due(now, last_outbound_to_peer, NAT_T_KEEPALIVE_INTERVAL_SECS)) {
@@ -747,7 +763,6 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
       /* Endpoint->peer egress path, with optional DNS query interception before PPP encapsulation. */
       ssize_t n = packet_endpoint_read(endpoint, tun_buf, sizeof(tun_buf));
       if (n > 0) {
-        engine_dp_note_tun_rx();
         if (vpn_dns_enabled_for_loop && vpn_dns_intercept_query(tun_buf, (size_t)n)) {
           continue;
         }
@@ -760,7 +775,6 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
         }
         if (encap_rc < 0) {
           int send_err = errno;
-          engine_dp_note_encap_fail();
           tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "egress failed errno=%d", send_err);
           if (is_pptp ? tunnel_is_fatal_pptp_errno(send_err) : tunnel_is_fatal_socket_errno(send_err)) {
             exit_code = TUNNEL_EXIT_NETWORK_LOST;
@@ -769,7 +783,6 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
             break;
           }
         } else {
-          engine_dp_note_encap_ok();
           last_outbound_to_peer = time(NULL);
         }
       }
@@ -790,12 +803,10 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
         }
         if (gn == 0)
           break;
-        engine_dp_note_esp_rx();
         const uint8_t *ppp_ptr = NULL;
         size_t ppp_len = 0u;
         int ex = pptp_gre_extract_ppp(&g_state.pptp.gre, esp_buf, (size_t)gn, &ppp_ptr, &ppp_len);
         if (ex == 1) {
-          engine_dp_note_esp_plain_ok();
           tunnel_liveness_on_inbound(&liveness, monotonic_ms());
           int drc = ppp_dispatch_ppp_frame_over_transport(&pptp_transport, &g_state.ppp, ppp_ptr, ppp_len, endpoint);
           if (drc < 0 && tunnel_is_fatal_pptp_errno(errno)) {
@@ -839,15 +850,12 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
           }
         }
       } else {
-        engine_dp_note_esp_rx();
         if (g_state.esp.udp_encap && esp_is_nat_keepalive_probe(esp_buf, (size_t)n)) {
-          engine_dp_maybe_log_summary(time(NULL));
           continue;
         }
         uint8_t plain[65536];
         size_t plain_len = sizeof(plain);
         if (esp_try_decrypt(&g_state.esp, esp_buf, (size_t)n, plain, &plain_len) == 0 && plain_len > 0) {
-          engine_dp_note_esp_plain_ok();
           tunnel_liveness_on_inbound(&liveness, monotonic_ms());
           int dispatch_rc =
               l2tp_dispatch_incoming(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer,
@@ -867,7 +875,6 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
             break;
           }
         } else {
-          engine_dp_note_esp_plain_fail();
           static time_t s_last_esp_plain_warn;
           time_t now = time(NULL);
           if (now - s_last_esp_plain_warn >= 3) {
@@ -906,16 +913,13 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
       send_teardown = 0;
       break;
     }
-
-    engine_dp_maybe_log_summary(time(NULL));
   }
 
   /* Unified shutdown path for stop flag, peer teardown, and network/liveness failures. */
   tunnel_close_active_session(close_reason, send_teardown);
   if (vpn_dns_enabled_for_loop) {
-    atomic_store(&g_vpn_dns_bridge_active, 0);
     atomic_store(&g_vpn_dns_tun_fd, -1);
-    packet_endpoint_destroy_proxy_queue(&g_vpn_dns_queue);
+    tunnel_teardown_proxy_queue(&g_vpn_dns_bridge_active, &g_vpn_dns_users, &g_vpn_dns_queue);
   }
   tunnel_log("tunnel stopped");
   return exit_code;
@@ -943,8 +947,7 @@ int tunnel_run_proxy_loop(void) {
   tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "proxy-only mode negotiated; native packet bridge active on endpoint=%s",
                     endpoint.name != NULL ? endpoint.name : "unknown");
   const int rc = tunnel_run_loop_with_endpoint(-1, &endpoint);
-  packet_endpoint_destroy_proxy_queue(&g_proxy_queue);
-  atomic_store(&g_proxy_bridge_active, 0);
+  tunnel_teardown_proxy_queue(&g_proxy_bridge_active, &g_proxy_bridge_users, &g_proxy_queue);
   return rc;
 }
 
@@ -962,11 +965,15 @@ int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char
 int tunnel_proxy_is_bridge_active(void) { return atomic_load(&g_proxy_bridge_active) ? 1 : 0; }
 
 int tunnel_proxy_enqueue_outbound_packet(const uint8_t *packet, size_t len) {
+  atomic_fetch_add(&g_proxy_bridge_users, 1);
   if (!atomic_load(&g_proxy_bridge_active)) {
+    atomic_fetch_sub(&g_proxy_bridge_users, 1);
     errno = ENOSYS;
     return -1;
   }
-  return packet_endpoint_proxy_enqueue_outbound(&g_proxy_queue, packet, len);
+  int rc = packet_endpoint_proxy_enqueue_outbound(&g_proxy_queue, packet, len);
+  atomic_fetch_sub(&g_proxy_bridge_users, 1);
+  return rc;
 }
 
 ssize_t tunnel_proxy_dequeue_inbound_packet(uint8_t *packet, size_t len) {
@@ -974,11 +981,15 @@ ssize_t tunnel_proxy_dequeue_inbound_packet(uint8_t *packet, size_t len) {
 }
 
 ssize_t tunnel_proxy_dequeue_inbound_packet_wait(uint8_t *packet, size_t len, int timeout_ms) {
+  atomic_fetch_add(&g_proxy_bridge_users, 1);
   if (!atomic_load(&g_proxy_bridge_active)) {
+    atomic_fetch_sub(&g_proxy_bridge_users, 1);
     errno = ENOSYS;
     return -1;
   }
-  return packet_endpoint_proxy_dequeue_inbound_wait(&g_proxy_queue, packet, len, timeout_ms);
+  ssize_t rc = packet_endpoint_proxy_dequeue_inbound_wait(&g_proxy_queue, packet, len, timeout_ms);
+  atomic_fetch_sub(&g_proxy_bridge_users, 1);
+  return rc;
 }
 
 int tunnel_vpn_dns_set_intercept_ipv4(const char *ipv4) {
@@ -997,259 +1008,30 @@ int tunnel_vpn_dns_set_intercept_ipv4(const char *ipv4) {
 }
 
 ssize_t tunnel_vpn_dns_dequeue_query_wait(uint8_t *packet, size_t len, int timeout_ms) {
+  atomic_fetch_add(&g_vpn_dns_users, 1);
   if (!atomic_load(&g_vpn_dns_bridge_active)) {
+    atomic_fetch_sub(&g_vpn_dns_users, 1);
     errno = ENOSYS;
     return -1;
   }
-  return packet_endpoint_proxy_dequeue_inbound_wait(&g_vpn_dns_queue, packet, len, timeout_ms);
+  ssize_t rc = packet_endpoint_proxy_dequeue_inbound_wait(&g_vpn_dns_queue, packet, len, timeout_ms);
+  atomic_fetch_sub(&g_vpn_dns_users, 1);
+  return rc;
 }
 
 int tunnel_vpn_dns_write_response_packet(const uint8_t *packet, size_t len) {
+  atomic_fetch_add(&g_vpn_dns_users, 1);
   if (!atomic_load(&g_vpn_dns_bridge_active)) {
+    atomic_fetch_sub(&g_vpn_dns_users, 1);
     errno = ENOSYS;
     return -1;
   }
   if (packet == NULL || len == 0) {
+    atomic_fetch_sub(&g_vpn_dns_users, 1);
     errno = EINVAL;
     return -1;
   }
-  return packet_endpoint_proxy_enqueue_outbound(&g_vpn_dns_queue, packet, len);
-}
-
-/* --- Dataplane counters (tunnel_run_loop + ppp_dispatch) --- */
-
-static uint64_t g_dp_tun_rx;
-static uint64_t g_dp_encap_ok;
-static uint64_t g_dp_encap_fail;
-static uint64_t g_dp_esp_rx;
-static uint64_t g_dp_esp_plain_ok;
-static uint64_t g_dp_esp_plain_fail;
-static uint64_t g_dp_tun_ipv4_tcp_syn_out;
-static uint64_t g_dp_tun_ipv4_tcp_synack_in;
-static uint64_t g_dp_tun_ipv4_tcp_rst_in;
-static uint64_t g_dp_tun_ipv4_tcp_fin_in;
-static uint64_t g_dp_tun_ipv4_tcp_ack_only_in;
-static uint64_t g_dp_tun_ipv4_tcp_in;
-static uint64_t g_dp_tun_ipv4_accepted_in;
-static uint64_t g_dp_tun_ipv4_trimmed_in;
-static uint64_t g_dp_tun_ipv4_malformed_in;
-static uint64_t g_dp_tun_ipv4_bad_l4_checksum_out;
-static uint64_t g_dp_tun_ipv4_checksum_fixup_out;
-static uint64_t g_dp_tun_ipv4_wr;
-static uint64_t g_dp_tun_ipv4_tcp_wr;
-static uint64_t g_dp_tun_ipv4_udp_wr;
-static uint64_t g_dp_tun_ipv4_icmp_wr;
-static uint64_t g_dp_tun_ipv4_other_wr;
-
-typedef struct {
-  uint32_t src;
-  uint32_t dst;
-  uint16_t sport;
-  uint16_t dport;
-  uint32_t flow_id;
-  time_t last_syn;
-  uint32_t syn_count;
-  int session_seen;
-} tcp_flow_diag_t;
-
-#define TCP_FLOW_DIAG_CAP 256u
-#define TCP_FLOW_RECENT_SECS 120
-
-/*
- * Recent-flow cache used only for dataplane counters. It avoids per-packet logging while still
- * letting tests and future diagnostics distinguish SYN repeats from matched inbound replies.
- */
-static tcp_flow_diag_t g_tcp_flow_diag[TCP_FLOW_DIAG_CAP];
-static unsigned g_tcp_flow_diag_next;
-static uint64_t g_flow_unique_syn;
-static uint64_t g_flow_syn_repeats;
-static uint64_t g_flow_synack_matched;
-static uint64_t g_flow_rst_matched;
-static uint64_t g_flow_fin_matched;
-static uint64_t g_flow_in_unmatched;
-
-static uint32_t flow_read_ipv4(const uint8_t *p) {
-  return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
-}
-
-static uint32_t flow_hash(uint32_t src, uint32_t dst, uint16_t sport, uint16_t dport) {
-  uint32_t h = 2166136261u;
-  h = (h ^ src) * 16777619u;
-  h = (h ^ dst) * 16777619u;
-  h = (h ^ sport) * 16777619u;
-  h = (h ^ dport) * 16777619u;
-  return h == 0u ? 1u : h;
-}
-
-static tcp_flow_diag_t *flow_find(uint32_t src, uint32_t dst, uint16_t sport, uint16_t dport, time_t now) {
-  for (unsigned i = 0; i < TCP_FLOW_DIAG_CAP; i++) {
-    tcp_flow_diag_t *f = &g_tcp_flow_diag[i];
-    if (f->last_syn == 0)
-      continue;
-    if (now - f->last_syn > TCP_FLOW_RECENT_SECS)
-      continue;
-    if (f->src == src && f->dst == dst && f->sport == sport && f->dport == dport)
-      return f;
-  }
-  return NULL;
-}
-
-static tcp_flow_diag_t *flow_slot(time_t now) {
-  for (unsigned i = 0; i < TCP_FLOW_DIAG_CAP; i++) {
-    if (g_tcp_flow_diag[i].last_syn == 0 || now - g_tcp_flow_diag[i].last_syn > TCP_FLOW_RECENT_SECS)
-      return &g_tcp_flow_diag[i];
-  }
-  tcp_flow_diag_t *slot = &g_tcp_flow_diag[g_tcp_flow_diag_next++ % TCP_FLOW_DIAG_CAP];
-  memset(slot, 0, sizeof(*slot));
-  return slot;
-}
-
-/* Records outbound client SYNs so inbound SYN/ACK, RST, and FIN packets can be matched later. */
-static void flow_note_syn(const uint8_t *packet, const tf_ipv4_info_t *info) {
-  const uint8_t *tcp = packet + info->ihl;
-  uint32_t src = flow_read_ipv4(packet + 12u);
-  uint32_t dst = flow_read_ipv4(packet + 16u);
-  uint16_t sport = read_be16_u8(tcp);
-  uint16_t dport = read_be16_u8(tcp + 2u);
-  time_t now = time(NULL);
-  tcp_flow_diag_t *f = flow_find(src, dst, sport, dport, now);
-  if (f != NULL) {
-    f->last_syn = now;
-    f->syn_count++;
-    g_flow_syn_repeats++;
-    return;
-  }
-  f = flow_slot(now);
-  f->src = src;
-  f->dst = dst;
-  f->sport = sport;
-  f->dport = dport;
-  f->flow_id = flow_hash(src, dst, sport, dport);
-  f->last_syn = now;
-  f->syn_count = 1u;
-  f->session_seen = 0;
-  g_flow_unique_syn++;
-}
-
-/* Matches reverse-direction inbound TCP packets to a recent outbound SYN flow. */
-static tcp_flow_diag_t *flow_match_inbound(const uint8_t *packet, const tf_ipv4_info_t *info) {
-  const uint8_t *tcp = packet + info->ihl;
-  uint32_t src = flow_read_ipv4(packet + 12u);
-  uint32_t dst = flow_read_ipv4(packet + 16u);
-  uint16_t sport = read_be16_u8(tcp);
-  uint16_t dport = read_be16_u8(tcp + 2u);
-  return flow_find(dst, src, dport, sport, time(NULL));
-}
-
-void engine_dp_note_tun_rx(void) { g_dp_tun_rx++; }
-
-void engine_dp_note_encap_ok(void) { g_dp_encap_ok++; }
-
-void engine_dp_note_encap_fail(void) { g_dp_encap_fail++; }
-
-void engine_dp_note_esp_rx(void) { g_dp_esp_rx++; }
-
-void engine_dp_note_esp_plain_ok(void) { g_dp_esp_plain_ok++; }
-
-void engine_dp_note_esp_plain_fail(void) { g_dp_esp_plain_fail++; }
-
-void engine_dp_note_tun_ipv4_outbound(const uint8_t *packet, size_t nbytes) {
-  tf_ipv4_info_t info;
-  if (tf_ipv4_parse(packet, nbytes, &info) != 0 || info.total_len < info.ihl + 20u)
-    return;
-  if (info.protocol != TF_IPPROTO_TCP)
-    return;
-  const uint8_t flags = packet[info.ihl + 13u];
-  const int syn = (flags & 0x02u) != 0u;
-  const int ack = (flags & 0x10u) != 0u;
-  if (!syn || ack)
-    return;
-  g_dp_tun_ipv4_tcp_syn_out++;
-  flow_note_syn(packet, &info);
-}
-
-void engine_dp_note_tun_ipv4_inbound(const uint8_t *packet, size_t nbytes) {
-  tf_ipv4_info_t info;
-  if (tf_ipv4_parse(packet, nbytes, &info) != 0 || info.total_len < info.ihl + 20u)
-    return;
-  if (info.protocol != TF_IPPROTO_TCP)
-    return;
-  g_dp_tun_ipv4_tcp_in++;
-  const uint8_t flags = packet[info.ihl + 13u];
-  const int syn = (flags & 0x02u) != 0u;
-  const int ack = (flags & 0x10u) != 0u;
-  const int rst = (flags & 0x04u) != 0u;
-  const int fin = (flags & 0x01u) != 0u;
-  tcp_flow_diag_t *matched = flow_match_inbound(packet, &info);
-  if (syn && ack) {
-    g_dp_tun_ipv4_tcp_synack_in++;
-    if (matched != NULL) {
-      matched->session_seen = 1;
-      g_flow_synack_matched++;
-    } else {
-      g_flow_in_unmatched++;
-    }
-  } else if (matched == NULL) {
-    g_flow_in_unmatched++;
-  }
-  if (rst) {
-    g_dp_tun_ipv4_tcp_rst_in++;
-    if (matched != NULL)
-      g_flow_rst_matched++;
-  }
-  if (fin) {
-    g_dp_tun_ipv4_tcp_fin_in++;
-    if (matched != NULL)
-      g_flow_fin_matched++;
-  }
-  if (ack && !syn && !rst && !fin)
-    g_dp_tun_ipv4_tcp_ack_only_in++;
-}
-
-void engine_dp_note_tun_ipv4_inbound_accepted(size_t nbytes) {
-  (void)nbytes;
-  g_dp_tun_ipv4_accepted_in++;
-}
-
-void engine_dp_note_tun_ipv4_inbound_trimmed(size_t original_len, size_t trimmed_len) {
-  (void)original_len;
-  (void)trimmed_len;
-  g_dp_tun_ipv4_trimmed_in++;
-}
-
-void engine_dp_note_tun_ipv4_inbound_malformed(size_t nbytes) {
-  (void)nbytes;
-  g_dp_tun_ipv4_malformed_in++;
-}
-
-void engine_dp_note_tun_ipv4_outbound_bad_l4_checksum(uint8_t proto) {
-  (void)proto;
-  g_dp_tun_ipv4_bad_l4_checksum_out++;
-}
-
-void engine_dp_note_tun_ipv4_outbound_checksum_fixup(uint8_t proto) {
-  (void)proto;
-  g_dp_tun_ipv4_checksum_fixup_out++;
-}
-
-void engine_dp_note_tun_ipv4_written(size_t nbytes) {
-  (void)nbytes;
-  g_dp_tun_ipv4_wr++;
-}
-
-void engine_dp_note_tun_ipv4_protocol(uint8_t proto) {
-  if (proto == 6u) {
-    g_dp_tun_ipv4_tcp_wr++;
-  } else if (proto == 17u) {
-    g_dp_tun_ipv4_udp_wr++;
-  } else if (proto == 1u) {
-    g_dp_tun_ipv4_icmp_wr++;
-  } else {
-    g_dp_tun_ipv4_other_wr++;
-  }
-}
-
-void engine_dp_maybe_log_summary(time_t now) {
-  /* Counters remain active for tests/debuggers; the periodic app/logcat summary was too noisy. */
-  (void)now;
+  int rc = packet_endpoint_proxy_enqueue_outbound(&g_vpn_dns_queue, packet, len);
+  atomic_fetch_sub(&g_vpn_dns_users, 1);
+  return rc;
 }

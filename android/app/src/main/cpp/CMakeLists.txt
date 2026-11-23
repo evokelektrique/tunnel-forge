@@ -39,6 +39,7 @@ add_library(
   pptp.c
   ppp_mschap.c
   ppp_mppe.c
+  ppp_wire.c
   ppp.c
 )
 

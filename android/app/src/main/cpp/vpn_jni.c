@@ -3,9 +3,11 @@
  * Java_* symbol names. Every jstring is converted with GetStringUTFChars and released on all paths.
  */
 #include "engine.h"
+#include "esp_udp.h"
 #include "gvisor_bridge.h"
 
 #include <android/log.h>
+#include <signal.h>
 #include <stdlib.h>
 
 #define LOG_TAG "tunnel_engine"
@@ -21,32 +23,10 @@ static void throw_io_exception(JNIEnv *env, const char *message) {
 }
 
 void tunnel_loop_stop(void);
-
-static jint native_run_tunnel(JNIEnv *env, jclass clazz, jint tun_fd, jstring jserver, jstring juser, jstring jpassword,
-                              jstring jpsk, jint tun_mtu, jint protocol) {
-  (void)clazz;
-  jint out = (jint)TUNNEL_EXIT_BAD_ARGS;
-  const char *server = (*env)->GetStringUTFChars(env, jserver, NULL);
-  const char *user = (*env)->GetStringUTFChars(env, juser, NULL);
-  const char *password = (*env)->GetStringUTFChars(env, jpassword, NULL);
-  const char *psk = (*env)->GetStringUTFChars(env, jpsk, NULL);
-  if (server == NULL || user == NULL || password == NULL || psk == NULL) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "nativeRunTunnel: null string");
-    goto cleanup;
-  }
-  out = (jint)tunnel_loop_run(tun_fd, server, user, password, psk, (int)tun_mtu, (int)protocol);
-
-cleanup:
-  if (server != NULL)
-    (*env)->ReleaseStringUTFChars(env, jserver, server);
-  if (user != NULL)
-    (*env)->ReleaseStringUTFChars(env, juser, user);
-  if (password != NULL)
-    (*env)->ReleaseStringUTFChars(env, jpassword, password);
-  if (psk != NULL)
-    (*env)->ReleaseStringUTFChars(env, jpsk, psk);
-  return out;
-}
+int ikev1_run_audit_check(int item_id, char *err_buf, size_t err_cap);
+int ppp_run_audit_check(int item_id, char *err_buf, size_t err_cap);
+int packet_endpoint_run_audit_check(int item_id, char *err_buf, size_t err_cap);
+int pptp_root_run_audit_check(int item_id, char *err_buf, size_t err_cap);
 
 static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring juser, jstring jpassword, jstring jpsk,
                              jint tun_mtu, jint protocol, jintArray jout_client_ipv4, jintArray jout_primary_dns_ipv4,
@@ -204,21 +184,6 @@ static jbyteArray native_gvisor_read_outbound(JNIEnv *env, jclass clazz, jint ma
   return out;
 }
 
-static jint native_gvisor_tcp_open(JNIEnv *env, jclass clazz, jintArray jremote_ipv4, jint port, jint timeout_ms) {
-  (void)clazz;
-  if (jremote_ipv4 == NULL || (*env)->GetArrayLength(env, jremote_ipv4) < 4 || port <= 0 || port > 65535)
-    return -1;
-  jint tmp[4];
-  (*env)->GetIntArrayRegion(env, jremote_ipv4, 0, 4, tmp);
-  uint8_t remote_ipv4[4];
-  for (int i = 0; i < 4; i++) {
-    if (tmp[i] < 0 || tmp[i] > 255)
-      return -1;
-    remote_ipv4[i] = (uint8_t)tmp[i];
-  }
-  return (jint)gvisor_bridge_tcp_open(remote_ipv4, (uint16_t)port, (int)timeout_ms);
-}
-
 static jint native_gvisor_tcp_open_cancelable(JNIEnv *env, jclass clazz, jint open_id, jintArray jremote_ipv4,
                                               jint port, jint timeout_ms) {
   (void)clazz;
@@ -304,16 +269,6 @@ static jintArray native_gvisor_stats(JNIEnv *env, jclass clazz) {
     return NULL;
   (*env)->SetIntArrayRegion(env, out, 0, GVISOR_STATS_COUNT, stats);
   return out;
-}
-
-static jstring native_gvisor_last_open_diagnostics(JNIEnv *env, jclass clazz) {
-  (void)clazz;
-  char buf[512];
-  int n = gvisor_bridge_last_open_diagnostics(buf, sizeof(buf));
-  if (n <= 0)
-    return (*env)->NewStringUTF(env, "");
-  buf[sizeof(buf) - 1u] = '\0';
-  return (*env)->NewStringUTF(env, buf);
 }
 
 static jstring native_gvisor_open_diagnostics(JNIEnv *env, jclass clazz, jint open_id) {
@@ -420,10 +375,42 @@ static void native_stop_tunnel(JNIEnv *env, jclass clazz) {
   tunnel_loop_stop();
 }
 
+static jstring native_run_audit_check(JNIEnv *env, jclass clazz, jint item_id) {
+  (void)clazz;
+  char err_buf[512] = {0};
+  int rc = -1;
+  switch ((int)item_id) {
+  case 1:
+  case 3:
+    rc = ikev1_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
+    break;
+  case 2:
+  case 4:
+    rc = ppp_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
+    break;
+  case 5:
+    rc = packet_endpoint_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
+    break;
+  case 7:
+    rc = pptp_root_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
+    break;
+  case 16:
+    rc = esp_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
+    break;
+  default:
+    snprintf(err_buf, sizeof(err_buf), "unknown native audit itemId=%d", (int)item_id);
+    rc = -1;
+    break;
+  }
+  if (rc == 0)
+    return NULL;
+  if (err_buf[0] == '\0')
+    snprintf(err_buf, sizeof(err_buf), "native audit item %d failed rc=%d", (int)item_id, rc);
+  return (*env)->NewStringUTF(env, err_buf);
+}
+
 static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
-      {"nativeRunTunnel", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)I",
-       (void *)native_run_tunnel},
       {"nativeFailure", "()[I", (void *)native_failure},
       {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II[I[I[I)I",
        (void *)native_negotiate},
@@ -435,14 +422,12 @@ static int register_vpn_bridge(JNIEnv *env) {
       {"nativeGvisorStop", "()V", (void *)native_gvisor_stop},
       {"nativeGvisorInjectInbound", "([B)I", (void *)native_gvisor_inject_inbound},
       {"nativeGvisorReadOutbound", "(II)[B", (void *)native_gvisor_read_outbound},
-      {"nativeGvisorTcpOpen", "([III)I", (void *)native_gvisor_tcp_open},
       {"nativeGvisorTcpOpenCancelable", "(I[III)I", (void *)native_gvisor_tcp_open_cancelable},
       {"nativeGvisorTcpCancelOpen", "(I)I", (void *)native_gvisor_tcp_cancel_open},
       {"nativeGvisorTcpRead", "(III)[B", (void *)native_gvisor_tcp_read},
       {"nativeGvisorTcpWrite", "(I[BI)I", (void *)native_gvisor_tcp_write},
       {"nativeGvisorTcpClose", "(I)V", (void *)native_gvisor_tcp_close},
       {"nativeGvisorStats", "()[I", (void *)native_gvisor_stats},
-      {"nativeGvisorLastOpenDiagnostics", "()Ljava/lang/String;", (void *)native_gvisor_last_open_diagnostics},
       {"nativeGvisorOpenDiagnostics", "(I)Ljava/lang/String;", (void *)native_gvisor_open_diagnostics},
       {"nativeIsProxyPacketBridgeActive", "()Z", (void *)native_is_proxy_packet_bridge_active},
       {"nativeQueueProxyOutboundPacket", "([B)I", (void *)native_queue_proxy_outbound_packet},
@@ -451,6 +436,7 @@ static int register_vpn_bridge(JNIEnv *env) {
       {"nativeReadVpnDnsQuery", "(I)[B", (void *)native_read_vpn_dns_query},
       {"nativeQueueVpnDnsResponse", "([B)I", (void *)native_queue_vpn_dns_response},
       {"nativeStopTunnel", "()V", (void *)native_stop_tunnel},
+      {"nativeRunAuditCheck", "(I)Ljava/lang/String;", (void *)native_run_audit_check},
   };
   jclass bridge_class = (*env)->FindClass(env, VPN_BRIDGE_CLASS);
   if (bridge_class == NULL) {
@@ -470,6 +456,7 @@ static int register_vpn_bridge(JNIEnv *env) {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
   (void)reserved;
+  signal(SIGPIPE, SIG_IGN);
   JNIEnv *env = NULL;
   if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK || env == NULL) {
     __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "JNI_OnLoad: GetEnv failed");
