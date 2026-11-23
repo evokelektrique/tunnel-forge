@@ -63,6 +63,9 @@ func TestTunnelLifecycleAndStats(t *testing.T) {
 		stats[0] != 1 || stats[1] != 1 {
 		t.Fatalf("unexpected running stats: %v", stats)
 	}
+	if got := tf_gvisor_read_outbound(address, 4, 0); got != 0 {
+		t.Fatalf("nonblocking empty queue read: %d", got)
+	}
 	if got := tf_gvisor_read_outbound(address, 4, 15); got != 0 {
 		t.Fatalf("empty queue read: %d", got)
 	}
@@ -685,5 +688,18 @@ func TestGvisorReadOutboundWakesWithout5msSleep(t *testing.T) {
 	avg := totalAfterInject / cycles
 	if avg >= 3*time.Millisecond {
 		t.Fatalf("tf_gvisor_read_outbound avg latency after inject=%v (expected < 3ms without 5ms poll sleep)", avg)
+	}
+}
+
+func TestCommitOpenSessionRejectsStoppedStack(t *testing.T) {
+	tf_gvisor_stop()
+	left, right := net.Pipe()
+	defer right.Close()
+	if got := commitOpenSession(1, &stack.Stack{}, left); got != -2 {
+		t.Fatalf("commitOpenSession while stopped=%d, want -2", got)
+	}
+	var buf [1]byte
+	if _, err := right.Read(buf[:]); err != io.EOF {
+		t.Fatalf("commitOpenSession did not close conn: %v", err)
 	}
 }

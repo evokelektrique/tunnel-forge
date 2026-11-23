@@ -344,6 +344,10 @@ func tf_gvisor_tcp_open_cancelable(openID C.int, remoteIPv4 unsafe.Pointer, port
 		return C.int(recordDialFailure(open, ctx.Err(), err))
 	}
 
+	return C.int(commitOpenSession(open, s, conn))
+}
+
+func commitOpenSession(open int, s *stack.Stack, conn net.Conn) int {
 	state.mu.Lock()
 	delete(state.pendingOpenCancels, open)
 	if !state.running || state.stack != s || state.sessions == nil {
@@ -357,7 +361,7 @@ func tf_gvisor_tcp_open_cancelable(openID C.int, remoteIPv4 unsafe.Pointer, port
 	finishOpenSuccessLocked(open, id)
 	state.mu.Unlock()
 	state.openOK.Add(1)
-	return C.int(id)
+	return id
 }
 
 func takeNextID(next *int) int {
