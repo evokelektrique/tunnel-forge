@@ -2466,7 +2466,7 @@ qm2_received:
   int qm2_chain_malformed = 0;
   {
     size_t walk = 0;
-    uint8_t cur = (inlen >= 17) ? in[16] : IKE_PT_HASH;
+    uint8_t cur = in[16];
     while (walk + 4 <= dec_len && cur != IKE_PT_NONE) {
       uint16_t pl = util_read_be16(dec_qm + walk + 2);
       if (pl < 4 || walk + pl > dec_len) {
@@ -2556,7 +2556,7 @@ qm2_received:
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode: HASH(2) mismatch (ESP proposal rejected?)");
     tunnel_log("Quick Mode: HASH(2) material after_hash=%zu payload_end=%zu material_len=%zu", after_hash_off,
                qm2_payload_end, after_hash_len);
-    ike_hex_dump("hash2_peer", hash2, hash2_len < 20 ? hash2_len : 20, 20);
+    ike_hex_dump("hash2_peer", hash2, 20, 20);
     ike_hex_dump("hash2_calc", h2c, 20, 20);
     goto fail_fd;
   }
@@ -2667,8 +2667,7 @@ qm2_received:
   return 0;
 
 fail_fd:
-  if (fd >= 0)
-    close(fd);
+  close(fd);
 fail_early:
   tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE ipsec_negotiate failed (scroll up for tunnel_engine)");
   mbedtls_ctr_drbg_free(&ctr);

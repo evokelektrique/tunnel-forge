@@ -82,8 +82,6 @@ static void ppp_log_rx_summary(const uint8_t *p, size_t len, const char *stage) 
 
 static int lcp_build_reject_for_unsupported(const uint8_t *frame, size_t prefix, const uint8_t *body, size_t body_len,
                                             uint8_t *out, size_t cap);
-static int lcp_build_nak_for_unsupported_auth(const uint8_t *frame, size_t prefix, const uint8_t *body, size_t body_len,
-                                              uint8_t *out, size_t cap);
 static int lcp_build_nak_for_disallowed_auth(const uint8_t *frame, size_t prefix, const uint8_t *body, size_t body_len,
                                              int required_auth, uint8_t *out, size_t cap);
 
@@ -392,10 +390,6 @@ static int lcp_parse_peer_auth_for_policy(const uint8_t *lcp, size_t lcp_len, in
   return -1;
 }
 
-static int lcp_parse_peer_auth(const uint8_t *lcp, size_t lcp_len, ppp_auth_kind_t *out) {
-  return lcp_parse_peer_auth_for_policy(lcp, lcp_len, -1, out, NULL);
-}
-
 static int lcp_nak_wants_pap(const uint8_t *opt, size_t opt_len) {
   size_t i = 0;
   while (i + 2 <= opt_len) {
@@ -545,11 +539,6 @@ static int lcp_build_nak_for_disallowed_auth(const uint8_t *frame, size_t prefix
   out[o++] = 0x23;
   out[o++] = (required_auth == (int)PPP_AUTH_CHAP_MD5) ? 0x05u : 0x81u;
   return (int)o;
-}
-
-static int lcp_build_nak_for_unsupported_auth(const uint8_t *frame, size_t prefix, const uint8_t *body, size_t body_len,
-                                              uint8_t *out, size_t cap) {
-  return lcp_build_nak_for_disallowed_auth(frame, prefix, body, body_len, -1, out, cap);
 }
 
 /* Set once LCP is negotiated: late peer Configure-Requests (retransmits that crossed our Ack) are acked
@@ -1143,7 +1132,7 @@ static int ppp_auth_pap_transport(ppp_transport_t *transport, const char *user, 
   o += 2;
   size_t ulen = strlen(user);
   size_t pwlen = strlen(password);
-  if (ulen > 255u || pwlen > 255u || o + 2u + ulen + pwlen > sizeof(pap)) {
+  if (ulen > 255u || pwlen > 255u) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
                       "ppp: PAP credentials exceed RFC 1334 255-byte limit (user=%zu password=%zu)", ulen, pwlen);
     mbedtls_platform_zeroize(pap, sizeof(pap));
