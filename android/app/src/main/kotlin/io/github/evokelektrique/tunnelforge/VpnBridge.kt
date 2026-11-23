@@ -8,6 +8,15 @@ object VpnBridge {
     const val PROTOCOL_L2TP = 0
     const val PROTOCOL_PPTP = 1
 
+    const val PPP_AUTH_AUTO = 0
+    const val PPP_AUTH_MSCHAPV2 = 1
+    const val PPP_AUTH_CHAP_MD5 = 2
+    const val PPP_AUTH_PAP = 3
+
+    const val MPPE_AUTO = 0
+    const val MPPE_ON = 1
+    const val MPPE_OFF = 2
+
     const val EXIT_OK = 0
     const val EXIT_IKE_FAILED = 1
     const val EXIT_L2TP_FAILED = 2
@@ -24,9 +33,26 @@ object VpnBridge {
     const val EXIT_NETWORK_LOST = 13
     const val EXIT_PEER_UNREACHABLE = 14
     const val EXIT_PEER_CLOSED = 15
+    const val EXIT_MPPE_REQUIRED_BY_PEER = 16
+    const val EXIT_PPP_AUTH_MISMATCH = 17
 
     fun protocolCode(protocol: String): Int =
         if (protocol == VpnContract.PROTOCOL_PPTP) PROTOCOL_PPTP else PROTOCOL_L2TP
+
+    fun pppAuthCode(pppAuth: String): Int =
+        when (pppAuth) {
+            VpnContract.PPP_AUTH_MSCHAPV2 -> PPP_AUTH_MSCHAPV2
+            VpnContract.PPP_AUTH_CHAP_MD5 -> PPP_AUTH_CHAP_MD5
+            VpnContract.PPP_AUTH_PAP -> PPP_AUTH_PAP
+            else -> PPP_AUTH_AUTO
+        }
+
+    fun mppeModeCode(mppe: String): Int =
+        when (mppe) {
+            VpnContract.MPPE_ON -> MPPE_ON
+            VpnContract.MPPE_OFF -> MPPE_OFF
+            else -> MPPE_AUTO
+        }
 
     init {
         System.loadLibrary("tunnel_engine")
@@ -43,6 +69,8 @@ object VpnBridge {
         psk: String,
         tunMtu: Int,
         protocol: Int,
+        pppAuth: Int,
+        mppeMode: Int,
         outClientIpv4: IntArray?,
         outPrimaryDnsIpv4: IntArray?,
         outSecondaryDnsIpv4: IntArray?,

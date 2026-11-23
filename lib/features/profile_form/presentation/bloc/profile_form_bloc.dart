@@ -132,6 +132,24 @@ final class ProfileFormMtuChanged extends ProfileFormEvent {
   List<Object?> get props => [value];
 }
 
+final class ProfileFormPppAuthChanged extends ProfileFormEvent {
+  const ProfileFormPppAuthChanged(this.value);
+
+  final PppAuthMethod value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
+final class ProfileFormMppeModeChanged extends ProfileFormEvent {
+  const ProfileFormMppeModeChanged(this.value);
+
+  final MppeMode value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
 final class ProfileFormSaveRequested extends ProfileFormEvent {
   const ProfileFormSaveRequested();
 }
@@ -158,6 +176,8 @@ class ProfileFormState extends Equatable {
     this.dns2 = '',
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
     this.mtu = '${Profile.defaultVpnMtu}',
+    this.pppAuth = PppAuthMethod.auto,
+    this.mppeMode = MppeMode.auto,
     this.favorite = false,
     this.subscriptionId,
     this.messageId = 0,
@@ -182,6 +202,8 @@ class ProfileFormState extends Equatable {
   final String dns2;
   final DnsProtocol dns2Protocol;
   final String mtu;
+  final PppAuthMethod pppAuth;
+  final MppeMode mppeMode;
   final bool favorite;
   final String? subscriptionId;
   final int messageId;
@@ -197,6 +219,10 @@ class ProfileFormState extends Equatable {
   String? get dns2ErrorText =>
       dnsAutomatic ? null : _dnsErrorText('DNS 2', dns2, dns2Protocol);
   String? get mtuErrorText => _mtuValidationMessage(mtu);
+  String? get mppeErrorText =>
+      Profile.isIncompatiblePppAuthAndMppe(protocol, pppAuth, mppeMode)
+      ? AppL10n.current.mppeRequiresMschapV2
+      : null;
 
   ProfileFormState copyWith({
     String? profileId,
@@ -216,6 +242,8 @@ class ProfileFormState extends Equatable {
     String? dns2,
     DnsProtocol? dns2Protocol,
     String? mtu,
+    PppAuthMethod? pppAuth,
+    MppeMode? mppeMode,
     bool? favorite,
     String? subscriptionId,
     bool clearSubscriptionId = false,
@@ -242,6 +270,8 @@ class ProfileFormState extends Equatable {
       dns2: dns2 ?? this.dns2,
       dns2Protocol: dns2Protocol ?? this.dns2Protocol,
       mtu: mtu ?? this.mtu,
+      pppAuth: pppAuth ?? this.pppAuth,
+      mppeMode: mppeMode ?? this.mppeMode,
       favorite: favorite ?? this.favorite,
       subscriptionId: clearSubscriptionId
           ? null
@@ -272,6 +302,8 @@ class ProfileFormState extends Equatable {
     dns2,
     dns2Protocol,
     mtu,
+    pppAuth,
+    mppeMode,
     favorite,
     subscriptionId,
     messageId,
@@ -378,6 +410,13 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       (event, emit) =>
           emit(state.copyWith(mtu: event.value.trim(), saved: false)),
     );
+    on<ProfileFormPppAuthChanged>(
+      (event, emit) => emit(state.copyWith(pppAuth: event.value, saved: false)),
+    );
+    on<ProfileFormMppeModeChanged>(
+      (event, emit) =>
+          emit(state.copyWith(mppeMode: event.value, saved: false)),
+    );
     on<ProfileFormSaveRequested>(_onSaveRequested);
     on<ProfileFormSecureStorageResetRequested>(_onSecureStorageResetRequested);
   }
@@ -397,6 +436,8 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       LogLevel.debug,
       'Profile $action$suffix profile=${profile.id} '
       'protocol=${profile.protocol.jsonValue} '
+      'pppAuth=${profile.pppAuth.jsonValue} '
+      'mppe=${profile.mppeMode.jsonValue} '
       'name=${quoteLogValue(profile.displayName)} server=${profile.server} '
       'dnsAuto=${profile.dnsAutomatic} mtu=${profile.mtu}',
     );
@@ -431,6 +472,8 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           dns2: '',
           dns2Protocol: DnsProtocol.dnsOverUdp,
           mtu: '${Profile.defaultVpnMtu}',
+          pppAuth: PppAuthMethod.auto,
+          mppeMode: MppeMode.auto,
           favorite: false,
           clearSubscriptionId: true,
           saved: false,
@@ -467,6 +510,8 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         dns2: profile.dns2Host,
         dns2Protocol: profile.dns2Protocol,
         mtu: '${profile.mtu}',
+        pppAuth: profile.pppAuth,
+        mppeMode: profile.mppeMode,
         favorite: profile.favorite,
         subscriptionId: profile.subscriptionId,
         clearSubscriptionId: profile.subscriptionId == null,
@@ -503,6 +548,12 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       return null;
     }
     final mtuParsed = int.parse(state.mtu.trim());
+    final mppeErrorText = state.mppeErrorText;
+    if (mppeErrorText != null) {
+      _log(LogLevel.debug, 'Profile save blocked: incompatible pppAuth/mppe');
+      emit(_messageState(mppeErrorText));
+      return null;
+    }
     if (!state.dnsAutomatic) {
       final invalidDns1 = Profile.invalidDnsServer(
         state.dns1,
@@ -562,6 +613,8 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       server: serverTrim,
       user: state.user,
       protocol: state.protocol,
+      pppAuth: state.pppAuth,
+      mppeMode: state.protocol.isPptp ? state.mppeMode : MppeMode.auto,
       dnsAutomatic: state.dnsAutomatic,
       dns1Host: Profile.normalizeDnsServerForProtocol(
         state.dns1,

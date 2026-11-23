@@ -617,6 +617,8 @@ class TunnelRepositoryImpl implements TunnelRepository {
       server: request.server,
       profileName: request.profileName,
       protocol: request.protocol,
+      pppAuth: request.pppAuth,
+      mppeMode: request.mppeMode,
       connectionMode: request.connectionMode,
       user: request.user,
       password: request.password,

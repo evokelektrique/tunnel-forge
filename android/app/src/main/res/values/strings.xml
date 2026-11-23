@@ -87,6 +87,8 @@
     <string name="tunnel_reason_engine_13">Network connection lost.</string>
     <string name="tunnel_reason_engine_14">VPN server stopped responding.</string>
     <string name="tunnel_reason_engine_15">VPN server closed the connection.</string>
+    <string name="tunnel_reason_engine_16">PPTP server requires MPPE encryption, but MPPE is turned off in this profile.</string>
+    <string name="tunnel_reason_engine_17">The VPN server did not accept the selected PPP authentication method.</string>
 
     <string name="tunnel_reason_android_1">VPN was revoked by Android.</string>
     <string name="tunnel_reason_android_2">Tunnel was stopped by Android system.</string>

@@ -162,5 +162,114 @@ int main(void) {
   }
   pw_emojis[129 * 4] = '\0';
   assert(ppp_mschapv2_nt_password_hash_hash(pw_emojis, hh) == -1);
+
+  /* Policy-aware LCP auth Nak & mismatch detection. */
+  const uint8_t peer_pap_cr[] = {0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 8, 3, 4, 0xc0, 0x23};
+  assert(lcp_build_nak_for_disallowed_auth(peer_pap_cr, 2, peer_pap_cr + 2, sizeof(peer_pap_cr) - 2,
+                                           (int)PPP_AUTH_MSCHAPV2, packet, sizeof(packet)) == 13);
+  assert(packet[4] == 3 && packet[8] == 3 && packet[12] == 0x81);
+  assert(lcp_build_nak_for_disallowed_auth(peer_pap_cr, 2, peer_pap_cr + 2, sizeof(peer_pap_cr) - 2,
+                                           (int)PPP_AUTH_PAP, packet, sizeof(packet)) == 0);
+
+  const uint8_t peer_chap_cr[] = {0xff, 0x03, 0xc0, 0x21, 1, 2, 0, 9, 3, 5, 0xc2, 0x23, 0x05};
+  assert(lcp_build_nak_for_disallowed_auth(peer_chap_cr, 2, peer_chap_cr + 2, sizeof(peer_chap_cr) - 2,
+                                           (int)PPP_AUTH_PAP, packet, sizeof(packet)) == 12);
+  assert(packet[4] == 3 && packet[8] == 3 && packet[10] == 0xc0 && packet[11] == 0x23);
+
+  /* LCP mismatch returns PPP_NEGOTIATE_AUTH_MISMATCH when peer refuses pinned auth. */
+  {
+    static const uint8_t lcp_term[] = {0xff, 0x03, 0xc0, 0x21, 5, 1, 0, 4};
+    audit_ppp_mock_t mock_mismatch = {
+        .frames = {peer_pap_cr, lcp_term},
+        .lens = {sizeof(peer_pap_cr), sizeof(lcp_term)},
+        .count = 2,
+    };
+    ppp_transport_t t_mm = {
+        .ctx = &mock_mismatch,
+        .send_frame = audit_ppp_mock_send,
+        .recv_frame = audit_ppp_mock_recv,
+        .enable_mppe = 1,
+        .auth_policy = TUNNEL_PPP_AUTH_CHAP_MD5,
+        .mppe_mode = TUNNEL_MPPE_AUTO,
+    };
+    ppp_session_t sess_mm;
+    memset(&sess_mm, 0, sizeof(sess_mm));
+    sess_mm.link_mtu = 1450;
+    ppp_auth_kind_t out_auth = PPP_AUTH_PAP;
+    assert(ppp_lcp_negotiate_transport(&t_mm, &out_auth, &sess_mm) == PPP_NEGOTIATE_AUTH_MISMATCH);
+  }
+
+  /* MPPE On fails when peer sends LCP Protocol-Reject for CCP. */
+  {
+    static const uint8_t ipcp_peer_cr[] = {0xff, 0x03, 0x80, 0x21, 1, 1, 0, 10, 3, 6, 10, 0, 0, 1};
+    static const uint8_t ipcp_ack[] = {0xff, 0x03, 0x80, 0x21, 2, 1, 0, 10, 3, 6, 10, 0, 0, 2};
+    static const uint8_t ccp_proto_rej[] = {0xff, 0x03, 0xc0, 0x21, 8, 1, 0, 8, 0x80, 0xfd};
+    audit_ppp_mock_t mock_on_rej = {
+        .frames = {ipcp_peer_cr, ipcp_ack, ccp_proto_rej},
+        .lens = {sizeof(ipcp_peer_cr), sizeof(ipcp_ack), sizeof(ccp_proto_rej)},
+        .count = 3,
+    };
+    ppp_transport_t t_on = {
+        .ctx = &mock_on_rej,
+        .send_frame = audit_ppp_mock_send,
+        .recv_frame = audit_ppp_mock_recv,
+        .enable_mppe = 1,
+        .auth_policy = TUNNEL_PPP_AUTH_AUTO,
+        .mppe_mode = TUNNEL_MPPE_ON,
+    };
+    ppp_session_t sess_on;
+    memset(&sess_on, 0, sizeof(sess_on));
+    sess_on.mppe_keys_ready = 1;
+    assert(ppp_ipcp_negotiate_transport(&t_on, &sess_on) == PPP_NEGOTIATE_MPPE_FAILED);
+
+    /* Same frames with Protocol-Reject before IPCP Ack in MPPE Auto succeed in cleartext. */
+    audit_ppp_mock_t mock_auto_rej = {
+        .frames = {ipcp_peer_cr, ccp_proto_rej, ipcp_ack},
+        .lens = {sizeof(ipcp_peer_cr), sizeof(ccp_proto_rej), sizeof(ipcp_ack)},
+        .count = 3,
+    };
+    t_on.ctx = &mock_auto_rej;
+    t_on.mppe_mode = TUNNEL_MPPE_AUTO;
+    memset(&sess_on, 0, sizeof(sess_on));
+    sess_on.mppe_keys_ready = 1;
+    assert(ppp_ipcp_negotiate_transport(&t_on, &sess_on) == 0);
+    assert(sess_on.mppe.enabled == 0);
+  }
+
+  /* MPPE Off rejects peer MPPE CR and fails with PPP_NEGOTIATE_MPPE_REQUIRED_BY_PEER when peer terminates. */
+  {
+    static const uint8_t peer_mppe_cr[] = {0xff, 0x03, 0x80, 0xfd, 1, 1, 0, 10, 18, 6, 1, 0, 0, 0x40};
+    static const uint8_t lcp_term[] = {0xff, 0x03, 0xc0, 0x21, 5, 1, 0, 4};
+    audit_ppp_mock_t mock_off_req = {
+        .frames = {peer_mppe_cr, lcp_term},
+        .lens = {sizeof(peer_mppe_cr), sizeof(lcp_term)},
+        .count = 2,
+    };
+    ppp_transport_t t_off = {
+        .ctx = &mock_off_req,
+        .send_frame = audit_ppp_mock_send,
+        .recv_frame = audit_ppp_mock_recv,
+        .enable_mppe = 1,
+        .auth_policy = TUNNEL_PPP_AUTH_AUTO,
+        .mppe_mode = TUNNEL_MPPE_OFF,
+    };
+    ppp_session_t sess_off;
+    memset(&sess_off, 0, sizeof(sess_off));
+    assert(ppp_ipcp_negotiate_transport(&t_off, &sess_off) == PPP_NEGOTIATE_MPPE_REQUIRED_BY_PEER);
+
+    /* Empty CCP CR in MPPE Off succeeds in cleartext. */
+    static const uint8_t empty_ccp_cr[] = {0xff, 0x03, 0x80, 0xfd, 1, 1, 0, 4};
+    static const uint8_t ipcp_peer_cr[] = {0xff, 0x03, 0x80, 0x21, 1, 1, 0, 10, 3, 6, 10, 0, 0, 1};
+    static const uint8_t ipcp_ack[] = {0xff, 0x03, 0x80, 0x21, 2, 1, 0, 10, 3, 6, 10, 0, 0, 2};
+    audit_ppp_mock_t mock_off_ok = {
+        .frames = {empty_ccp_cr, ipcp_peer_cr, ipcp_ack},
+        .lens = {sizeof(empty_ccp_cr), sizeof(ipcp_peer_cr), sizeof(ipcp_ack)},
+        .count = 3,
+    };
+    t_off.ctx = &mock_off_ok;
+    memset(&sess_off, 0, sizeof(sess_off));
+    assert(ppp_ipcp_negotiate_transport(&t_off, &sess_off) == 0);
+    assert(sess_off.mppe.enabled == 0);
+  }
   return 0;
 }

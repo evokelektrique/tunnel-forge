@@ -21,6 +21,8 @@ internal data class TunnelLaunchConfig(
     val proxySocksPort: Int,
     val proxyAllowLan: Boolean,
     val protocol: String = VpnContract.PROTOCOL_L2TP,
+    val pppAuth: String = VpnContract.PPP_AUTH_AUTO,
+    val mppe: String = VpnContract.MPPE_AUTO,
     val proxyAuthEnabled: Boolean = false,
     val proxyAuthUsername: String = "",
     val proxyAuthPassword: String = "",
@@ -76,6 +78,13 @@ internal data class TunnelLaunchConfig(
                 } else {
                     VpnContract.PROTOCOL_L2TP
                 }
+            val pppAuth = normalizePppAuth(args[VpnContract.ARG_PPP_AUTH] as? String)
+            val mppe =
+                if (protocol == VpnContract.PROTOCOL_PPTP) {
+                    normalizeMppe(args[VpnContract.ARG_MPPE] as? String)
+                } else {
+                    VpnContract.MPPE_AUTO
+                }
             val proxyHttpPort = sanitizePort(args[VpnContract.ARG_PROXY_HTTP_PORT], ProxyTunnelService.DEFAULT_HTTP_PORT)
             val proxySocksPort = sanitizePort(args[VpnContract.ARG_PROXY_SOCKS_PORT], ProxyTunnelService.DEFAULT_SOCKS_PORT)
             val proxyAllowLan = args[VpnContract.ARG_PROXY_ALLOW_LAN] as? Boolean ?: false
@@ -102,11 +111,28 @@ internal data class TunnelLaunchConfig(
                 proxySocksPort = proxySocksPort,
                 proxyAllowLan = proxyAllowLan,
                 protocol = protocol,
+                pppAuth = pppAuth,
+                mppe = mppe,
                 proxyAuthEnabled = proxyAuthEnabled,
                 proxyAuthUsername = proxyAuthUsername,
                 proxyAuthPassword = proxyAuthPassword,
             )
         }
+
+        fun normalizePppAuth(raw: String?): String =
+            when (raw?.trim()?.lowercase()) {
+                VpnContract.PPP_AUTH_MSCHAPV2 -> VpnContract.PPP_AUTH_MSCHAPV2
+                VpnContract.PPP_AUTH_CHAP_MD5 -> VpnContract.PPP_AUTH_CHAP_MD5
+                VpnContract.PPP_AUTH_PAP -> VpnContract.PPP_AUTH_PAP
+                else -> VpnContract.PPP_AUTH_AUTO
+            }
+
+        fun normalizeMppe(raw: String?): String =
+            when (raw?.trim()?.lowercase()) {
+                VpnContract.MPPE_ON -> VpnContract.MPPE_ON
+                VpnContract.MPPE_OFF -> VpnContract.MPPE_OFF
+                else -> VpnContract.MPPE_AUTO
+            }
 
         private fun parsePackageList(raw: Any?): List<String> {
             val out = mutableListOf<String>()

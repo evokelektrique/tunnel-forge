@@ -939,5 +939,43 @@
         "type": "int"
       }
     }
-  }
+  },
+  "pppAuthentication": "PPP authentication",
+  "pppAuthAuto": "Auto",
+  "pppAuthMschapV2": "MS-CHAPv2",
+  "pppAuthChapMd5": "CHAP-MD5",
+  "pppAuthPap": "PAP",
+  "pppAuthAutoHelp": "Accept the authentication method offered by the server.",
+  "pppAuthMschapV2Help": "Require MS-CHAPv2; reject servers that only offer PAP or CHAP-MD5.",
+  "pppAuthChapMd5Help": "Require CHAP-MD5; reject servers that only offer PAP or MS-CHAPv2.",
+  "pppAuthPapHelp": "Require PAP; reject servers that only offer CHAP-MD5 or MS-CHAPv2.",
+  "mppe": "MPPE",
+  "mppeAuto": "Auto",
+  "mppeOn": "On",
+  "mppeOff": "Off",
+  "mppeAutoHelp": "Receive MPPE status from the server during handshake.",
+  "mppeOnHelp": "Forcefully use MPPE; reject if server or profile does not accept MPPE.",
+  "mppeOffHelp": "Forcefully disable MPPE; reject if server only accepts MPPE.",
+  "mppeRequiresMschapV2": "MPPE On requires Auto or MS-CHAPv2 authentication",
+  "profileTransferUnsupportedPppAuth": "Unsupported PPP authentication: {pppAuth}",
+  "@profileTransferUnsupportedPppAuth": {
+    "placeholders": {
+      "pppAuth": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTransferUnsupportedMppe": "Unsupported MPPE mode: {mppe}",
+  "@profileTransferUnsupportedMppe": {
+    "placeholders": {
+      "mppe": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTransferIncompatibleAuthAndMppe": "MPPE On requires Auto or MS-CHAPv2 authentication",
+  "tunnelFailureEngine16Title": "MPPE required by server",
+  "tunnelFailureEngine16Explanation": "The PPTP server requires MPPE encryption, but MPPE is set to Off in this profile. Switch MPPE to Auto or On and try again.",
+  "tunnelFailureEngine17Title": "PPP authentication rejected",
+  "tunnelFailureEngine17Explanation": "The VPN server did not accept the PPP authentication method selected in this profile. Set PPP authentication to Auto or a method the server supports."
 }

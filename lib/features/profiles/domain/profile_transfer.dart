@@ -11,6 +11,9 @@ enum ProfileTransferErrorCode {
   notJsonObject,
   unsupportedVersion,
   unsupportedProtocol,
+  unsupportedPppAuth,
+  unsupportedMppe,
+  incompatibleAuthAndMppe,
   bundleEmpty,
   entryNotJsonObject,
   invalidShareLink,
@@ -29,6 +32,8 @@ class ProfileTransferFormatException extends FormatException {
     this.field,
     this.version,
     this.protocol,
+    this.pppAuth,
+    this.mppe,
     this.dnsHost,
     this.dnsProtocol,
   });
@@ -37,6 +42,8 @@ class ProfileTransferFormatException extends FormatException {
   final String? field;
   final String? version;
   final String? protocol;
+  final String? pppAuth;
+  final String? mppe;
   final String? dnsHost;
   final DnsProtocol? dnsProtocol;
 
@@ -52,6 +59,12 @@ class ProfileTransferFormatException extends FormatException {
         t.profileTransferUnsupportedVersion(version ?? ''),
       ProfileTransferErrorCode.unsupportedProtocol =>
         t.profileTransferUnsupportedProtocol(protocol ?? ''),
+      ProfileTransferErrorCode.unsupportedPppAuth =>
+        t.profileTransferUnsupportedPppAuth(pppAuth ?? ''),
+      ProfileTransferErrorCode.unsupportedMppe =>
+        t.profileTransferUnsupportedMppe(mppe ?? ''),
+      ProfileTransferErrorCode.incompatibleAuthAndMppe =>
+        t.profileTransferIncompatibleAuthAndMppe,
       ProfileTransferErrorCode.bundleEmpty => t.profileTransferBundleEmpty,
       ProfileTransferErrorCode.entryNotJsonObject =>
         t.profileTransferEntryNotJsonObject,
@@ -93,6 +106,8 @@ class ProfileTransferEnvelope {
     required this.dns2Protocol,
     required this.mtu,
     this.protocol = TunnelProtocol.l2tp,
+    this.pppAuth = PppAuthMethod.auto,
+    this.mppeMode = MppeMode.auto,
     this.version = currentVersion,
   });
 
@@ -114,6 +129,8 @@ class ProfileTransferEnvelope {
 
   final int version;
   final TunnelProtocol protocol;
+  final PppAuthMethod pppAuth;
+  final MppeMode mppeMode;
   final String displayName;
   final String server;
   final String user;
@@ -143,6 +160,8 @@ class ProfileTransferEnvelope {
       server: server.trim(),
       user: user,
       protocol: protocol,
+      pppAuth: pppAuth,
+      mppeMode: protocol.isPptp ? mppeMode : MppeMode.auto,
       dnsAutomatic: dnsAutomatic,
       dns1Host: Profile.normalizeDnsServerForProtocol(dns1Host, dns1Protocol),
       dns1Protocol: dns1Protocol,
@@ -157,6 +176,8 @@ class ProfileTransferEnvelope {
   Map<String, Object?> toJson() => <String, Object?>{
     'v': version,
     'protocol': protocol.jsonValue,
+    if (pppAuth != PppAuthMethod.auto) 'pppAuth': pppAuth.jsonValue,
+    if (protocol.isPptp && mppeMode != MppeMode.auto) 'mppe': mppeMode.jsonValue,
     'displayName': displayName,
     'server': server,
     'user': user,
@@ -186,6 +207,12 @@ class ProfileTransferEnvelope {
     }
 
     addParam('protocol', protocol.jsonValue);
+    if (pppAuth != PppAuthMethod.auto) {
+      addParam('pppAuth', pppAuth.jsonValue);
+    }
+    if (protocol.isPptp && mppeMode != MppeMode.auto) {
+      addParam('mppe', mppeMode.jsonValue);
+    }
     final trimmedName = displayName.trim();
     if (trimmedName.isNotEmpty) {
       addParam('displayName', trimmedName);
@@ -225,6 +252,8 @@ class ProfileTransferEnvelope {
   }) {
     return ProfileTransferEnvelope(
       protocol: profile.protocol,
+      pppAuth: profile.pppAuth,
+      mppeMode: profile.protocol.isPptp ? profile.mppeMode : MppeMode.auto,
       displayName: profile.displayName,
       server: profile.server,
       user: profile.user,
@@ -358,6 +387,8 @@ class ProfileTransferEnvelope {
     var password = '';
     var psk = '';
     String? rawProtocol;
+    String? rawPppAuth;
+    String? rawMppe;
     String? rawMtu;
     final rawDnsValues = <String>[];
 
@@ -365,6 +396,10 @@ class ProfileTransferEnvelope {
       switch (pair.key) {
         case 'protocol':
           rawProtocol = pair.value;
+        case 'pppAuth':
+          rawPppAuth = pair.value;
+        case 'mppe':
+          rawMppe = pair.value;
         case 'displayName':
           displayName = pair.value.trim();
         case 'user':
@@ -400,6 +435,45 @@ class ProfileTransferEnvelope {
     }
     if (protocol.isPptp) {
       psk = '';
+    }
+
+    final PppAuthMethod pppAuth;
+    if (rawPppAuth == null || rawPppAuth.trim().isEmpty) {
+      pppAuth = PppAuthMethod.auto;
+    } else {
+      final parsedPppAuth = PppAuthMethod.tryParseWire(rawPppAuth);
+      if (parsedPppAuth == null) {
+        final badAuth = rawPppAuth.trim();
+        throw ProfileTransferFormatException(
+          'Unsupported PPP authentication: $badAuth',
+          code: ProfileTransferErrorCode.unsupportedPppAuth,
+          pppAuth: badAuth,
+        );
+      }
+      pppAuth = parsedPppAuth;
+    }
+
+    final MppeMode mppeMode;
+    if (rawMppe == null || rawMppe.trim().isEmpty) {
+      mppeMode = MppeMode.auto;
+    } else {
+      final parsedMppe = MppeMode.tryParseWire(rawMppe);
+      if (parsedMppe == null) {
+        final badMppe = rawMppe.trim();
+        throw ProfileTransferFormatException(
+          'Unsupported MPPE mode: $badMppe',
+          code: ProfileTransferErrorCode.unsupportedMppe,
+          mppe: badMppe,
+        );
+      }
+      mppeMode = protocol.isPptp ? parsedMppe : MppeMode.auto;
+    }
+
+    if (Profile.isIncompatiblePppAuthAndMppe(protocol, pppAuth, mppeMode)) {
+      throw const ProfileTransferFormatException(
+        'MPPE On requires Auto or MS-CHAPv2 authentication',
+        code: ProfileTransferErrorCode.incompatibleAuthAndMppe,
+      );
     }
 
     final int mtu;
@@ -461,6 +535,8 @@ class ProfileTransferEnvelope {
 
     return ProfileTransferEnvelope(
       protocol: protocol,
+      pppAuth: pppAuth,
+      mppeMode: mppeMode,
       displayName: displayName,
       server: server,
       user: user,
@@ -614,6 +690,62 @@ class ProfileTransferEnvelope {
       }
       protocol = parsedProtocol;
     }
+    final PppAuthMethod pppAuth;
+    final rawPppAuth = map['pppAuth'];
+    if (rawPppAuth == null) {
+      pppAuth = PppAuthMethod.auto;
+    } else if (rawPppAuth is! String) {
+      throw const ProfileTransferFormatException(
+        'Missing string field: pppAuth',
+        code: ProfileTransferErrorCode.missingField,
+        field: 'pppAuth',
+      );
+    } else if (rawPppAuth.trim().isEmpty) {
+      pppAuth = PppAuthMethod.auto;
+    } else {
+      final parsedPppAuth = PppAuthMethod.tryParseWire(rawPppAuth);
+      if (parsedPppAuth == null) {
+        final badAuth = rawPppAuth.trim();
+        throw ProfileTransferFormatException(
+          'Unsupported PPP authentication: $badAuth',
+          code: ProfileTransferErrorCode.unsupportedPppAuth,
+          pppAuth: badAuth,
+        );
+      }
+      pppAuth = parsedPppAuth;
+    }
+
+    final MppeMode mppeMode;
+    final rawMppe = map['mppe'];
+    if (rawMppe == null) {
+      mppeMode = MppeMode.auto;
+    } else if (rawMppe is! String) {
+      throw const ProfileTransferFormatException(
+        'Missing string field: mppe',
+        code: ProfileTransferErrorCode.missingField,
+        field: 'mppe',
+      );
+    } else if (rawMppe.trim().isEmpty) {
+      mppeMode = MppeMode.auto;
+    } else {
+      final parsedMppe = MppeMode.tryParseWire(rawMppe);
+      if (parsedMppe == null) {
+        final badMppe = rawMppe.trim();
+        throw ProfileTransferFormatException(
+          'Unsupported MPPE mode: $badMppe',
+          code: ProfileTransferErrorCode.unsupportedMppe,
+          mppe: badMppe,
+        );
+      }
+      mppeMode = protocol.isPptp ? parsedMppe : MppeMode.auto;
+    }
+
+    if (Profile.isIncompatiblePppAuthAndMppe(protocol, pppAuth, mppeMode)) {
+      throw const ProfileTransferFormatException(
+        'MPPE On requires Auto or MS-CHAPv2 authentication',
+        code: ProfileTransferErrorCode.incompatibleAuthAndMppe,
+      );
+    }
     final displayName = _requireString(map, 'displayName');
     final server = _requireString(map, 'server');
     final user = _requireString(map, 'user');
@@ -691,6 +823,8 @@ class ProfileTransferEnvelope {
     return ProfileTransferEnvelope(
       version: version,
       protocol: protocol,
+      pppAuth: pppAuth,
+      mppeMode: mppeMode,
       displayName: displayName,
       server: server,
       user: user,

@@ -44,6 +44,8 @@ internal object TunnelReconnectPolicy {
             exitCode == VpnBridge.EXIT_ROOT_DENIED ||
             exitCode == VpnBridge.EXIT_GRE_SOCKET_FAILED ||
             exitCode == VpnBridge.EXIT_MPPE_FAILED ||
+            exitCode == VpnBridge.EXIT_MPPE_REQUIRED_BY_PEER ||
+            exitCode == VpnBridge.EXIT_PPP_AUTH_MISMATCH ||
             exitCode == VpnBridge.EXIT_BAD_ARGS ||
             exitCode == VpnBridge.EXIT_PROXY_NOT_IMPLEMENTED ||
             exitCode == VpnBridge.EXIT_STOPPED ||

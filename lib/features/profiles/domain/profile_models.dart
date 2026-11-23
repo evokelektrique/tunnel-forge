@@ -41,6 +41,107 @@ enum TunnelProtocol {
   }
 }
 
+/// PPP authentication policy selected per saved profile.
+enum PppAuthMethod {
+  auto('auto', 'Auto'),
+  mschapV2('mschapv2', 'MS-CHAPv2'),
+  chapMd5('chap-md5', 'CHAP-MD5'),
+  pap('pap', 'PAP');
+
+  const PppAuthMethod(this.jsonValue, this.shortLabel);
+
+  final String jsonValue;
+  final String shortLabel;
+
+  static const List<PppAuthMethod> orderedValues = <PppAuthMethod>[
+    PppAuthMethod.auto,
+    PppAuthMethod.mschapV2,
+    PppAuthMethod.chapMd5,
+    PppAuthMethod.pap,
+  ];
+
+  String localizedDropdownLabel(AppLocalizations t) {
+    return switch (this) {
+      PppAuthMethod.auto => t.pppAuthAuto,
+      PppAuthMethod.mschapV2 => t.pppAuthMschapV2,
+      PppAuthMethod.chapMd5 => t.pppAuthChapMd5,
+      PppAuthMethod.pap => t.pppAuthPap,
+    };
+  }
+
+  String localizedHelperText(AppLocalizations t) {
+    return switch (this) {
+      PppAuthMethod.auto => t.pppAuthAutoHelp,
+      PppAuthMethod.mschapV2 => t.pppAuthMschapV2Help,
+      PppAuthMethod.chapMd5 => t.pppAuthChapMd5Help,
+      PppAuthMethod.pap => t.pppAuthPapHelp,
+    };
+  }
+
+  static PppAuthMethod fromJson(Object? raw) {
+    return tryParseWire(raw) ?? PppAuthMethod.auto;
+  }
+
+  static PppAuthMethod? tryParseWire(Object? raw) {
+    if (raw is! String) return null;
+    return switch (raw.trim().toLowerCase()) {
+      'auto' => PppAuthMethod.auto,
+      'mschapv2' || 'mschap-v2' || 'ms-chapv2' => PppAuthMethod.mschapV2,
+      'chap-md5' || 'chap_md5' || 'chapmd5' => PppAuthMethod.chapMd5,
+      'pap' => PppAuthMethod.pap,
+      _ => null,
+    };
+  }
+}
+
+/// PPTP MPPE encryption policy selected per saved profile.
+enum MppeMode {
+  auto('auto', 'Auto'),
+  on('on', 'On'),
+  off('off', 'Off');
+
+  const MppeMode(this.jsonValue, this.shortLabel);
+
+  final String jsonValue;
+  final String shortLabel;
+
+  static const List<MppeMode> orderedValues = <MppeMode>[
+    MppeMode.auto,
+    MppeMode.on,
+    MppeMode.off,
+  ];
+
+  String localizedDropdownLabel(AppLocalizations t) {
+    return switch (this) {
+      MppeMode.auto => t.mppeAuto,
+      MppeMode.on => t.mppeOn,
+      MppeMode.off => t.mppeOff,
+    };
+  }
+
+  String localizedHelperText(AppLocalizations t) {
+    return switch (this) {
+      MppeMode.auto => t.mppeAutoHelp,
+      MppeMode.on => t.mppeOnHelp,
+      MppeMode.off => t.mppeOffHelp,
+    };
+  }
+
+  static MppeMode fromJson(Object? raw) {
+    return tryParseWire(raw) ?? MppeMode.auto;
+  }
+
+  static MppeMode? tryParseWire(Object? raw) {
+    if (raw is! String) return null;
+    return switch (raw.trim().toLowerCase()) {
+      'auto' => MppeMode.auto,
+      'on' => MppeMode.on,
+      'off' => MppeMode.off,
+      _ => null,
+    };
+  }
+}
+
 /// Connection surface: Android VPN/TUN vs. local proxy listeners only.
 enum ConnectionMode {
   vpnTunnel('vpnTunnel'),
@@ -502,6 +603,8 @@ class Profile {
     required this.server,
     required this.user,
     this.protocol = TunnelProtocol.l2tp,
+    this.pppAuth = PppAuthMethod.auto,
+    this.mppeMode = MppeMode.auto,
     this.dnsAutomatic = true,
     this.dns1Host = '',
     this.dns1Protocol = DnsProtocol.dnsOverUdp,
@@ -535,6 +638,8 @@ class Profile {
   final String server;
   final String user;
   final TunnelProtocol protocol;
+  final PppAuthMethod pppAuth;
+  final MppeMode mppeMode;
   final bool dnsAutomatic;
   final String dns1Host;
   final DnsProtocol dns1Protocol;
@@ -548,18 +653,35 @@ class Profile {
   /// Null for local profiles; otherwise the owning [Subscription.id].
   final String? subscriptionId;
 
+  static bool isIncompatiblePppAuthAndMppe(
+    TunnelProtocol protocol,
+    PppAuthMethod pppAuth,
+    MppeMode mppeMode,
+  ) {
+    return protocol.isPptp &&
+        mppeMode == MppeMode.on &&
+        (pppAuth == PppAuthMethod.pap || pppAuth == PppAuthMethod.chapMd5);
+  }
+
   Profile copyWith({
     bool? favorite,
     TunnelProtocol? protocol,
+    PppAuthMethod? pppAuth,
+    MppeMode? mppeMode,
     String? subscriptionId,
     bool clearSubscriptionId = false,
   }) {
+    final nextProtocol = protocol ?? this.protocol;
     return Profile(
       id: id,
       displayName: displayName,
       server: server,
       user: user,
-      protocol: protocol ?? this.protocol,
+      protocol: nextProtocol,
+      pppAuth: pppAuth ?? this.pppAuth,
+      mppeMode: nextProtocol.isPptp
+          ? (mppeMode ?? this.mppeMode)
+          : MppeMode.auto,
       dnsAutomatic: dnsAutomatic,
       dns1Host: dns1Host,
       dns1Protocol: dns1Protocol,
@@ -749,6 +871,8 @@ class Profile {
     'server': server,
     'user': user,
     'protocol': protocol.jsonValue,
+    'pppAuth': pppAuth.jsonValue,
+    if (protocol.isPptp) 'mppe': mppeMode.jsonValue,
     'dnsAutomatic': dnsAutomatic,
     'dns1Host': normalizeDnsServerForProtocol(dns1Host, dns1Protocol),
     'dns1Protocol': dns1Protocol.jsonValue,
@@ -797,6 +921,10 @@ class Profile {
     }
     final favorite = m['favorite'] is bool ? m['favorite'] as bool : false;
     final protocol = TunnelProtocol.fromJson(m['protocol']);
+    final pppAuth = PppAuthMethod.fromJson(m['pppAuth']);
+    final mppeMode = protocol.isPptp
+        ? MppeMode.fromJson(m['mppe'])
+        : MppeMode.auto;
     final rawSubId = m['subscriptionId'];
     final subscriptionId = rawSubId is String && rawSubId.trim().isNotEmpty
         ? rawSubId.trim()
@@ -807,6 +935,8 @@ class Profile {
       server: server,
       user: user,
       protocol: protocol,
+      pppAuth: pppAuth,
+      mppeMode: mppeMode,
       dnsAutomatic: dnsAutomatic,
       dns1Host: normalizeDnsServerForProtocol(dns1Host, parsedDns1Protocol),
       dns1Protocol: parsedDns1Protocol,

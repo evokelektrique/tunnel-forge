@@ -96,4 +96,48 @@ void main() {
       ),
     );
   });
+
+  test('validates and persists pppAuth and mppeMode policies', () async {
+    await dispatch(
+      const ProfileFormStarted(null),
+      (state) => !state.loading && state.profileId.isNotEmpty,
+    );
+    await dispatch(
+      const ProfileFormProtocolChanged(TunnelProtocol.pptp),
+      (state) => state.protocol == TunnelProtocol.pptp,
+    );
+    await dispatch(
+      const ProfileFormPppAuthChanged(PppAuthMethod.chapMd5),
+      (state) => state.pppAuth == PppAuthMethod.chapMd5,
+    );
+    await dispatch(
+      const ProfileFormMppeModeChanged(MppeMode.on),
+      (state) => state.mppeMode == MppeMode.on,
+    );
+    expect(bloc.state.mppeErrorText, AppL10n.current.mppeRequiresMschapV2);
+
+    final prevMsg = bloc.state.messageId;
+    final blocked = await dispatch(
+      const ProfileFormSaveRequested(),
+      (state) => state.messageId > prevMsg,
+    );
+    expect(blocked.saved, isFalse);
+    expect(blocked.message, AppL10n.current.mppeRequiresMschapV2);
+
+    await dispatch(
+      const ProfileFormPppAuthChanged(PppAuthMethod.mschapV2),
+      (state) => state.pppAuth == PppAuthMethod.mschapV2,
+    );
+    expect(bloc.state.mppeErrorText, isNull);
+
+    final savedState = await dispatch(
+      const ProfileFormSaveRequested(),
+      (state) => state.saved,
+    );
+    expect(savedState.saved, isTrue);
+    final stored = (await store.loadProfiles()).single;
+    expect(stored.protocol, TunnelProtocol.pptp);
+    expect(stored.pppAuth, PppAuthMethod.mschapV2);
+    expect(stored.mppeMode, MppeMode.on);
+  });
 }

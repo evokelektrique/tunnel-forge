@@ -135,6 +135,8 @@ void main() {
     const rootDenied = TunnelFailure(namespace: 'engine', code: '7');
     const greFailed = TunnelFailure(namespace: 'engine', code: '8');
     const mppeFailed = TunnelFailure(namespace: 'engine', code: '9');
+    const mppeRequired = TunnelFailure(namespace: 'engine', code: '16');
+    const authMismatch = TunnelFailure(namespace: 'engine', code: '17');
     const ctrlRejected = TunnelFailure(namespace: 'pptp-ctrl', code: '4');
 
     expect(noRoot.label, 'Root access unavailable');
@@ -143,6 +145,9 @@ void main() {
     expect(rootDenied.explanation, contains('Magisk'));
     expect(greFailed.label, 'GRE socket setup failed');
     expect(mppeFailed.label, 'MPPE encryption failed');
+    expect(mppeRequired.label, 'MPPE required by server');
+    expect(mppeRequired.explanation, contains('Off'));
+    expect(authMismatch.label, 'PPP authentication rejected');
     expect(ctrlRejected.label, 'PPTP control connection rejected');
   });
 }

@@ -183,6 +183,8 @@ internal class QuickSettingsConfigStore(
             putString(KEY_DNS2_PROTOCOL, dns2?.protocol?.wireValue.orEmpty())
             putInt(KEY_MTU, config.mtu)
             putString(KEY_PROTOCOL, config.protocol)
+            putString(KEY_PPP_AUTH, config.pppAuth)
+            putString(KEY_MPPE, config.mppe)
             putString(KEY_CONNECTION_MODE, config.connectionMode)
             putBoolean(KEY_SPLIT_TUNNEL_ENABLED, config.splitTunnelEnabled)
             putString(KEY_SPLIT_TUNNEL_MODE, config.splitTunnelMode)
@@ -226,6 +228,13 @@ internal class QuickSettingsConfigStore(
                 VpnContract.PROTOCOL_PPTP
             } else {
                 VpnContract.PROTOCOL_L2TP
+            }
+        val pppAuth = TunnelLaunchConfig.normalizePppAuth(store.getString(KEY_PPP_AUTH))
+        val mppe =
+            if (protocol == VpnContract.PROTOCOL_PPTP) {
+                TunnelLaunchConfig.normalizeMppe(store.getString(KEY_MPPE))
+            } else {
+                VpnContract.MPPE_AUTO
             }
         val connectionMode =
             if (store.getString(KEY_CONNECTION_MODE) == VpnContract.MODE_PROXY_ONLY) {
@@ -272,6 +281,8 @@ internal class QuickSettingsConfigStore(
             ),
             proxyAllowLan = store.getBoolean(KEY_PROXY_ALLOW_LAN, false),
             protocol = protocol,
+            pppAuth = pppAuth,
+            mppe = mppe,
             proxyAuthEnabled = store.getBoolean(KEY_PROXY_AUTH_ENABLED, false),
             proxyAuthUsername = store.getString(KEY_PROXY_AUTH_USERNAME).orEmpty(),
             proxyAuthPassword = decodedProxyAuthPassword,
@@ -348,6 +359,8 @@ internal class QuickSettingsConfigStore(
         private const val KEY_DNS2_PROTOCOL = "dns2_protocol"
         private const val KEY_MTU = "mtu"
         private const val KEY_PROTOCOL = "protocol"
+        private const val KEY_PPP_AUTH = "ppp_auth"
+        private const val KEY_MPPE = "mppe"
         private const val KEY_CONNECTION_MODE = "connection_mode"
         private const val KEY_SPLIT_TUNNEL_ENABLED = "split_tunnel_enabled"
         private const val KEY_SPLIT_TUNNEL_MODE = "split_tunnel_mode"

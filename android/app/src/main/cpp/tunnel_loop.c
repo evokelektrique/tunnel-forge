@@ -382,7 +382,44 @@ void tunnel_set_failure(int kind, int code, int general_error) {
 
 void tunnel_get_failure(int out[3]) { memcpy(out, worker_failure, sizeof(worker_failure)); }
 
-static int tunnel_negotiate_pptp(const char *server, const char *user, const char *password, int tun_mtu) {
+static const char *tunnel_ppp_auth_name(int ppp_auth) {
+  switch (ppp_auth) {
+  case TUNNEL_PPP_AUTH_MSCHAPV2:
+    return "mschapv2";
+  case TUNNEL_PPP_AUTH_CHAP_MD5:
+    return "chap-md5";
+  case TUNNEL_PPP_AUTH_PAP:
+    return "pap";
+  case TUNNEL_PPP_AUTH_AUTO:
+  default:
+    return "auto";
+  }
+}
+
+static const char *tunnel_mppe_mode_name(int mppe_mode) {
+  switch (mppe_mode) {
+  case TUNNEL_MPPE_ON:
+    return "on";
+  case TUNNEL_MPPE_OFF:
+    return "off";
+  case TUNNEL_MPPE_AUTO:
+  default:
+    return "auto";
+  }
+}
+
+static int tunnel_map_ppp_error(int ppp_rc) {
+  if (ppp_rc == PPP_NEGOTIATE_MPPE_FAILED)
+    return TUNNEL_EXIT_MPPE_FAILED;
+  if (ppp_rc == PPP_NEGOTIATE_MPPE_REQUIRED_BY_PEER)
+    return TUNNEL_EXIT_MPPE_REQUIRED_BY_PEER;
+  if (ppp_rc == PPP_NEGOTIATE_AUTH_MISMATCH)
+    return TUNNEL_EXIT_PPP_AUTH_MISMATCH;
+  return TUNNEL_EXIT_PPP_FAILED;
+}
+
+static int tunnel_negotiate_pptp(const char *server, const char *user, const char *password, int tun_mtu, int ppp_auth,
+                                 int mppe_mode) {
   pptp_session_init(&g_state.pptp);
   g_state.protocol = TUNNEL_PROTOCOL_PPTP;
 
@@ -415,6 +452,8 @@ static int tunnel_negotiate_pptp(const char *server, const char *user, const cha
   pptp_transport.send_frame = pptp_ppp_send_cb;
   pptp_transport.recv_frame = pptp_ppp_recv_cb;
   pptp_transport.enable_mppe = 1;
+  pptp_transport.auth_policy = ppp_auth;
+  pptp_transport.mppe_mode = mppe_mode;
 
   memset(&g_state.ppp, 0, sizeof(g_state.ppp));
   int ppp_rc = ppp_negotiate_over_transport(&pptp_transport, user, password, tun_mtu, &g_state.ppp);
@@ -426,7 +465,7 @@ static int tunnel_negotiate_pptp(const char *server, const char *user, const cha
     }
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "PPTP PPP negotiation failed rc=%d", ppp_rc);
     tunnel_close_active_session("PPTP PPP negotiation failed", 1);
-    return ppp_rc == PPP_NEGOTIATE_MPPE_FAILED ? TUNNEL_EXIT_MPPE_FAILED : TUNNEL_EXIT_PPP_FAILED;
+    return tunnel_map_ppp_error(ppp_rc);
   }
 
   (void)pptp_flush_gre_ack(&g_state.pptp);
@@ -436,7 +475,7 @@ static int tunnel_negotiate_pptp(const char *server, const char *user, const cha
 }
 
 int tunnel_negotiate(const char *server, const char *user, const char *password, const char *psk, int tun_mtu,
-                     int protocol) {
+                     int protocol, int ppp_auth, int mppe_mode) {
   if (g_state.ready) {
     tunnel_close_active_session("new negotiation", 1);
   }
@@ -444,11 +483,22 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
   tunnel_set_failure(0, 0, 0);
   atomic_store(&g_stop, 0);
   tun_mtu = tunnel_sanitize_mtu(tun_mtu);
-  tunnel_log("tunnel negotiate protocol=%s server=%s tun_mtu=%d", protocol == TUNNEL_PROTOCOL_PPTP ? "pptp" : "l2tp",
-             server, tun_mtu);
+  if (ppp_auth < TUNNEL_PPP_AUTH_AUTO || ppp_auth > TUNNEL_PPP_AUTH_PAP)
+    return TUNNEL_EXIT_BAD_ARGS;
+  if (mppe_mode < TUNNEL_MPPE_AUTO || mppe_mode > TUNNEL_MPPE_OFF)
+    return TUNNEL_EXIT_BAD_ARGS;
+  if (protocol == TUNNEL_PROTOCOL_PPTP && mppe_mode == TUNNEL_MPPE_ON &&
+      (ppp_auth == TUNNEL_PPP_AUTH_PAP || ppp_auth == TUNNEL_PPP_AUTH_CHAP_MD5)) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "invalid PPTP policy: MPPE On incompatible with ppp_auth=%s",
+                      tunnel_ppp_auth_name(ppp_auth));
+    return TUNNEL_EXIT_BAD_ARGS;
+  }
+  tunnel_log("tunnel negotiate protocol=%s server=%s tun_mtu=%d ppp_auth=%s mppe=%s",
+             protocol == TUNNEL_PROTOCOL_PPTP ? "pptp" : "l2tp", server, tun_mtu, tunnel_ppp_auth_name(ppp_auth),
+             tunnel_mppe_mode_name(mppe_mode));
 
   if (protocol == TUNNEL_PROTOCOL_PPTP) {
-    return tunnel_negotiate_pptp(server, user, password, tun_mtu);
+    return tunnel_negotiate_pptp(server, user, password, tun_mtu, ppp_auth, mppe_mode);
   }
   if (protocol != TUNNEL_PROTOCOL_L2TP) {
     return TUNNEL_EXIT_BAD_ARGS;
@@ -483,16 +533,17 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
   }
 
   memset(&g_state.ppp, 0, sizeof(g_state.ppp));
-  if (ppp_negotiate(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer, g_state.ike.peer_len,
-                    &g_state.l2tp, user, password, tun_mtu, &g_state.ppp) != 0) {
+  int ppp_rc = ppp_negotiate(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer, g_state.ike.peer_len,
+                             &g_state.l2tp, user, password, tun_mtu, ppp_auth, &g_state.ppp);
+  if (ppp_rc != 0) {
     if (tunnel_should_stop()) {
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "tunnel negotiate canceled during PPP");
       tunnel_close_active_session("canceled during PPP", 1);
       return TUNNEL_EXIT_STOPPED;
     }
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "PPP negotiation failed");
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "PPP negotiation failed rc=%d", ppp_rc);
     tunnel_close_active_session("PPP negotiation failed", 1);
-    return TUNNEL_EXIT_PPP_FAILED;
+    return tunnel_map_ppp_error(ppp_rc);
   }
 
   g_state.ready = 1;
@@ -952,11 +1003,11 @@ int tunnel_run_proxy_loop(void) {
 }
 
 int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char *password, const char *psk,
-                    int tun_mtu, int protocol) {
+                    int tun_mtu, int protocol, int ppp_auth, int mppe_mode) {
   atomic_store(&g_stop, 0);
   tunnel_log("tunnel start protocol=%s server=%s tun_mtu=%d", protocol == TUNNEL_PROTOCOL_PPTP ? "pptp" : "l2tp",
              server, tunnel_sanitize_mtu(tun_mtu));
-  int rc = tunnel_negotiate(server, user, password, psk, tun_mtu, protocol);
+  int rc = tunnel_negotiate(server, user, password, psk, tun_mtu, protocol, ppp_auth, mppe_mode);
   if (rc != TUNNEL_EXIT_OK)
     return rc;
   return tunnel_run_loop(tun_fd);

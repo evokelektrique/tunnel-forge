@@ -391,6 +391,8 @@ void main() {
         TunnelFailure(namespace: 'engine', code: '7'),
         TunnelFailure(namespace: 'engine', code: '8'),
         TunnelFailure(namespace: 'engine', code: '9'),
+        TunnelFailure(namespace: 'engine', code: '16'),
+        TunnelFailure(namespace: 'engine', code: '17'),
         TunnelFailure(namespace: 'android', code: '2'),
         TunnelFailure(namespace: 'app', code: 'UNKNOWN', detail: 'raw detail'),
       ];

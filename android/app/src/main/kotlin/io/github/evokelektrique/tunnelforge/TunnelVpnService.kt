@@ -282,6 +282,13 @@ class TunnelVpnService : VpnService() {
                     } else {
                         VpnContract.PROTOCOL_L2TP
                     }
+                val pppAuth = TunnelLaunchConfig.normalizePppAuth(intent.getStringExtra(EXTRA_PPP_AUTH))
+                val mppe =
+                    if (protocol == VpnContract.PROTOCOL_PPTP) {
+                        TunnelLaunchConfig.normalizeMppe(intent.getStringExtra(EXTRA_MPPE))
+                    } else {
+                        VpnContract.MPPE_AUTO
+                    }
                 val dnsAutomatic = intent.getBooleanExtra(EXTRA_DNS_AUTOMATIC, true)
                 val dnsServers = manualDnsServersFromIntent(intent)
                 val tunMtu = sanitizeMtu(intent.getIntExtra(EXTRA_MTU, DEFAULT_TUN_MTU))
@@ -365,7 +372,7 @@ class TunnelVpnService : VpnService() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$tunMtu splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$tunMtu splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
                 )
                 // TUN establish() can block; do not hold up onStartCommand after startForeground.
                 val startupThread =
@@ -378,6 +385,8 @@ class TunnelVpnService : VpnService() {
                                 password,
                                 psk,
                                 protocol,
+                                pppAuth,
+                                mppe,
                                 dnsAutomatic,
                                 dnsServers,
                                 tunMtu,
@@ -644,6 +653,8 @@ class TunnelVpnService : VpnService() {
         password: String,
         psk: String,
         protocol: String,
+        pppAuth: String,
+        mppe: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         tunMtu: Int,
@@ -824,6 +835,8 @@ class TunnelVpnService : VpnService() {
                         password = password,
                         psk = psk,
                         protocol = protocol,
+                        pppAuth = pppAuth,
+                        mppe = mppe,
                         dnsAutomatic = dnsAutomatic,
                         dnsServers = dnsServers,
                         tunMtu = tunMtu,
@@ -938,6 +951,8 @@ class TunnelVpnService : VpnService() {
         password: String,
         psk: String,
         protocol: String,
+        pppAuth: String,
+        mppe: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         tunMtu: Int,
@@ -963,6 +978,8 @@ class TunnelVpnService : VpnService() {
                 psk,
                 tunMtu,
                 VpnBridge.protocolCode(protocol),
+                VpnBridge.pppAuthCode(pppAuth),
+                VpnBridge.mppeModeCode(mppe),
                 negotiatedClientIp,
                 negotiatedPrimaryDns,
                 negotiatedSecondaryDns,
@@ -1520,6 +1537,8 @@ class TunnelVpnService : VpnService() {
             13 -> "Network connection lost."
             14 -> "VPN server stopped responding."
             15 -> "VPN server closed the connection."
+            16 -> "PPTP server requires MPPE encryption, but MPPE is turned off in this profile."
+            17 -> "The VPN server did not accept the selected PPP authentication method."
             else -> "Tunnel engine exited with code $code"
         }
 
@@ -1543,6 +1562,8 @@ class TunnelVpnService : VpnService() {
         const val EXTRA_PASSWORD = "password"
         const val EXTRA_PSK = "psk"
         const val EXTRA_PROTOCOL = "protocol"
+        const val EXTRA_PPP_AUTH = "pppAuth"
+        const val EXTRA_MPPE = "mppe"
         const val EXTRA_DNS_AUTOMATIC = "dnsAutomatic"
         const val EXTRA_DNS_SERVER_1_HOST = "dnsServer1Host"
         const val EXTRA_DNS_SERVER_1_PROTOCOL = "dnsServer1Protocol"

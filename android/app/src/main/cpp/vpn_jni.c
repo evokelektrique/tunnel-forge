@@ -29,8 +29,8 @@ int packet_endpoint_run_audit_check(int item_id, char *err_buf, size_t err_cap);
 int pptp_root_run_audit_check(int item_id, char *err_buf, size_t err_cap);
 
 static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring juser, jstring jpassword, jstring jpsk,
-                             jint tun_mtu, jint protocol, jintArray jout_client_ipv4, jintArray jout_primary_dns_ipv4,
-                             jintArray jout_secondary_dns_ipv4) {
+                             jint tun_mtu, jint protocol, jint ppp_auth, jint mppe_mode, jintArray jout_client_ipv4,
+                             jintArray jout_primary_dns_ipv4, jintArray jout_secondary_dns_ipv4) {
   (void)clazz;
   jint out = (jint)TUNNEL_EXIT_BAD_ARGS;
   const char *server = (*env)->GetStringUTFChars(env, jserver, NULL);
@@ -41,7 +41,8 @@ static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "nativeNegotiate: null string");
     goto cleanup;
   }
-  out = (jint)tunnel_negotiate(server, user, password, psk, (int)tun_mtu, (int)protocol);
+  out = (jint)tunnel_negotiate(server, user, password, psk, (int)tun_mtu, (int)protocol, (int)ppp_auth,
+                               (int)mppe_mode);
   if (out == (jint)TUNNEL_EXIT_OK && jout_client_ipv4 != NULL) {
     jsize alen = (*env)->GetArrayLength(env, jout_client_ipv4);
     if (alen >= 4) {
@@ -412,7 +413,7 @@ static jstring native_run_audit_check(JNIEnv *env, jclass clazz, jint item_id) {
 static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
       {"nativeFailure", "()[I", (void *)native_failure},
-      {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II[I[I[I)I",
+      {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIII[I[I[I)I",
        (void *)native_negotiate},
       {"nativeSetSocketProtectionEnabled", "(Z)V", (void *)native_set_socket_protection_enabled},
       {"nativeSetPptpRuntimeConfig", "(Ljava/lang/String;Ljava/lang/String;)V", (void *)native_set_pptp_runtime_config},

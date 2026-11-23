@@ -528,4 +528,84 @@ void main() {
     final updated = await store.loadProfileWithSecrets(profile.id);
     expect(updated!.password, 'p' * 256);
   });
+
+  testWidgets('ppp auth shows for L2TP and PPTP; MPPE shows for PPTP only', (
+    tester,
+  ) async {
+    final store = await buildStore();
+    const profile = Profile(
+      id: 'profile-auth-mppe-visibility',
+      displayName: 'Branch',
+      server: 'vpn.example.com',
+      user: 'alice',
+      protocol: TunnelProtocol.l2tp,
+    );
+    await store.upsertProfile(profile, password: 'pw', psk: 'psk');
+
+    await pumpHost(tester, store: store, profileId: profile.id);
+
+    final authFinder = find.byKey(const Key('ppp_auth_dropdown'));
+    final mppeFinder = find.byKey(const Key('mppe_dropdown'));
+    expect(authFinder, findsOneWidget);
+    expect(mppeFinder, findsNothing);
+    expect(
+      find.text('Accept the authentication method offered by the server.'),
+      findsOneWidget,
+    );
+
+    // Switch to PPTP: MPPE dropdown appears below PPP authentication with Auto default.
+    await tester.tap(find.byKey(const Key('protocol_dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('PPTP (root)').last);
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(mppeFinder);
+    expect(mppeFinder, findsOneWidget);
+    final mtuBottom = tester.getBottomLeft(find.byKey(const Key('mtu_field'))).dy;
+    final authTop = tester.getTopLeft(authFinder).dy;
+    final mppeTop = tester.getTopLeft(mppeFinder).dy;
+    expect(authTop, greaterThan(mtuBottom));
+    expect(mppeTop, greaterThan(authTop));
+    expect(
+      find.text('Receive MPPE status from the server during handshake.'),
+      findsOneWidget,
+    );
+
+    // Selecting MPPE On + PAP shows inline error and blocks Save.
+    await tester.ensureVisible(authFinder);
+    await tester.tap(authFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('PAP').last);
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(mppeFinder);
+    await tester.tap(mppeFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('On').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('MPPE On requires Auto or MS-CHAPv2 authentication'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    expect(find.byKey(const Key('app_toast')), findsOneWidget);
+    expect((await store.loadProfiles()).single.mppeMode, MppeMode.auto);
+
+    // Switching back to L2TP keeps in-memory MPPE On if toggled back, and saving L2TP resets persisted MPPE to Auto.
+    await tester.ensureVisible(find.byKey(const Key('protocol_dropdown')));
+    await tester.tap(find.byKey(const Key('protocol_dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('L2TP').last);
+    await tester.pumpAndSettle();
+    expect(mppeFinder, findsNothing);
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final savedL2tp = (await store.loadProfiles()).single;
+    expect(savedL2tp.protocol, TunnelProtocol.l2tp);
+    expect(savedL2tp.pppAuth, PppAuthMethod.pap);
+    expect(savedL2tp.mppeMode, MppeMode.auto);
+  });
 }

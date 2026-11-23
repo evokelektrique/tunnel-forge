@@ -94,6 +94,8 @@ class QuickSettingsConfigStoreTest {
                 proxySocksPort = 1888,
                 proxyAllowLan = true,
                 protocol = VpnContract.PROTOCOL_PPTP,
+                pppAuth = VpnContract.PPP_AUTH_MSCHAPV2,
+                mppe = VpnContract.MPPE_ON,
             )
 
         store.save(input)
@@ -138,6 +140,8 @@ class QuickSettingsConfigStoreTest {
         val loaded = store.load()
         assertNotNull(loaded)
         assertEquals(VpnContract.PROTOCOL_L2TP, loaded!!.protocol)
+        assertEquals(VpnContract.PPP_AUTH_AUTO, loaded.pppAuth)
+        assertEquals(VpnContract.MPPE_AUTO, loaded.mppe)
     }
 
     @Test

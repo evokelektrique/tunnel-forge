@@ -190,6 +190,8 @@ internal object TunnelDisconnectNotification {
             13 -> R.string.tunnel_reason_engine_13
             14 -> R.string.tunnel_reason_engine_14
             15 -> R.string.tunnel_reason_engine_15
+            16 -> R.string.tunnel_reason_engine_16
+            17 -> R.string.tunnel_reason_engine_17
             else -> null
         }
 

@@ -140,6 +140,8 @@ void main() {
         },
       ]);
       expect(args[VpnContract.argMtu], Profile.defaultVpnMtu);
+      expect(args[VpnContract.argPppAuth], VpnContract.pppAuthAuto);
+      expect(args[VpnContract.argMppe], VpnContract.mppeAuto);
       expect(
         args[VpnContract.argConnectionMode],
         ConnectionMode.vpnTunnel.jsonValue,

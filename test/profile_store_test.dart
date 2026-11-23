@@ -67,6 +67,8 @@ void main() {
         'server': 'pptp.company.net',
         'user': 'u',
         'protocol': 'pptp',
+        'pppAuth': 'chap-md5',
+        'mppe': 'off',
         'dnsAutomatic': true,
         'dns1Host': '',
         'dns1Protocol': 'dnsOverUdp',
@@ -75,7 +77,11 @@ void main() {
       });
       expect(p, isNotNull);
       expect(p!.protocol, TunnelProtocol.pptp);
+      expect(p.pppAuth, PppAuthMethod.chapMd5);
+      expect(p.mppeMode, MppeMode.off);
       expect(p.toJson()['protocol'], 'pptp');
+      expect(p.toJson()['pppAuth'], 'chap-md5');
+      expect(p.toJson()['mppe'], 'off');
     });
 
     test('parses mtu and clamps', () {

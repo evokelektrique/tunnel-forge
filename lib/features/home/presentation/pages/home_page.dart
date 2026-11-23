@@ -231,6 +231,8 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
             password: row.password,
             psk: row.psk,
             protocol: row.profile.protocol,
+            pppAuth: row.profile.pppAuth,
+            mppeMode: row.profile.mppeMode,
             secretsMissing: row.secretsMissing,
             dnsAutomatic: row.profile.dnsAutomatic,
             dnsServers: row.profile.dnsAutomatic
@@ -601,6 +603,8 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       password: row.password,
       psk: row.psk,
       protocol: profile.protocol,
+      pppAuth: profile.pppAuth,
+      mppeMode: profile.mppeMode,
       dnsAutomatic: profile.dnsAutomatic,
       dnsServers: dnsServers,
       mtu: profile.mtu,

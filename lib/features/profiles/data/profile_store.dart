@@ -744,6 +744,8 @@ class ProfileStore {
         a.server.trim().toLowerCase() == b.server.trim().toLowerCase() &&
         a.user == b.user &&
         a.protocol == b.protocol &&
+        a.pppAuth == b.pppAuth &&
+        a.mppeMode == b.mppeMode &&
         a.dnsAutomatic == b.dnsAutomatic &&
         a.dns1Host == b.dns1Host &&
         a.dns1Protocol == b.dns1Protocol &&

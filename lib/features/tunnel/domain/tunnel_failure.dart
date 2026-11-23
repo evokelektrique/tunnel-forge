@@ -148,6 +148,14 @@ class TunnelFailure extends Equatable {
       'The VPN server stopped responding to keepalive probes.',
     ),
     '15': ('Disconnected by server', 'The VPN server closed the connection.'),
+    '16': (
+      'MPPE required by server',
+      'The PPTP server requires MPPE encryption, but MPPE is set to Off in this profile. Switch MPPE to Auto or On and try again.',
+    ),
+    '17': (
+      'PPP authentication rejected',
+      'The VPN server did not accept the PPP authentication method selected in this profile. Set PPP authentication to Auto or a method the server supports.',
+    ),
   };
   static const _android = <String, (String, String)>{
     '1': (
@@ -289,6 +297,8 @@ class TunnelFailure extends Equatable {
         '13' => t.tunnelFailureEngine13Title,
         '14' => t.tunnelFailureEngine14Title,
         '15' => t.tunnelFailureEngine15Title,
+        '16' => t.tunnelFailureEngine16Title,
+        '17' => t.tunnelFailureEngine17Title,
         _ => t.tunnelFailureEngineUnknownTitle,
       },
       'android' => switch (code) {
@@ -352,6 +362,8 @@ class TunnelFailure extends Equatable {
         '13' => t.tunnelFailureEngine13Explanation,
         '14' => t.tunnelFailureEngine14Explanation,
         '15' => t.tunnelFailureEngine15Explanation,
+        '16' => t.tunnelFailureEngine16Explanation,
+        '17' => t.tunnelFailureEngine17Explanation,
         _ => t.tunnelFailureEngineUnknownExplanation,
       },
       'l2tp-stopccn' || 'l2tp-cdn' => () {

@@ -79,6 +79,8 @@
     <string name="tunnel_reason_engine_13">اتصال شبکه قطع شد.</string>
     <string name="tunnel_reason_engine_14">سرور وی‌پی‌ان دیگر پاسخ نمی‌دهد.</string>
     <string name="tunnel_reason_engine_15">سرور وی‌پی‌ان اتصال را بست.</string>
+    <string name="tunnel_reason_engine_16">سرور PPTP رمزگذاری MPPE را الزامی می‌داند، اما MPPE در این پروفایل خاموش است.</string>
+    <string name="tunnel_reason_engine_17">سرور وی‌پی‌ان روش احراز هویت PPP انتخاب‌شده را نپذیرفت.</string>
 
     <string name="tunnel_reason_android_1">دسترسی وی‌پی‌ان توسط اندروید لغو شد.</string>
     <string name="tunnel_reason_android_2">تونل توسط سیستم اندروید متوقف شد.</string>

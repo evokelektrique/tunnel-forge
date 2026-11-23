@@ -55,6 +55,8 @@ class TunnelReconnectPolicyTest {
         assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_ROOT_DENIED, null))
         assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_GRE_SOCKET_FAILED, null))
         assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_MPPE_FAILED, null))
+        assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_MPPE_REQUIRED_BY_PEER, null))
+        assertTrue(TunnelReconnectPolicy.isTerminalFailure(VpnBridge.EXIT_PPP_AUTH_MISMATCH, null))
         assertTrue(
             TunnelReconnectPolicy.isTerminalFailure(
                 VpnBridge.EXIT_PPTP_FAILED,

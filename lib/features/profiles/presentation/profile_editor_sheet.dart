@@ -608,6 +608,95 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                                   helperMaxLines: 2,
                                 ),
                           ),
+                          const SizedBox(height: 12),
+                          InputDecorator(
+                            isEmpty: false,
+                            decoration:
+                                _deco(
+                                  context,
+                                  label: t.pppAuthentication,
+                                ).copyWith(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 4,
+                                  ),
+                                  helperText: state.pppAuth.localizedHelperText(
+                                    t,
+                                  ),
+                                  helperMaxLines: 2,
+                                ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<PppAuthMethod>(
+                                key: const Key('ppp_auth_dropdown'),
+                                value: state.pppAuth,
+                                isExpanded: true,
+                                borderRadius: BorderRadius.circular(12),
+                                onChanged: state.loading || state.saving
+                                    ? null
+                                    : (value) =>
+                                          context.read<ProfileFormBloc>().add(
+                                            ProfileFormPppAuthChanged(
+                                              value ?? PppAuthMethod.auto,
+                                            ),
+                                          ),
+                                items: PppAuthMethod.orderedValues
+                                    .map(
+                                      (value) =>
+                                          DropdownMenuItem<PppAuthMethod>(
+                                            value: value,
+                                            child: Text(
+                                              value.localizedDropdownLabel(t),
+                                            ),
+                                          ),
+                                    )
+                                    .toList(growable: false),
+                              ),
+                            ),
+                          ),
+                          if (state.protocol.isPptp) ...[
+                            const SizedBox(height: 12),
+                            InputDecorator(
+                              isEmpty: false,
+                              decoration: _deco(context, label: t.mppe)
+                                  .copyWith(
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 4,
+                                    ),
+                                    helperText: state.mppeMode
+                                        .localizedHelperText(t),
+                                    helperMaxLines: 2,
+                                    errorText: state.mppeErrorText,
+                                    errorMaxLines: 2,
+                                  ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<MppeMode>(
+                                  key: const Key('mppe_dropdown'),
+                                  value: state.mppeMode,
+                                  isExpanded: true,
+                                  borderRadius: BorderRadius.circular(12),
+                                  onChanged: state.loading || state.saving
+                                      ? null
+                                      : (value) =>
+                                            context.read<ProfileFormBloc>().add(
+                                              ProfileFormMppeModeChanged(
+                                                value ?? MppeMode.auto,
+                                              ),
+                                            ),
+                                  items: MppeMode.orderedValues
+                                      .map(
+                                        (value) => DropdownMenuItem<MppeMode>(
+                                          value: value,
+                                          child: Text(
+                                            value.localizedDropdownLabel(t),
+                                          ),
+                                        ),
+                                      )
+                                      .toList(growable: false),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

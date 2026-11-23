@@ -25,6 +25,17 @@
 #define TUNNEL_PROTOCOL_L2TP 0
 #define TUNNEL_PROTOCOL_PPTP 1
 
+/** PPP authentication policy passed from Kotlin/JNI. */
+#define TUNNEL_PPP_AUTH_AUTO 0
+#define TUNNEL_PPP_AUTH_MSCHAPV2 1
+#define TUNNEL_PPP_AUTH_CHAP_MD5 2
+#define TUNNEL_PPP_AUTH_PAP 3
+
+/** PPTP MPPE policy passed from Kotlin/JNI. */
+#define TUNNEL_MPPE_AUTO 0
+#define TUNNEL_MPPE_ON 1
+#define TUNNEL_MPPE_OFF 2
+
 /** RFC 3948 four-byte prefix value before ISAKMP on UDP 4500 (zero = non-ESP / IKE). */
 #define ESP_UDP_NON_ESP_MARKER 0u
 
@@ -45,6 +56,8 @@
 #define TUNNEL_EXIT_NETWORK_LOST 13
 #define TUNNEL_EXIT_PEER_UNREACHABLE 14
 #define TUNNEL_EXIT_PEER_CLOSED 15
+#define TUNNEL_EXIT_MPPE_REQUIRED_BY_PEER 16
+#define TUNNEL_EXIT_PPP_AUTH_MISMATCH 17
 
 /** Structured failure namespaces for tunnel_set_failure(). */
 #define TUNNEL_FAILURE_MSCHAP 1
@@ -63,11 +76,11 @@ int engine_is_socket_protection_enabled(void);
 void engine_set_pptp_runtime_config(const char *helper_path, const char *bind_iface);
 
 int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char *password, const char *psk,
-                    int tun_mtu, int protocol);
+                    int tun_mtu, int protocol, int ppp_auth, int mppe_mode);
 
 /** Phase 1: L2TP (IKE+L2TP+PPP) or PPTP (TCP 1723+GRE+PPP/MPPE) negotiation (no TUN fd needed). */
 int tunnel_negotiate(const char *server, const char *user, const char *password, const char *psk, int tun_mtu,
-                     int protocol);
+                     int protocol, int ppp_auth, int mppe_mode);
 
 /* Worker-local failure: kind 1=MS-CHAP, 2=StopCCN, 3=CDN, 4=CHAP, 5=PAP.
  * No peer-provided text or credentials cross this diagnostic boundary. */
