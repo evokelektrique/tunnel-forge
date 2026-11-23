@@ -1,5 +1,6 @@
 package io.github.evokelektrique.tunnelforge
 
+import android.util.Log
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.net.ServerSocket
@@ -105,7 +106,6 @@ class NettyProxyServerRuntimeTest {
                         }
                     },
                 connectTimeoutMs = 2_000,
-                connectResponseTimeoutMs = 2_000,
             )
         runtime.start()
         val executor = Executors.newFixedThreadPool(16)
@@ -264,7 +264,6 @@ class NettyProxyServerRuntimeTest {
                                 }
                             }
                     },
-                connectResponseTimeoutMs = 5_000,
             )
         runtime.start()
         try {
@@ -398,6 +397,237 @@ class NettyProxyServerRuntimeTest {
             runtime.stop()
         }
         assertTrue(closeCalled.await(2, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun stopWhileConnectAndWriteInFlightDoesNotLeakOrCrashWorkerThreads() {
+        val openEntered = CountDownLatch(1)
+        val allowOpenFinish = CountDownLatch(1)
+        val writeEntered = CountDownLatch(1)
+        val allowWriteFinish = CountDownLatch(1)
+        val slowSessionClosed = CountDownLatch(1)
+        val sessionCounter = AtomicInteger(1)
+        val uncaughtErrors = CopyOnWriteArrayList<Throwable>()
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            if (thread.name == "netty-proxy-transport") {
+                uncaughtErrors.add(throwable)
+            } else {
+                previousHandler?.uncaughtException(thread, throwable)
+            }
+        }
+        val runtime =
+            NettyProxyServerRuntime(
+                config = ProxyRuntimeConfig(httpEnabled = true, httpPort = findFreePort(), socksEnabled = false, socksPort = 1080),
+                transport =
+                    object : ProxyTransport {
+                        override fun openTcpSession(request: ProxyConnectRequest): ProxyTransportSession {
+                            val id = sessionCounter.getAndIncrement()
+                            return object : ProxyTransportSession {
+                                override val descriptor = ProxySessionDescriptor(id, request, System.currentTimeMillis())
+
+                                override fun awaitConnected(timeoutMs: Long) {
+                                    if (request.host == "198.51.100.2") {
+                                        openEntered.countDown()
+                                        // Keep returning after Netty's EventLoop terminates, simulating JNI open unblocking late.
+                                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+                                        while (System.nanoTime() < deadline && allowOpenFinish.count > 0) {
+                                            try {
+                                                allowOpenFinish.await(50, TimeUnit.MILLISECONDS)
+                                            } catch (_: InterruptedException) {
+                                            }
+                                        }
+                                    }
+                                }
+
+                                override fun readRemoteBytes(maxLen: Int, timeoutMs: Int): ByteArray? {
+                                    Thread.sleep(25)
+                                    return null
+                                }
+
+                                override fun writeClientBytes(bytes: ByteArray, timeoutMs: Int): Int {
+                                    if (request.host == "198.51.100.1") {
+                                        writeEntered.countDown()
+                                        allowWriteFinish.await(2, TimeUnit.SECONDS)
+                                    }
+                                    return bytes.size
+                                }
+
+                                override fun pumpBidirectional(client: ProxyClientConnection) {}
+
+                                override fun close() {
+                                    if (request.host == "198.51.100.2") {
+                                        slowSessionClosed.countDown()
+                                    }
+                                }
+                            }
+                        }
+                    },
+                connectTimeoutMs = 5_000,
+            )
+        runtime.start()
+        try {
+            Socket("127.0.0.1", runtime.exposureInfo().httpPort).use { writeSocket ->
+                writeSocket.soTimeout = 2_000
+                val wOut = BufferedOutputStream(writeSocket.getOutputStream())
+                val wIn = BufferedInputStream(writeSocket.getInputStream())
+                wOut.write("CONNECT 198.51.100.1:443 HTTP/1.1\r\nHost: test\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+                wOut.flush()
+                assertTrue(readHeaders(wIn).startsWith("HTTP/1.1 200 Connection Established"))
+                wOut.write("payload".toByteArray(StandardCharsets.US_ASCII))
+                wOut.flush()
+                assertTrue(writeEntered.await(2, TimeUnit.SECONDS))
+
+                Socket("127.0.0.1", runtime.exposureInfo().httpPort).use { openSocket ->
+                    openSocket.soTimeout = 2_000
+                    val oOut = BufferedOutputStream(openSocket.getOutputStream())
+                    val oIn = BufferedInputStream(openSocket.getInputStream())
+                    oOut.write("CONNECT 198.51.100.2:443 HTTP/1.1\r\nHost: test\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+                    oOut.flush()
+                    assertTrue(readHeaders(oIn).startsWith("HTTP/1.1 200 Connection Established"))
+                    assertTrue(openEntered.await(2, TimeUnit.SECONDS))
+
+                    runtime.stop()
+                    Thread.sleep(150)
+                    allowWriteFinish.countDown()
+                    allowOpenFinish.countDown()
+                    Thread.sleep(200)
+                }
+            }
+            assertTrue("Session opened right before shutdown finishes must still close", slowSessionClosed.await(2, TimeUnit.SECONDS))
+            assertTrue("Expected no uncaught worker exceptions on stop, got $uncaughtErrors", uncaughtErrors.isEmpty())
+        } finally {
+            allowWriteFinish.countDown()
+            allowOpenFinish.countDown()
+            runtime.stop()
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+        }
+    }
+
+    @Test
+    fun nettyRelayLogsPeerResetAtDebugInsteadOfWarn() {
+        val warnLogs = CopyOnWriteArrayList<String>()
+        val debugLogs = CopyOnWriteArrayList<String>()
+        val runtime =
+            NettyProxyServerRuntime(
+                config = ProxyRuntimeConfig(httpEnabled = true, httpPort = findFreePort(), socksEnabled = false, socksPort = 1080),
+                transport =
+                    object : ProxyTransport {
+                        override fun openTcpSession(request: ProxyConnectRequest): ProxyTransportSession =
+                            object : ProxyTransportSession {
+                                override val descriptor = ProxySessionDescriptor(51, request, System.currentTimeMillis())
+
+                                override fun awaitConnected(timeoutMs: Long) {}
+
+                                override fun readRemoteBytes(maxLen: Int, timeoutMs: Int): ByteArray? {
+                                    throw java.io.IOException("gVisor TCP read failed: connection reset.")
+                                }
+
+                                override fun writeClientBytes(bytes: ByteArray, timeoutMs: Int): Int = bytes.size
+
+                                override fun pumpBidirectional(client: ProxyClientConnection) {}
+
+                                override fun close() {}
+                            }
+                    },
+                levelLogger = { level, message ->
+                    if (level >= Log.WARN) warnLogs.add(message) else debugLogs.add(message)
+                },
+            )
+        runtime.start()
+        try {
+            Socket("127.0.0.1", runtime.exposureInfo().httpPort).use { socket ->
+                socket.soTimeout = 2_000
+                val output = BufferedOutputStream(socket.getOutputStream())
+                val input = BufferedInputStream(socket.getInputStream())
+                output.write("CONNECT 93.184.216.34:443 HTTP/1.1\r\nHost: test\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+                output.flush()
+                assertTrue(readHeaders(input).startsWith("HTTP/1.1 200 Connection Established"))
+                assertEquals("", readUntilClosed(input))
+            }
+            assertTrue("Peer reset should not log at WARN: $warnLogs", warnLogs.none { it.contains("connection reset") })
+            assertTrue("Peer reset should log at DEBUG: $debugLogs", debugLogs.any { it.contains("remote->client") && it.contains("connection reset") })
+        } finally {
+            runtime.stop()
+        }
+    }
+
+    @Test
+    fun httpConnectSerializesBufferedAndSubsequentClientWrites() {
+        val awaitEntered = CountDownLatch(1)
+        val allowConnect = CountDownLatch(1)
+        val firstWriteBlocked = CountDownLatch(1)
+        val overlappingWrites = AtomicInteger(0)
+        val activeWriters = AtomicInteger(0)
+        val writtenChunks = CopyOnWriteArrayList<String>()
+        val allWritten = CountDownLatch(1)
+        val runtime =
+            NettyProxyServerRuntime(
+                config = ProxyRuntimeConfig(httpEnabled = true, httpPort = findFreePort(), socksEnabled = false, socksPort = 1080),
+                transport =
+                    object : ProxyTransport {
+                        override fun openTcpSession(request: ProxyConnectRequest): ProxyTransportSession =
+                            object : ProxyTransportSession {
+                                override val descriptor = ProxySessionDescriptor(61, request, System.currentTimeMillis())
+
+                                override fun awaitConnected(timeoutMs: Long) {
+                                    awaitEntered.countDown()
+                                    assertTrue(allowConnect.await(2, TimeUnit.SECONDS))
+                                }
+
+                                override fun readRemoteBytes(maxLen: Int, timeoutMs: Int): ByteArray? {
+                                    Thread.sleep(25)
+                                    return null
+                                }
+
+                                override fun writeClientBytes(bytes: ByteArray, timeoutMs: Int): Int {
+                                    if (activeWriters.incrementAndGet() > 1) {
+                                        overlappingWrites.incrementAndGet()
+                                    }
+                                    try {
+                                        val text = bytes.toString(StandardCharsets.US_ASCII)
+                                        if (text.startsWith("one-")) {
+                                            firstWriteBlocked.countDown()
+                                            Thread.sleep(100)
+                                        }
+                                        writtenChunks.add(text)
+                                        if (writtenChunks.joinToString("") == "one-two") {
+                                            allWritten.countDown()
+                                        }
+                                        return bytes.size
+                                    } finally {
+                                        activeWriters.decrementAndGet()
+                                    }
+                                }
+
+                                override fun pumpBidirectional(client: ProxyClientConnection) {}
+
+                                override fun close() {}
+                            }
+                    },
+            )
+        runtime.start()
+        try {
+            Socket("127.0.0.1", runtime.exposureInfo().httpPort).use { socket ->
+                socket.soTimeout = 2_000
+                val output = BufferedOutputStream(socket.getOutputStream())
+                val input = BufferedInputStream(socket.getInputStream())
+                output.write("CONNECT 93.184.216.34:443 HTTP/1.1\r\nHost: test\r\n\r\none-".toByteArray(StandardCharsets.US_ASCII))
+                output.flush()
+                assertTrue(readHeaders(input).startsWith("HTTP/1.1 200 Connection Established"))
+                assertTrue(awaitEntered.await(1, TimeUnit.SECONDS))
+                allowConnect.countDown()
+                assertTrue(firstWriteBlocked.await(2, TimeUnit.SECONDS))
+                output.write("two".toByteArray(StandardCharsets.US_ASCII))
+                output.flush()
+                assertTrue(allWritten.await(2, TimeUnit.SECONDS))
+                assertEquals("one-two", writtenChunks.joinToString(""))
+                assertEquals(0, overlappingWrites.get())
+            }
+        } finally {
+            allowConnect.countDown()
+            runtime.stop()
+        }
     }
 
     private fun recordingTransport(requests: MutableList<ProxyConnectRequest>): ProxyTransport =

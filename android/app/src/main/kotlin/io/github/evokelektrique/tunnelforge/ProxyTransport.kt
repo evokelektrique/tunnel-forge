@@ -125,65 +125,12 @@ class StubProxyTransport(
     }
 }
 
-class BridgeProxyTransport(
-    private val stack: UserspaceTunnelStack,
-) : ProxyTransport {
-    override fun openTcpSession(request: ProxyConnectRequest): ProxyTransportSession {
-        val session = stack.openTcpSession(request)
-        return object : ProxyTransportSession {
-            override val descriptor: ProxySessionDescriptor = session.descriptor
-
-            override fun awaitConnected(timeoutMs: Long) {
-                session.awaitEstablished(timeoutMs)
-            }
-
-            override fun pumpBidirectional(client: ProxyClientConnection) {
-                session.pumpBidirectional(client)
-            }
-
-            override fun close() {
-                session.close()
-            }
-        }
-    }
-
-    override fun openUdpAssociation(request: ProxyConnectRequest): ProxyUdpAssociation {
-        val association = stack.openUdpAssociation(request)
-        logDebug("proxy udp open sid=${association.descriptor.sessionId}")
-        return object : ProxyUdpAssociation {
-            override val descriptor: ProxySessionDescriptor = association.descriptor
-
-            override fun send(datagram: ProxyUdpDatagram) {
-                association.send(datagram)
-            }
-
-            override fun receive(timeoutMs: Long): ProxyUdpDatagram? = association.receive(timeoutMs)
-
-            override fun close() {
-                logDebug("proxy udp close sid=${descriptor.sessionId}")
-                association.close()
-            }
-        }
-    }
-
-    private companion object {
-        private const val TAG = "BridgeProxyTransport"
-
-        private fun logDebug(message: String) {
-            try {
-                AppLog.d(TAG, message)
-            } catch (_: RuntimeException) {
-                // Unit tests run without Android logging runtime.
-            }
-        }
-    }
-}
-
 class DirectSocketProxyTransport(
     private val resolver: (String) -> List<InetAddress> = { host -> InetAddress.getAllByName(host).toList() },
     private val socketFactory: () -> Socket = { Socket() },
     private val threadFactory: (String, Runnable) -> Thread = { name, task -> Thread(task, name) },
     private val logger: (Int, String) -> Unit = { _, _ -> },
+    internal val allowLoopbackTargets: Boolean = false,
 ) : ProxyTransport {
     private val nextSessionId = AtomicInteger(1)
 
@@ -194,6 +141,7 @@ class DirectSocketProxyTransport(
             socket = socketFactory(),
             threadFactory = threadFactory,
             logger = logger,
+            allowLoopbackTargets = allowLoopbackTargets,
         )
 
     override fun openUdpAssociation(request: ProxyConnectRequest): ProxyUdpAssociation =
@@ -202,6 +150,7 @@ class DirectSocketProxyTransport(
             resolver = resolver,
             socket = DatagramSocket(),
             logger = logger,
+            allowLoopbackTargets = allowLoopbackTargets,
         )
 }
 
@@ -475,7 +424,7 @@ private class GvisorProxyTransportSession(
 
     private fun resolveIpv4Target(): InetAddress {
         descriptor.request.host.toIpv4LiteralOrNull()?.let { literal ->
-            return InetAddress.getByName(literal)
+            return validateProxyTargetAddress(InetAddress.getByName(literal), allowLoopbackTargets = false)
         }
         val tunneledResolve = tunneledResolver
         if (tunneledResolve != null) {
@@ -485,7 +434,9 @@ private class GvisorProxyTransportSession(
                     Log.DEBUG,
                     "proxy gvisor resolve sid=${descriptor.sessionId} host=${descriptor.request.host} mode=tunneled ip=$resolvedIpv4",
                 )
-                return InetAddress.getByName(resolvedIpv4)
+                return validateProxyTargetAddress(InetAddress.getByName(resolvedIpv4), allowLoopbackTargets = false)
+            } catch (e: ProxyTransportException) {
+                throw e
             } catch (e: IOException) {
                 throw ProxyTransportException(
                     ProxyTransportFailureReason.dnsFailed,
@@ -513,7 +464,7 @@ private class GvisorProxyTransportSession(
             Log.DEBUG,
             "proxy gvisor resolve sid=${descriptor.sessionId} host=${descriptor.request.host} ip=${resolved.hostAddress}",
         )
-        return resolved
+        return validateProxyTargetAddress(resolved, allowLoopbackTargets = false)
     }
 
     private fun shutdownSocketOutput(socket: Socket) {
@@ -577,6 +528,7 @@ private class DirectSocketProxyUdpAssociation(
     private val resolver: (String) -> List<InetAddress>,
     private val socket: DatagramSocket,
     private val logger: (Int, String) -> Unit,
+    private val allowLoopbackTargets: Boolean = false,
 ) : ProxyUdpAssociation {
     private val closed = AtomicBoolean(false)
     private val remotes = ConcurrentHashMap.newKeySet<InetSocketAddress>()
@@ -637,7 +589,7 @@ private class DirectSocketProxyUdpAssociation(
 
     private fun resolveIpv4Target(host: String): InetAddress {
         host.toIpv4LiteralOrNull()?.let { literal ->
-            return InetAddress.getByName(literal)
+            return validateProxyTargetAddress(InetAddress.getByName(literal), allowLoopbackTargets = allowLoopbackTargets)
         }
         val resolved =
             resolver(host).firstOrNull { it is Inet4Address }
@@ -646,7 +598,7 @@ private class DirectSocketProxyUdpAssociation(
             Log.DEBUG,
             "proxy direct udp resolve sid=${descriptor.sessionId} host=$host ip=${resolved.hostAddress}",
         )
-        return resolved
+        return validateProxyTargetAddress(resolved, allowLoopbackTargets = allowLoopbackTargets)
     }
 
     private companion object {
@@ -661,6 +613,7 @@ private class DirectSocketProxyTransportSession(
     private val socket: Socket,
     private val threadFactory: (String, Runnable) -> Thread,
     private val logger: (Int, String) -> Unit,
+    private val allowLoopbackTargets: Boolean = false,
 ) : ProxyTransportSession {
     private val connected = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
@@ -740,7 +693,7 @@ private class DirectSocketProxyTransportSession(
 
     private fun resolveIpv4Target(): InetAddress {
         descriptor.request.host.toIpv4LiteralOrNull()?.let { literal ->
-            return InetAddress.getByName(literal)
+            return validateProxyTargetAddress(InetAddress.getByName(literal), allowLoopbackTargets = allowLoopbackTargets)
         }
         val resolved =
             resolver(descriptor.request.host).firstOrNull { it is Inet4Address }
@@ -749,7 +702,7 @@ private class DirectSocketProxyTransportSession(
             Log.DEBUG,
             "proxy direct resolve sid=${descriptor.sessionId} host=${descriptor.request.host} ip=${resolved.hostAddress}",
         )
-        return resolved
+        return validateProxyTargetAddress(resolved, allowLoopbackTargets = allowLoopbackTargets)
     }
 
     private fun relay(
@@ -805,4 +758,17 @@ private class DirectSocketProxyTransportSession(
             }
         }
     }
+}
+
+private fun validateProxyTargetAddress(
+    address: InetAddress,
+    allowLoopbackTargets: Boolean,
+): InetAddress {
+    if ((!allowLoopbackTargets && address.isLoopbackAddress) || address.isAnyLocalAddress) {
+        throw ProxyTransportException(
+            ProxyTransportFailureReason.networkUnreachable,
+            "Connections to local or unspecified addresses are not allowed.",
+        )
+    }
+    return address
 }

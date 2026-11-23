@@ -17,6 +17,8 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutionException
@@ -44,7 +46,54 @@ data class ProxyRuntimeConfig(
             socksPort = socksPort,
             lanRequested = false,
         ),
+    val authEnabled: Boolean = false,
+    val authUsername: String = "",
+    val authPassword: String = "",
 )
+
+internal const val PROXY_AUTH_REALM_HEADER = "Basic realm=\"TunnelForge\""
+
+internal fun ProxyRuntimeConfig.requiresProxyAuth(): Boolean = authEnabled
+
+internal fun ProxyRuntimeConfig.matchesCredentials(
+    username: String,
+    password: String,
+): Boolean {
+    if (!authEnabled) return true
+    if (authUsername.isEmpty() || authPassword.isEmpty()) return false
+    return MessageDigest.isEqual(
+        authUsername.toByteArray(StandardCharsets.UTF_8),
+        username.toByteArray(StandardCharsets.UTF_8),
+    ) && MessageDigest.isEqual(
+        authPassword.toByteArray(StandardCharsets.UTF_8),
+        password.toByteArray(StandardCharsets.UTF_8),
+    )
+}
+
+internal fun ProxyRuntimeConfig.matchesHttpBasicAuth(headerValues: List<String>): Boolean {
+    if (!authEnabled) return true
+    for (raw in headerValues) {
+        val trimmed = raw.trim()
+        val spaceIndex = trimmed.indexOf(' ')
+        if (spaceIndex <= 0) continue
+        if (!trimmed.substring(0, spaceIndex).equals("Basic", ignoreCase = true)) continue
+        val encoded = trimmed.substring(spaceIndex + 1).trim()
+        if (encoded.isEmpty()) continue
+        val decodedBytes =
+            try {
+                Base64.getDecoder().decode(encoded)
+            } catch (_: IllegalArgumentException) {
+                continue
+            }
+        val decoded = String(decodedBytes, StandardCharsets.UTF_8)
+        val colonIndex = decoded.indexOf(':')
+        if (colonIndex <= 0) continue
+        if (matchesCredentials(decoded.substring(0, colonIndex), decoded.substring(colonIndex + 1))) {
+            return true
+        }
+    }
+    return false
+}
 
 /**
  * Local proxy listener lifecycle shared by VPN and proxy-only modes.
@@ -272,6 +321,7 @@ class ProxyServerRuntime(
             }
             while (running.get() && !client.isClosed) {
                 val request = readHttpRequest(input) ?: return
+                authorizeHttpRequest(request)
                 if (request.method == "CONNECT") {
                     upstream?.close()
                     handleHttpConnect(client, input, output, request)
@@ -299,10 +349,63 @@ class ProxyServerRuntime(
                     closeClient = true,
                     detail = e.logDetail,
                 ),
+                extraHeaders = e.extraHeaders,
             )
         } finally {
             upstream?.close()
         }
+    }
+
+    private fun authorizeHttpRequest(request: ParsedHttpRequest) {
+        if (!config.requiresProxyAuth()) return
+        val authHeaders = request.headers.filter { it.hasName("Proxy-Authorization") }.map { it.value }
+        if (!config.matchesHttpBasicAuth(authHeaders)) {
+            throw HttpProxyRequestException(
+                protocol = if (request.method == "CONNECT") "http-connect" else "http-proxy",
+                reason = "proxy-auth-required",
+                statusCode = 407,
+                statusText = "Proxy Authentication Required",
+                publicMessage = "Proxy authentication required.",
+                extraHeaders = listOf("Proxy-Authenticate" to PROXY_AUTH_REALM_HEADER),
+            )
+        }
+    }
+
+    private fun authenticateSocksUserPass(
+        input: BufferedInputStream,
+        output: BufferedOutputStream,
+    ): Boolean {
+        val subVersion = input.read()
+        val uLen = input.read()
+        if (subVersion != 0x01 || uLen < 0) {
+            output.write(byteArrayOf(0x01, 0x01))
+            output.flush()
+            return false
+        }
+        val uBytes = ByteArray(uLen)
+        for (i in uBytes.indices) {
+            val next = input.read()
+            if (next < 0) return false
+            uBytes[i] = next.toByte()
+        }
+        val pLen = input.read()
+        if (pLen < 0) {
+            output.write(byteArrayOf(0x01, 0x01))
+            output.flush()
+            return false
+        }
+        val pBytes = ByteArray(pLen)
+        for (i in pBytes.indices) {
+            val next = input.read()
+            if (next < 0) return false
+            pBytes[i] = next.toByte()
+        }
+        val username = String(uBytes, StandardCharsets.UTF_8)
+        val password = String(pBytes, StandardCharsets.UTF_8)
+        val ok = config.matchesCredentials(username, password)
+        output.write(byteArrayOf(0x01, if (ok) 0x00 else 0x01))
+        output.flush()
+        return ok
     }
 
     private fun handleHttpConnect(
@@ -551,55 +654,6 @@ class ProxyServerRuntime(
         }
     }
 
-    private fun handleHttpsForward(
-        client: Socket,
-        input: BufferedInputStream,
-        output: BufferedOutputStream,
-        request: ProxyConnectRequest,
-        forwardedBytes: ByteArray,
-    ) {
-        var sessionId: Int? = null
-        try {
-            openConnectedTransportSocket(request).use { upstream ->
-                sessionId = upstream.descriptor.sessionId
-                debug("proxy connect ok proto=https-proxy sid=${upstream.descriptor.sessionId} target=${request.host}:${request.port}")
-                secureSocketFactory.create(upstream.socket, request.host, request.port).use { secureSocket ->
-                    client.soTimeout = 0
-                    pumpBidirectional(
-                        client = client,
-                        clientInput = PrefixedInputStream(forwardedBytes, input),
-                        clientOutput = output,
-                        upstream = secureSocket,
-                    )
-                }
-            }
-        } catch (e: IOException) {
-            warn(
-                "proxy fail proto=https-proxy sid=${sessionId?.toString() ?: "pending"} target=${request.host}:${request.port} error=${e.message ?: DEFAULT_TRANSPORT_FAILURE}",
-            )
-            val endpointFailure = categorizeTransportFailure(e)
-            val context =
-                HttpErrorLogContext(
-                    protocol = "https-proxy",
-                    phase = "pre-response",
-                    reason = endpointFailure.reason.name,
-                    target = "${request.host}:${request.port}",
-                    sessionId = sessionId,
-                    closeClient = true,
-                    detail = e.message,
-                )
-            if (shouldSuppressUpstreamHttpError(endpointFailure.reason)) {
-                logSuppressedHttpError(context)
-                return
-            }
-            writeHttpTransportFailure(
-                output,
-                e,
-                context,
-            )
-        }
-    }
-
     private fun handleSocksClient(client: Socket) {
         val input = BufferedInputStream(client.getInputStream())
         val output = BufferedOutputStream(client.getOutputStream())
@@ -607,11 +661,29 @@ class ProxyServerRuntime(
         if (version != 0x05) return
         val methodCount = input.read()
         if (methodCount <= 0) return
+        val offeredMethods = HashSet<Int>(methodCount)
         repeat(methodCount) {
-            if (input.read() < 0) return
+            val method = input.read()
+            if (method < 0) return
+            offeredMethods += method
         }
-        output.write(byteArrayOf(0x05, 0x00))
-        output.flush()
+        if (config.requiresProxyAuth()) {
+            if (SOCKS_AUTH_USERNAME_PASSWORD !in offeredMethods) {
+                warn("proxy reject proto=socks5 reason=proxy-auth-method-missing")
+                output.write(byteArrayOf(0x05, SOCKS_AUTH_NO_ACCEPTABLE.toByte()))
+                output.flush()
+                return
+            }
+            output.write(byteArrayOf(0x05, SOCKS_AUTH_USERNAME_PASSWORD.toByte()))
+            output.flush()
+            if (!authenticateSocksUserPass(input, output)) {
+                warn("proxy reject proto=socks5 reason=proxy-auth-failed")
+                return
+            }
+        } else {
+            output.write(byteArrayOf(0x05, SOCKS_AUTH_NONE.toByte()))
+            output.flush()
+        }
 
         val reqVersion = input.read()
         val cmd = input.read()
@@ -856,18 +928,22 @@ class ProxyServerRuntime(
         status: String,
         message: String,
         context: HttpErrorLogContext,
+        extraHeaders: List<Pair<String, String>> = emptyList(),
     ) {
         logHttpError(code, status, message, context)
         val body = message.toByteArray(Charsets.UTF_8)
-        output.write(
-            (
-                "HTTP/1.1 $code $status\r\n" +
-                    "Connection: close\r\n" +
-                    "Content-Type: text/plain; charset=utf-8\r\n" +
-                    "Content-Length: ${body.size}\r\n" +
-                    "\r\n"
-            ).toByteArray(Charsets.UTF_8),
-        )
+        val headerBlock =
+            buildString {
+                append("HTTP/1.1 ").append(code).append(' ').append(status).append("\r\n")
+                append("Connection: close\r\n")
+                for ((name, value) in extraHeaders) {
+                    append(name).append(": ").append(value).append("\r\n")
+                }
+                append("Content-Type: text/plain; charset=utf-8\r\n")
+                append("Content-Length: ").append(body.size).append("\r\n")
+                append("\r\n")
+            }
+        output.write(headerBlock.toByteArray(Charsets.UTF_8))
         output.write(body)
         output.flush()
     }
@@ -1111,13 +1187,44 @@ class ProxyServerRuntime(
         return header + datagram.payload
     }
 
+    private fun readHttpRequestLineSafe(input: BufferedInputStream): RawHttpLine? =
+        try {
+            readAsciiLineRaw(input)
+        } catch (_: HttpHeaderLineTooLongException) {
+            throw HttpProxyRequestException(
+                protocol = "http",
+                reason = "header-line-too-long",
+                statusCode = 400,
+                statusText = "Bad Request",
+                publicMessage = "HTTP proxy header line exceeds length limit.",
+            )
+        }
+
     private fun readHttpRequest(input: BufferedInputStream): ParsedHttpRequest? {
-        var requestLine = readAsciiLineRaw(input) ?: return null
+        var requestLine = readHttpRequestLineSafe(input) ?: return null
         while (requestLine.text.isEmpty()) {
-            requestLine = readAsciiLineRaw(input) ?: return null
+            if (requestLine.hasBareCr) {
+                throw HttpProxyRequestException(
+                    protocol = "http",
+                    reason = "bare-cr",
+                    statusCode = 400,
+                    statusText = "Bad Request",
+                    publicMessage = "Malformed HTTP proxy request line.",
+                )
+            }
+            requestLine = readHttpRequestLineSafe(input) ?: return null
         }
         if (!requestLine.isAsciiText) {
             throw httpProtocolMismatch("detected=non-http-request-line")
+        }
+        if (requestLine.hasBareCr) {
+            throw HttpProxyRequestException(
+                protocol = "http",
+                reason = "bare-cr",
+                statusCode = 400,
+                statusText = "Bad Request",
+                publicMessage = "Malformed HTTP proxy request line.",
+            )
         }
         val parts = requestLine.text.trim().split(HTTP_REQUEST_LINE_WHITESPACE, limit = 3)
         if (parts.size < 3) {
@@ -1131,12 +1238,32 @@ class ProxyServerRuntime(
             )
         }
         val headers = mutableListOf<HttpHeader>()
+        var headerBytes = 0
         while (true) {
-            val line = readAsciiLineRaw(input) ?: break
+            val line = readHttpRequestLineSafe(input) ?: break
             if (!line.isAsciiText) {
                 throw httpProtocolMismatch("detected=non-http-header")
             }
+            if (line.hasBareCr) {
+                throw HttpProxyRequestException(
+                    protocol = "http",
+                    reason = "bare-cr",
+                    statusCode = 400,
+                    statusText = "Bad Request",
+                    publicMessage = "Malformed HTTP proxy header.",
+                )
+            }
             if (line.text.isEmpty()) break
+            headerBytes += line.text.length + 2
+            if (headers.size >= MAX_HTTP_HEADER_COUNT || headerBytes > MAX_HTTP_HEADER_BYTES) {
+                throw HttpProxyRequestException(
+                    protocol = "http",
+                    reason = "header-limit-exceeded",
+                    statusCode = 400,
+                    statusText = "Bad Request",
+                    publicMessage = "HTTP proxy headers exceed size or count limit.",
+                )
+            }
             headers +=
                 parseHttpHeader(line.text)
                     ?: throw HttpProxyRequestException(
@@ -1147,6 +1274,15 @@ class ProxyServerRuntime(
                         publicMessage = "Malformed HTTP proxy header.",
                         logDetail = "line=${line.text}",
                     )
+        }
+        framingValidationError(headers)?.let { message ->
+            throw HttpProxyRequestException(
+                protocol = "http",
+                reason = "invalid-framing",
+                statusCode = 400,
+                statusText = "Bad Request",
+                publicMessage = message,
+            )
         }
         return ParsedHttpRequest(
             requestLine = requestLine.text,
@@ -1353,7 +1489,7 @@ class ProxyServerRuntime(
 
     private fun readHttpResponse(input: BufferedInputStream): ParsedHttpResponse? {
         val statusLine = readAsciiLineRaw(input) ?: return null
-        if (!statusLine.isAsciiText) {
+        if (!statusLine.isAsciiText || statusLine.hasBareCr) {
             throw IOException("Malformed upstream HTTP response status line.")
         }
         val parts = statusLine.text.trim().split(HTTP_REQUEST_LINE_WHITESPACE, limit = 3)
@@ -1362,14 +1498,20 @@ class ProxyServerRuntime(
         }
         val statusCode = parts[1].toIntOrNull() ?: throw IOException("Malformed upstream HTTP response status code.")
         val headers = mutableListOf<HttpHeader>()
+        var headerBytes = 0
         while (true) {
             val line = readAsciiLineRaw(input) ?: throw IOException("Upstream closed while reading HTTP response headers.")
-            if (!line.isAsciiText) {
+            if (!line.isAsciiText || line.hasBareCr) {
                 throw IOException("Malformed upstream HTTP response header.")
             }
             if (line.text.isEmpty()) break
+            headerBytes += line.text.length + 2
+            if (headers.size >= MAX_HTTP_HEADER_COUNT || headerBytes > MAX_HTTP_HEADER_BYTES) {
+                throw IOException("Upstream HTTP response headers exceed size or count limit.")
+            }
             headers += parseHttpHeader(line.text) ?: throw IOException("Malformed upstream HTTP response header.")
         }
+        framingValidationError(headers)?.let { throw IOException(it) }
         return ParsedHttpResponse(
             statusLine = statusLine.text,
             version = parts[0],
@@ -1475,16 +1617,19 @@ class ProxyServerRuntime(
     ) {
         while (true) {
             val sizeLine = readAsciiLineRaw(input) ?: throw EOFException("Unexpected EOF while reading chunk size.")
-            if (!sizeLine.isAsciiText) throw IOException("Malformed chunk size line.")
+            if (!sizeLine.isAsciiText || sizeLine.hasBareCr) throw IOException("Malformed chunk size line.")
+            val rawSize = sizeLine.text.substringBefore(';').trim()
+            if (rawSize.isEmpty() || !rawSize.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                throw IOException("Malformed chunk size.")
+            }
+            val chunkSize = rawSize.toLongOrNull(16) ?: throw IOException("Malformed chunk size.")
+            if (chunkSize < 0L) throw IOException("Negative chunk size.")
             output.write(sizeLine.text.toByteArray(StandardCharsets.US_ASCII))
             output.write(CRLF)
-            val chunkSize =
-                sizeLine.text.substringBefore(';').trim().toLongOrNull(16)
-                    ?: throw IOException("Malformed chunk size.")
             if (chunkSize == 0L) {
                 while (true) {
                     val trailer = readAsciiLineRaw(input) ?: throw EOFException("Unexpected EOF while reading chunk trailers.")
-                    if (!trailer.isAsciiText) throw IOException("Malformed chunk trailer.")
+                    if (!trailer.isAsciiText || trailer.hasBareCr) throw IOException("Malformed chunk trailer.")
                     output.write(trailer.text.toByteArray(StandardCharsets.US_ASCII))
                     output.write(CRLF)
                     if (trailer.text.isEmpty()) return
@@ -1507,12 +1652,41 @@ class ProxyServerRuntime(
         }
     }
 
+    private fun framingValidationError(headers: List<HttpHeader>): String? {
+        val hasTransferEncoding = headers.any { it.hasName("Transfer-Encoding") }
+        val clHeaders = headers.filter { it.hasName("Content-Length") }
+        if (hasTransferEncoding && clHeaders.isNotEmpty()) {
+            return "Conflicting Transfer-Encoding and Content-Length headers."
+        }
+        var parsedLength: Long? = null
+        for (header in clHeaders) {
+            val raw = header.value.trim()
+            if (raw.isEmpty() || !raw.all { it in '0'..'9' }) {
+                return "Invalid Content-Length header."
+            }
+            val value = raw.toLongOrNull() ?: return "Invalid Content-Length header."
+            if (parsedLength == null) {
+                parsedLength = value
+            } else if (parsedLength != value) {
+                return "Conflicting Content-Length headers."
+            }
+        }
+        return null
+    }
+
     private fun List<HttpHeader>.contentLength(): Long? {
-        val values = filter { it.hasName("Content-Length") }.mapNotNull { it.value.trim().toLongOrNull() }
-        if (values.isEmpty()) return null
+        val rawValues = filter { it.hasName("Content-Length") }.map { it.value.trim() }
+        if (rawValues.isEmpty()) return null
+        val values =
+            rawValues.map { raw ->
+                if (raw.isEmpty() || !raw.all { it in '0'..'9' }) {
+                    throw IOException("Invalid Content-Length header.")
+                }
+                raw.toLongOrNull() ?: throw IOException("Invalid Content-Length header.")
+            }
         val first = values.first()
         if (values.any { it != first }) throw IOException("Conflicting Content-Length headers.")
-        return first.coerceAtLeast(0L)
+        return first
     }
 
     private fun List<HttpHeader>.isChunked(): Boolean =
@@ -1737,30 +1911,42 @@ class ProxyServerRuntime(
     private fun readAsciiLineRaw(input: BufferedInputStream): RawHttpLine? {
         val bytes = ArrayList<Byte>()
         var isAsciiText = true
+        var sawCr = false
+        var hasBareCr = false
         while (true) {
             val next = input.read()
             if (next < 0) {
                 if (bytes.isEmpty()) return null
+                if (sawCr) hasBareCr = true
                 return RawHttpLine(
                     text = bytes.toByteArray().toString(Charsets.US_ASCII),
                     isAsciiText = isAsciiText,
+                    hasBareCr = hasBareCr,
                 )
             }
             if (next == '\n'.code) {
-                if (bytes.isNotEmpty() && bytes.last() == '\r'.code.toByte()) {
+                if (sawCr && bytes.isNotEmpty() && bytes.last() == '\r'.code.toByte()) {
                     bytes.removeAt(bytes.lastIndex)
                 }
                 return RawHttpLine(
                     text = bytes.toByteArray().toString(Charsets.US_ASCII),
                     isAsciiText = isAsciiText,
+                    hasBareCr = hasBareCr,
                 )
+            }
+            if (sawCr) {
+                hasBareCr = true
+                sawCr = false
+            }
+            if (next == '\r'.code) {
+                sawCr = true
             }
             if (next > 0x7e || (next < 0x20 && next != '\r'.code && next != '\t'.code)) {
                 isAsciiText = false
             }
             bytes.add(next.toByte())
             if (bytes.size >= MAX_HEADER_LINE_LEN) {
-                throw IOException("Header line too long")
+                throw HttpHeaderLineTooLongException()
             }
         }
     }
@@ -1788,6 +1974,11 @@ class ProxyServerRuntime(
         private const val LISTENER_BACKLOG = 1024
         private const val CLIENT_SO_TIMEOUT_MS = 5000
         private const val MAX_HEADER_LINE_LEN = 8192
+        private const val MAX_HTTP_HEADER_COUNT = 128
+        private const val MAX_HTTP_HEADER_BYTES = 32_768
+        private const val SOCKS_AUTH_NONE = 0x00
+        private const val SOCKS_AUTH_USERNAME_PASSWORD = 0x02
+        private const val SOCKS_AUTH_NO_ACCEPTABLE = 0xff
         private const val DEFAULT_TRANSPORT_FAILURE = "Tunnel forwarding is not attached yet."
         private const val DEFAULT_CONNECT_TIMEOUT_MS = 10_000L
         private const val HTTP_PROTOCOL_MISMATCH_MESSAGE = "HTTP proxy port expects a cleartext HTTP proxy request."
@@ -1859,6 +2050,7 @@ private data class ParsedHttpResponse(
 private data class RawHttpLine(
     val text: String,
     val isAsciiText: Boolean,
+    val hasBareCr: Boolean = false,
 )
 
 private data class HttpHeader(
@@ -1896,7 +2088,10 @@ private class HttpProxyRequestException(
     val statusText: String,
     val publicMessage: String,
     val logDetail: String? = null,
+    val extraHeaders: List<Pair<String, String>> = emptyList(),
 ) : Exception(publicMessage)
+
+private class HttpHeaderLineTooLongException : IOException("Header line too long")
 
 private class HttpProxyResponseStartedException(
     cause: IOException,
@@ -1913,37 +2108,6 @@ private fun String.sanitizeForLog(): String =
         }
 
 private fun String.toLogToken(): String = sanitizeForLog().replace(' ', '-')
-
-private class PrefixedInputStream(
-    private val prefix: ByteArray,
-    private val delegate: InputStream,
-) : InputStream() {
-    private var index = 0
-
-    override fun read(): Int {
-        if (index < prefix.size) {
-            return prefix[index++].toInt() and 0xff
-        }
-        return delegate.read()
-    }
-
-    override fun read(
-        bytes: ByteArray,
-        off: Int,
-        len: Int,
-    ): Int {
-        if (len == 0) return 0
-        if (index < prefix.size) {
-            val count = minOf(len, prefix.size - index)
-            prefix.copyInto(bytes, off, index, index + count)
-            index += count
-            return count
-        }
-        return delegate.read(bytes, off, len)
-    }
-
-    override fun available(): Int = (prefix.size - index) + delegate.available()
-}
 
 private class PlainHttpUpstream(
     val descriptor: ProxySessionDescriptor,

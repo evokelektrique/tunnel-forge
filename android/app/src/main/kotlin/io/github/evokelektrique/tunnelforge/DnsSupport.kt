@@ -3,7 +3,6 @@ package io.github.evokelektrique.tunnelforge
 import android.util.Log
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
-import java.io.Closeable
 import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
@@ -14,11 +13,9 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
-import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLSocket
@@ -246,13 +243,6 @@ internal object DnsConfigSupport {
         if (resolved.isEmpty()) {
             throw IOException("Could not resolve IPv4 address for ${host.trim()}")
         }
-        return resolved
-    }
-
-    private fun resolveIpv4Hostname(host: String): String {
-        val resolved =
-            resolveIpv4HostnameCandidates(host).firstOrNull()
-                ?: throw IOException("Could not resolve IPv4 address for ${host.trim()}")
         return resolved
     }
 
@@ -647,121 +637,6 @@ internal class DirectDnsExchangeClient(
     }
 }
 
-internal class LocalDnsServer(
-    private val exchangeClient: DnsExchangeClient,
-    private val logger: (Int, String) -> Unit,
-) : Closeable {
-    private val running = AtomicBoolean(false)
-    private val threads = CopyOnWriteArrayList<Thread>()
-    private var udpSocket: DatagramSocket? = null
-    private var tcpServerSocket: ServerSocket? = null
-
-    @Throws(IOException::class)
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
-        try {
-            udpSocket = DatagramSocket(InetSocketAddress(LOCALHOST_IPV4, DNS_PORT)).apply {
-                soTimeout = LOCAL_SERVER_POLL_TIMEOUT_MS
-                reuseAddress = true
-            }
-            tcpServerSocket = ServerSocket(DNS_PORT, 50, InetAddress.getByName(LOCALHOST_IPV4)).apply {
-                reuseAddress = true
-                soTimeout = LOCAL_SERVER_POLL_TIMEOUT_MS
-            }
-        } catch (e: IOException) {
-            close()
-            throw e
-        }
-        threads += loopThread("local-dns-udp", ::runUdpLoop)
-        threads += loopThread("local-dns-tcp", ::runTcpLoop)
-    }
-
-    override fun close() {
-        running.set(false)
-        try {
-            udpSocket?.close()
-        } catch (_: IOException) {
-        }
-        udpSocket = null
-        try {
-            tcpServerSocket?.close()
-        } catch (_: IOException) {
-        }
-        tcpServerSocket = null
-        threads.forEach { it.interrupt() }
-        threads.clear()
-    }
-
-    private fun loopThread(name: String, block: () -> Unit): Thread =
-        Thread(block, name).also { it.start() }
-
-    private fun runUdpLoop() {
-        val socket = udpSocket ?: return
-        val buffer = ByteArray(MAX_DNS_PACKET_LEN)
-        while (running.get() && !Thread.currentThread().isInterrupted) {
-            try {
-                val request = DatagramPacket(buffer, buffer.size)
-                socket.receive(request)
-                val query = request.data.copyOf(request.length)
-                val response = exchangeClient.exchange(query)
-                socket.send(
-                    DatagramPacket(
-                        response,
-                        response.size,
-                        request.address,
-                        request.port,
-                    ),
-                )
-            } catch (e: IOException) {
-                if (!running.get()) break
-                logger(Log.WARN, "local dns udp error=${e.message}")
-            }
-        }
-    }
-
-    private fun runTcpLoop() {
-        val serverSocket = tcpServerSocket ?: return
-        while (running.get() && !Thread.currentThread().isInterrupted) {
-            try {
-                val client = serverSocket.accept()
-                client.soTimeout = DNS_READ_TIMEOUT_MS
-                loopThread("local-dns-tcp-client") {
-                    client.use { socket ->
-                        handleTcpClient(socket)
-                    }
-                }
-            } catch (e: IOException) {
-                if (!running.get()) break
-                logger(Log.WARN, "local dns tcp accept error=${e.message}")
-            }
-        }
-    }
-
-    private fun handleTcpClient(socket: Socket) {
-        val input = BufferedInputStream(socket.getInputStream())
-        val output = socket.getOutputStream()
-        while (running.get() && !Thread.currentThread().isInterrupted) {
-            try {
-                val query = readFramedDnsMessage(input) ?: break
-                val response = exchangeClient.exchange(query)
-                writeFramedDnsMessage(output, response)
-                output.flush()
-            } catch (_: EOFException) {
-                break
-            } catch (e: IOException) {
-                logger(Log.WARN, "local dns tcp client error=${e.message}")
-                break
-            }
-        }
-    }
-
-    companion object {
-        const val LOCALHOST_IPV4 = "127.0.0.1"
-        private const val DNS_PORT = 53
-        private const val LOCAL_SERVER_POLL_TIMEOUT_MS = 1000
-    }
-}
-
 internal fun exchangeDnsOverStream(
     input: InputStream,
     output: OutputStream,
@@ -822,9 +697,14 @@ internal fun exchangeDnsOverHttps(
     }
 
     val headersMap = linkedMapOf<String, String>()
+    var headerCount = 0
     while (true) {
         val line = readHttpLine(buffered)
         if (line.isEmpty()) break
+        headerCount++
+        if (headerCount > MAX_DOH_HEADER_COUNT) {
+            throw IOException("Too many DNS-over-HTTPS response headers.")
+        }
         val colon = line.indexOf(':')
         if (colon <= 0) continue
         val name = line.substring(0, colon).trim().lowercase()
@@ -836,12 +716,17 @@ internal fun exchangeDnsOverHttps(
     if (transferEncoding == "chunked") {
         return readChunkedBody(buffered)
     }
-    val contentLength = headersMap["content-length"]?.toIntOrNull()
-    return if (contentLength != null) {
-        readFully(buffered, contentLength)
-    } else {
-        buffered.readBytes()
+    val rawContentLength = headersMap["content-length"]
+    if (rawContentLength != null) {
+        val contentLength =
+            rawContentLength.trim().toIntOrNull()
+                ?: throw IOException("Malformed DNS-over-HTTPS Content-Length.")
+        if (contentLength !in 0..MAX_DNS_PACKET_LEN) {
+            throw IOException("Invalid or oversized DNS-over-HTTPS Content-Length: $contentLength")
+        }
+        return readFully(buffered, contentLength)
     }
+    return readBoundedBytes(buffered, MAX_DNS_PACKET_LEN)
 }
 
 internal fun openTlsSocket(socket: Socket, server: ResolvedDnsServerConfig): SSLSocket {
@@ -865,22 +750,43 @@ internal fun readHttpLine(input: InputStream): String {
         val next = input.read()
         if (next < 0) throw EOFException("Unexpected EOF while reading HTTP line.")
         if (next == '\n'.code) break
-        if (next != '\r'.code) buffer.write(next)
+        if (next != '\r'.code) {
+            if (buffer.size() >= MAX_DOH_HEADER_LINE_BYTES) {
+                throw IOException("DNS-over-HTTPS HTTP line exceeds $MAX_DOH_HEADER_LINE_BYTES bytes.")
+            }
+            buffer.write(next)
+        }
     }
     return buffer.toString(StandardCharsets.US_ASCII.name())
 }
 
 internal fun readChunkedBody(input: InputStream): ByteArray {
     val output = ByteArrayOutputStream()
+    var totalBytes = 0
     while (true) {
         val sizeLine = readHttpLine(input)
-        val chunkSize = sizeLine.substringBefore(';').trim().toInt(16)
+        val rawSize = sizeLine.substringBefore(';').trim()
+        val chunkSize =
+            try {
+                rawSize.toInt(16)
+            } catch (e: NumberFormatException) {
+                throw IOException("Malformed chunked DNS-over-HTTPS chunk size.", e)
+            }
+        if (chunkSize < 0 || chunkSize > MAX_DNS_PACKET_LEN - totalBytes) {
+            throw IOException("Chunked DNS-over-HTTPS response exceeds $MAX_DNS_PACKET_LEN bytes.")
+        }
         if (chunkSize == 0) {
+            var trailers = 0
             while (readHttpLine(input).isNotEmpty()) {
+                trailers++
+                if (trailers > MAX_DOH_HEADER_COUNT) {
+                    throw IOException("Too many DNS-over-HTTPS chunk trailers.")
+                }
             }
             return output.toByteArray()
         }
         output.write(readFully(input, chunkSize))
+        totalBytes += chunkSize
         val cr = input.read()
         val lf = input.read()
         if (cr != '\r'.code || lf != '\n'.code) {
@@ -889,7 +795,26 @@ internal fun readChunkedBody(input: InputStream): ByteArray {
     }
 }
 
+private fun readBoundedBytes(input: InputStream, maxBytes: Int): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(4096)
+    var remaining = maxBytes
+    while (remaining > 0) {
+        val read = input.read(buffer, 0, minOf(buffer.size, remaining))
+        if (read < 0) return output.toByteArray()
+        output.write(buffer, 0, read)
+        remaining -= read
+    }
+    if (input.read() >= 0) {
+        throw IOException("DNS-over-HTTPS response exceeds $maxBytes bytes.")
+    }
+    return output.toByteArray()
+}
+
 internal fun readFully(input: InputStream, length: Int): ByteArray {
+    if (length !in 0..MAX_DNS_STREAM_FRAME_LEN) {
+        throw IOException("Invalid DNS message length: $length")
+    }
     val out = ByteArray(length)
     var offset = 0
     while (offset < length) {
@@ -902,5 +827,8 @@ internal fun readFully(input: InputStream, length: Int): ByteArray {
 
 private const val DNS_CONNECT_TIMEOUT_MS = 5_000
 private const val DNS_READ_TIMEOUT_MS = 5_000
-private const val MAX_DNS_PACKET_LEN = 65_535
+private const val MAX_DNS_PACKET_LEN = 65_507
+private const val MAX_DNS_STREAM_FRAME_LEN = 65_535
+private const val MAX_DOH_HEADER_LINE_BYTES = 8_192
+private const val MAX_DOH_HEADER_COUNT = 64
 private const val DOH_PATH = "/dns-query"

@@ -84,4 +84,34 @@ class ProxyExposurePlannerTest {
         assertEquals("127.0.0.1", exposure.displayAddress)
         assertEquals(ProxyExposurePlanner.LAN_UNAVAILABLE_WARNING, exposure.warning)
     }
+
+    @Test
+    fun rejectsCellularPrivateAndPublicWifiCandidates() {
+        val exposure =
+            ProxyExposurePlanner.choose(
+                httpPort = 8080,
+                socksPort = 1080,
+                lanRequested = true,
+                candidates =
+                    listOf(
+                        ProxyInterfaceCandidate(
+                            interfaceName = "rmnet_data0",
+                            address = "10.0.0.1",
+                            transport = ProxyInterfaceTransport.CELLULAR,
+                            isActive = true,
+                            isPrivateAddress = true,
+                        ),
+                        ProxyInterfaceCandidate(
+                            interfaceName = "wlan0",
+                            address = "8.8.8.8",
+                            transport = ProxyInterfaceTransport.WIFI,
+                            isActive = true,
+                            isPrivateAddress = false,
+                        ),
+                    ),
+            )
+
+        assertFalse(exposure.lanActive)
+        assertEquals("127.0.0.1", exposure.displayAddress)
+    }
 }

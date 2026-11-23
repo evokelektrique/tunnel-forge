@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -133,7 +134,12 @@ func TestTunnelTCPIOErrorCodes(t *testing.T) {
 		{"eof", io.EOF, 0, -3},
 		{"closed", net.ErrClosed, -2, -2},
 		{"timeout", os.ErrDeadlineExceeded, -4, -4},
+		{"gvisor_timeout", &net.OpError{Op: "read", Err: errors.New("operation timed out")}, -4, -4},
 		{"reset", syscall.ECONNRESET, -5, -5},
+		{"gvisor_reset", &net.OpError{Op: "read", Err: errors.New("connection reset by peer")}, -5, -5},
+		{"gvisor_aborted", &net.OpError{Op: "read", Err: errors.New("operation aborted")}, -2, -2},
+		{"gvisor_closed_for_send", &net.OpError{Op: "write", Err: errors.New("endpoint is closed for send")}, -5, -5},
+		{"gvisor_broken_pipe", &net.OpError{Op: "write", Err: errors.New("broken pipe")}, -5, -5},
 		{"unexpected", errors.New("fixture"), -3, -3},
 	} {
 		t.Run(row.name, func(t *testing.T) {
@@ -605,5 +611,79 @@ func TestLastPacketAgeIsMinusOneWhenNoPacketsObserved(t *testing.T) {
 	diag := &tcpOpenDiag{startedAt: time.Now()}
 	if got := lastPacketAgeMs(diag); got != -1 {
 		t.Fatalf("lastPacketAgeMs=%d, want -1", got)
+	}
+}
+
+func TestConcurrentStopClosesStackAndGuardsNilMaps(t *testing.T) {
+	tf_gvisor_stop()
+	t.Cleanup(tf_gvisor_stop)
+	runtime.GC()
+	baseline := runtime.NumGoroutine()
+	local := [4]byte{192, 0, 2, 1}
+	for i := 0; i < 20; i++ {
+		if got := tf_gvisor_start(unsafe.Pointer(&local[0]), 1500); got != 0 {
+			t.Fatalf("cycle %d start=%d", i, got)
+		}
+		tf_gvisor_stop()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > baseline+2 && time.Now().Before(deadline) {
+		runtime.Gosched()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > baseline+2 {
+		t.Fatalf("goroutines leaked across 20 start/stop cycles: baseline=%d after=%d", baseline, after)
+	}
+
+	// Race concurrent tcp_open against stop across 20 cycles.
+	remote := [4]byte{192, 0, 2, 2}
+	for i := 0; i < 20; i++ {
+		if got := tf_gvisor_start(unsafe.Pointer(&local[0]), 1500); got != 0 {
+			t.Fatalf("race cycle %d start=%d", i, got)
+		}
+		done := make(chan int, 1)
+		go func() {
+			done <- int(tf_gvisor_tcp_open(unsafe.Pointer(&remote[0]), 443, 500))
+		}()
+		time.Sleep(time.Millisecond)
+		tf_gvisor_stop()
+		if got := <-done; got >= 0 {
+			t.Fatalf("race cycle %d expected failure after stop, got session=%d", i, got)
+		}
+	}
+}
+
+func TestGvisorReadOutboundWakesWithout5msSleep(t *testing.T) {
+	tf_gvisor_stop()
+	t.Cleanup(tf_gvisor_stop)
+	local := [4]byte{192, 0, 2, 1}
+	remote := [4]byte{192, 0, 2, 2}
+	if got := tf_gvisor_start(unsafe.Pointer(&local[0]), 1500); got != 0 {
+		t.Fatalf("start=%d", got)
+	}
+	var out [2048]byte
+	// Measure across 3 cycles so OS scheduler jitter cannot spoof < 3ms median wakeup.
+	var totalAfterInject time.Duration
+	const cycles = 3
+	for i := 0; i < cycles; i++ {
+		readDone := make(chan time.Time, 1)
+		go func() {
+			n := tf_gvisor_read_outbound(unsafe.Pointer(&out[0]), 2048, 200)
+			if n <= 0 {
+				t.Errorf("cycle %d read_outbound=%d", i, n)
+			}
+			readDone <- time.Now()
+		}()
+		time.Sleep(500 * time.Microsecond)
+		injectAt := time.Now()
+		go func() {
+			_ = tf_gvisor_tcp_open(unsafe.Pointer(&remote[0]), 443, 50)
+		}()
+		finishedAt := <-readDone
+		totalAfterInject += finishedAt.Sub(injectAt)
+	}
+	avg := totalAfterInject / cycles
+	if avg >= 3*time.Millisecond {
+		t.Fatalf("tf_gvisor_read_outbound avg latency after inject=%v (expected < 3ms without 5ms poll sleep)", avg)
 	}
 }

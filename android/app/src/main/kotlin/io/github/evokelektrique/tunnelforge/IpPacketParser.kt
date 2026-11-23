@@ -154,3 +154,9 @@ object IpPacketParser {
             (packet[offset + 3].toLong() and 0xff)
     }
 }
+
+internal fun String.toIpv4LiteralOrNull(): String? {
+    val parts = split('.')
+    if (parts.size != 4) return null
+    return if (parts.all { it.toIntOrNull() in 0..255 }) this else null
+}

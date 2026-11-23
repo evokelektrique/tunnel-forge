@@ -14,6 +14,7 @@ object UdpPacketBuilder {
         val destination = InetAddress.getByName(destinationIp).address
         require(source.size == 4 && destination.size == 4) { "Only IPv4 is supported" }
         require(sourcePort in 1..65535 && destinationPort in 1..65535) { "Invalid UDP port" }
+        require(payload.size <= MAX_UDP_PAYLOAD_BYTES) { "UDP payload exceeds IPv4 packet limit" }
 
         val ipHeaderLen = 20
         val udpHeaderLen = 8
@@ -64,4 +65,6 @@ object UdpPacketBuilder {
         buf[offset] = ((value ushr 8) and 0xff).toByte()
         buf[offset + 1] = (value and 0xff).toByte()
     }
+
+    private const val MAX_UDP_PAYLOAD_BYTES = 65_507
 }

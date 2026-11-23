@@ -136,8 +136,8 @@ internal object ProxyExposurePlanner {
 
     private fun isShareable(candidate: ProxyInterfaceCandidate): Boolean =
         when (candidate.transport) {
-            ProxyInterfaceTransport.CELLULAR -> candidate.isPrivateAddress
-            else -> true
+            ProxyInterfaceTransport.CELLULAR -> false
+            else -> candidate.isPrivateAddress
         }
 
     private fun ProxyInterfaceTransport.rank(): Int =

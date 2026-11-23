@@ -56,6 +56,7 @@ class DirectSocketProxyTransportTest {
                 val transport =
                     DirectSocketProxyTransport(
                         resolver = { listOf(InetAddress.getByName("127.0.0.1")) },
+                        allowLoopbackTargets = true,
                     )
                 val session =
                     transport.openTcpSession(
@@ -117,6 +118,7 @@ class DirectSocketProxyTransportTest {
                 val transport =
                     DirectSocketProxyTransport(
                         resolver = { listOf(InetAddress.getByName("127.0.0.1")) },
+                        allowLoopbackTargets = true,
                     )
                 val session =
                     transport.openTcpSession(
@@ -176,6 +178,7 @@ class DirectSocketProxyTransportTest {
             val transport =
                 DirectSocketProxyTransport(
                     resolver = { listOf(InetAddress.getByName("127.0.0.1")) },
+                    allowLoopbackTargets = true,
                 )
             val association =
                 transport.openUdpAssociation(
@@ -235,6 +238,7 @@ class DirectSocketProxyTransportTest {
             val transport =
                 DirectSocketProxyTransport(
                     resolver = { listOf(InetAddress.getByName("127.0.0.1")) },
+                    allowLoopbackTargets = true,
                 )
             val association =
                 transport.openUdpAssociation(
@@ -268,6 +272,7 @@ class DirectSocketProxyTransportTest {
             val transport =
                 DirectSocketProxyTransport(
                     resolver = { listOf(InetAddress.getByName("127.0.0.1")) },
+                    allowLoopbackTargets = true,
                 )
             val association =
                 transport.openUdpAssociation(
@@ -321,6 +326,31 @@ class DirectSocketProxyTransportTest {
             }
             assertFalse(remotes.contains(newRemote))
             association.close()
+        }
+    }
+
+    @Test
+    fun rejectsLoopbackAndUnspecifiedTargetsByDefault() {
+        val transport =
+            DirectSocketProxyTransport(
+                resolver = { listOf(InetAddress.getByName("127.0.0.1")) },
+            )
+        for (target in listOf("127.0.0.1", "0.0.0.0", "internal.local")) {
+            val session =
+                transport.openTcpSession(
+                    ProxyConnectRequest(
+                        host = target,
+                        port = 8080,
+                        protocol = "http-connect",
+                    ),
+                )
+            try {
+                session.awaitConnected(500)
+                throw AssertionError("Expected rejection for $target")
+            } catch (_: ProxyTransportException) {
+            } finally {
+                session.close()
+            }
         }
     }
 

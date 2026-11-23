@@ -501,7 +501,7 @@ class ProxyServerRuntimeTest {
             ProxyServerRuntime(
                 config = ProxyRuntimeConfig(httpEnabled = true, httpPort = port, socksEnabled = false, socksPort = 1080),
                 logger = {},
-                transport = DirectSocketProxyTransport(),
+                transport = DirectSocketProxyTransport(allowLoopbackTargets = true),
         )
         runtime.start()
         try {
@@ -1456,6 +1456,7 @@ class ProxyServerRuntimeTest {
         val transport =
             DirectSocketProxyTransport(
                 resolver = { listOf(java.net.InetAddress.getByName("127.0.0.1")) },
+                allowLoopbackTargets = true,
             )
         val port = findFreePort()
         val runtime =
@@ -1517,6 +1518,7 @@ class ProxyServerRuntimeTest {
         val transport =
             DirectSocketProxyTransport(
                 resolver = { listOf(java.net.InetAddress.getByName("127.0.0.1")) },
+                allowLoopbackTargets = true,
             )
         val port = findFreePort()
         val runtime =

@@ -5,10 +5,10 @@ import java.io.IOException
 import java.net.IDN
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLParameters
 
 internal class TunneledDnsResolver(
@@ -18,8 +18,7 @@ internal class TunneledDnsResolver(
     private val openTunneledSocket: (ResolvedDnsServerConfig) -> Socket,
     private val logger: (Int, String) -> Unit,
 ) {
-    private val nextSourcePort = AtomicInteger(INITIAL_SOURCE_PORT)
-    private val nextQueryId = AtomicInteger(1)
+    private val secureRandom = SecureRandom()
     private val pendingQueries = ConcurrentHashMap<Int, PendingDnsQuery>()
 
     @Throws(IOException::class)
@@ -67,6 +66,17 @@ internal class TunneledDnsResolver(
             )
             return false
         }
+        if (udp.payloadLength < DNS_HEADER_LEN) {
+            return false
+        }
+        val responseTxId = readUint16(packet, udp.payloadOffset)
+        if (responseTxId != query.txId) {
+            logger(
+                Log.DEBUG,
+                "proxy dns ignore txid mismatch got=$responseTxId expected=${query.txId} sport=${query.sourcePort}",
+            )
+            return false
+        }
         val payload = packet.copyOfRange(udp.payloadOffset, udp.payloadOffset + udp.payloadLength)
         query.completePayload(payload)
         return true
@@ -74,7 +84,7 @@ internal class TunneledDnsResolver(
 
     private fun queryServer(host: String, dnsServer: ResolvedDnsServerConfig): QueryOutcome {
         return try {
-            val txId = nextQueryId.getAndIncrement() and 0xffff
+            val txId = secureRandom.nextInt(0x10000)
             val payload = buildQueryPayload(txId, host)
             val responsePayload =
                 when (dnsServer.protocol) {
@@ -173,10 +183,9 @@ internal class TunneledDnsResolver(
         }
 
     private fun allocateSourcePort(): Int {
+        val span = MAX_SOURCE_PORT - INITIAL_SOURCE_PORT + 1
         while (true) {
-            val candidate = nextSourcePort.getAndUpdate {
-                if (it >= MAX_SOURCE_PORT) INITIAL_SOURCE_PORT else it + 1
-            }
+            val candidate = INITIAL_SOURCE_PORT + secureRandom.nextInt(span)
             if (!pendingQueries.containsKey(candidate)) return candidate
         }
     }
@@ -197,8 +206,15 @@ internal class TunneledDnsResolver(
         }
     }
 
+    @Throws(IOException::class)
     private fun buildQueryPayload(txId: Int, host: String): ByteArray {
         val labels = host.split('.')
+        for (label in labels) {
+            val ascii = label.toByteArray(StandardCharsets.US_ASCII)
+            if (ascii.isEmpty() || ascii.size > MAX_DNS_LABEL_LEN) {
+                throw IOException("Invalid DNS hostname label.")
+            }
+        }
         val nameLength = labels.sumOf { it.length + 1 } + 1
         val payload = ByteArray(DNS_HEADER_LEN + nameLength + DNS_QUESTION_SUFFIX_LEN)
         writeUint16(payload, 0, txId)
@@ -354,5 +370,6 @@ internal class TunneledDnsResolver(
         private const val CLASS_IN = 1
         private const val DNS_RCODE_NXDOMAIN = 3
         private const val MAX_NAME_LABELS = 64
+        private const val MAX_DNS_LABEL_LEN = 63
     }
 }

@@ -9,9 +9,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -27,6 +29,10 @@ import kotlin.concurrent.withLock
  */
 class ProxyTunnelService : Service() {
     private val sessionLock = Any()
+    private val stopLifecycleExecutor =
+        Executors.newSingleThreadExecutor { task ->
+            Thread(task, "proxy-stop-lifecycle").apply { isDaemon = true }
+        }
     private var worker: Thread? = null
     private var proxyRuntime: LocalProxyRuntime? = null
     private var proxyTransport: ProxyTransport? = null
@@ -130,6 +136,9 @@ class ProxyTunnelService : Service() {
                 val httpPort = sanitizePort(intent.getIntExtra(EXTRA_PROXY_HTTP_PORT, DEFAULT_HTTP_PORT), DEFAULT_HTTP_PORT)
                 val socksPort = sanitizePort(intent.getIntExtra(EXTRA_PROXY_SOCKS_PORT, DEFAULT_SOCKS_PORT), DEFAULT_SOCKS_PORT)
                 val allowLanConnections = intent.getBooleanExtra(EXTRA_PROXY_ALLOW_LAN, false)
+                val proxyAuthEnabled = intent.getBooleanExtra(EXTRA_PROXY_AUTH_ENABLED, false)
+                val proxyAuthUsername = intent.getStringExtra(EXTRA_PROXY_AUTH_USERNAME).orEmpty()
+                val proxyAuthPassword = intent.getStringExtra(EXTRA_PROXY_AUTH_PASSWORD).orEmpty()
                 val proxyMtu = sanitizeMtu(intent.getIntExtra(EXTRA_MTU, DEFAULT_LINK_MTU))
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
@@ -155,6 +164,9 @@ class ProxyTunnelService : Service() {
                         socksEnabled = true,
                         socksPort = socksPort,
                         allowLanConnections = allowLanConnections,
+                        authEnabled = proxyAuthEnabled,
+                        authUsername = proxyAuthUsername,
+                        authPassword = proxyAuthPassword,
                     )
                 shutdownActiveSession(reason = "restart")
                 connectedEmitted = false
@@ -452,8 +464,6 @@ class ProxyTunnelService : Service() {
                         break
                     }
                     ProxyAttemptOutcomeKind.RECOVERABLE_DISCONNECT -> {
-                        hasEverConnected = true
-                        sessionHasConnected = true
                         immediateSwitchReconnect =
                             networkInterruptEvent == NetworkTransitionEvent.ACTIVE_NETWORK_SWITCHED
                         if (!immediateSwitchReconnect && monitor.hasUsableNetwork()) {
@@ -762,7 +772,6 @@ class ProxyTunnelService : Service() {
                 },
                 transport = transport,
                 connectTimeoutMs = PROXY_ONLY_CONNECT_TIMEOUT_MS,
-                connectResponseTimeoutMs = PROXY_ONLY_CONNECT_RESPONSE_TIMEOUT_MS,
             )
             localRuntime = runtime
             var workerReplaced = false
@@ -939,7 +948,6 @@ class ProxyTunnelService : Service() {
             return false
         }
         VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "Stopping previous proxy session reason=$reason")
-        active.runtime?.stop()
         if (config != null) {
             VpnTunnelEvents.emitProxyExposureChanged(
                 ProxyExposureInfo.inactive(
@@ -949,21 +957,31 @@ class ProxyTunnelService : Service() {
                 ),
             )
         }
-        ProxyTunnelServiceStopper.stopPreviousWorker(
-            worker = active.worker,
-            loopThread = active.loopThread,
-            onStopNativeTunnel = {
-                NativeTunnelSessions.shared.stopOwner(active.nativeOwner(), reason = "proxy service stop")
-            },
-            logger = { level, message ->
-                VpnTunnelEvents.emitEngineLog(level, TAG, message)
-            },
-            joinTimeoutMs = WORKER_JOIN_TIMEOUT_MS,
-        )
-        if (active.worker == null) {
-            active.nativeOwner()?.let {
-                NativeTunnelSessions.shared.release(it, reason = "proxy service stopped")
+        NativeTunnelSessions.shared.stopOwner(active.nativeOwner(), reason = "proxy service stop")
+        val finishTeardown =
+            Runnable {
+                active.runtime?.stop()
+                ProxyTunnelServiceStopper.stopPreviousWorker(
+                    worker = active.worker,
+                    loopThread = active.loopThread,
+                    onStopNativeTunnel = {
+                        NativeTunnelSessions.shared.stopOwner(active.nativeOwner(), reason = "proxy service stop")
+                    },
+                    logger = { level, message ->
+                        VpnTunnelEvents.emitEngineLog(level, TAG, message)
+                    },
+                    joinTimeoutMs = WORKER_JOIN_TIMEOUT_MS,
+                )
+                if (active.worker == null) {
+                    active.nativeOwner()?.let {
+                        NativeTunnelSessions.shared.release(it, reason = "proxy service stopped")
+                    }
+                }
             }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            stopLifecycleExecutor.execute(finishTeardown)
+        } else {
+            finishTeardown.run()
         }
         return true
     }
@@ -1222,6 +1240,9 @@ class ProxyTunnelService : Service() {
         const val EXTRA_PROXY_HTTP_PORT = "proxyHttpPort"
         const val EXTRA_PROXY_SOCKS_PORT = "proxySocksPort"
         const val EXTRA_PROXY_ALLOW_LAN = "proxyAllowLan"
+        const val EXTRA_PROXY_AUTH_ENABLED = "proxyAuthEnabled"
+        const val EXTRA_PROXY_AUTH_USERNAME = "proxyAuthUsername"
+        const val EXTRA_PROXY_AUTH_PASSWORD = "proxyAuthPassword"
         const val DEFAULT_HTTP_PORT = 8080
         const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_LINK_MTU = TunnelVpnService.DEFAULT_TUN_MTU

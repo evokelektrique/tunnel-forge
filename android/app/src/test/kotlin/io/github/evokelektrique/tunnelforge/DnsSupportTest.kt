@@ -144,6 +144,49 @@ class DnsSupportTest {
     }
 
     @Test
+    fun `dns-over-https rejects negative oversized content-length and decodes bounded chunked response`() {
+        val dohServer =
+            ResolvedDnsServerConfig(
+                host = "https://dns.example/dns-query",
+                protocol = DnsProtocol.dnsOverHttps,
+                resolvedIpv4 = "1.1.1.1",
+                tlsHostname = "dns.example",
+                requestAuthority = "dns.example",
+                requestPath = "/dns-query",
+            )
+
+        for (raw in listOf(
+            "HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\nOK",
+            "HTTP/1.1 200 OK\r\nContent-Length: 70000\r\n\r\nOK",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZZZ\r\nOK\r\n0\r\n\r\n",
+        )) {
+            var threw = false
+            try {
+                exchangeDnsOverHttps(
+                    ByteArrayInputStream(raw.toByteArray()),
+                    ByteArrayOutputStream(),
+                    byteArrayOf(0x01, 0x02),
+                    dohServer,
+                )
+            } catch (_: IOException) {
+                threw = true
+            }
+            assertTrue("Expected IOException for malformed DoH response: $raw", threw)
+        }
+
+        val chunkedOk =
+            exchangeDnsOverHttps(
+                ByteArrayInputStream(
+                    ("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nOK\r\n0\r\n\r\n").toByteArray(),
+                ),
+                ByteArrayOutputStream(),
+                byteArrayOf(0x01, 0x02),
+                dohServer,
+            )
+        assertEquals("OK", chunkedOk.decodeToString())
+    }
+
+    @Test
     fun `resolve upstream keeps all IPv4 candidates for DoH host`() {
         val resolved =
             DnsConfigSupport.resolveUpstreamServers(

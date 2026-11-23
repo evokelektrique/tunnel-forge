@@ -76,7 +76,6 @@ type gvisorState struct {
 	mu                  sync.Mutex
 	stack               *stack.Stack
 	linkEP              *channel.Endpoint
-	cancel              context.CancelFunc
 	sessions            map[int]*tcpSession
 	pendingOpens        map[int]*tcpOpenDiag
 	pendingOpenCancels  map[int]context.CancelFunc
@@ -161,10 +160,8 @@ func startStackLocked(s *stack.Stack, linkEP *channel.Endpoint, address tcpip.Ad
 	}
 	s.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: nicID}})
 
-	ctx, cancel := context.WithCancel(context.Background())
 	state.stack = s
 	state.linkEP = linkEP
-	state.cancel = cancel
 	state.sessions = make(map[int]*tcpSession)
 	state.pendingOpens = make(map[int]*tcpOpenDiag)
 	state.pendingOpenCancels = make(map[int]context.CancelFunc)
@@ -189,18 +186,12 @@ func startStackLocked(s *stack.Stack, linkEP *channel.Endpoint, address tcpip.Ad
 	state.openSynAckIn.Store(0)
 	state.openRstIn.Store(0)
 
-	go func() {
-		<-ctx.Done()
-		linkEP.Close()
-	}()
-
 	return 0
 }
 
 func stopLocked() {
-	if state.cancel != nil {
-		state.cancel()
-	}
+	s := state.stack
+	linkEP := state.linkEP
 	for id, session := range state.sessions {
 		_ = session.conn.Close()
 		delete(state.sessions, id)
@@ -209,12 +200,8 @@ func stopLocked() {
 		cancel()
 		delete(state.pendingOpenCancels, id)
 	}
-	if state.linkEP != nil {
-		state.linkEP.Close()
-	}
 	state.stack = nil
 	state.linkEP = nil
-	state.cancel = nil
 	state.sessions = nil
 	state.pendingOpens = nil
 	state.pendingOpenCancels = nil
@@ -222,6 +209,13 @@ func stopLocked() {
 	state.completedOpenDiags = nil
 	state.completedOpenOrder = nil
 	state.running = false
+	if linkEP != nil {
+		linkEP.Close()
+	}
+	if s != nil {
+		s.Close()
+		s.Wait()
+	}
 }
 
 //export tf_gvisor_stop
@@ -268,28 +262,32 @@ func tf_gvisor_read_outbound(out unsafe.Pointer, maxLen C.int, timeoutMs C.int) 
 		return -2
 	}
 
-	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
-	for {
-		pkt := linkEP.Read()
-		if pkt != nil {
-			defer pkt.DecRef()
-			buf := pkt.ToBuffer()
-			defer buf.Release()
-			data := buf.Flatten()
-			if len(data) > int(maxLen) {
-				return -3
-			}
-			// Outbound is from gVisor toward PPP/L2TP. The caller owns the output buffer.
-			noteOutboundPacket(data)
-			copy(unsafe.Slice((*byte)(out), int(maxLen)), data)
-			state.outboundPackets.Add(1)
-			return C.int(len(data))
+	var pkt *stack.PacketBuffer
+	if timeoutMs <= 0 {
+		pkt = linkEP.Read()
+	} else {
+		pkt = linkEP.Read()
+		if pkt == nil {
+			readCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+			pkt = linkEP.ReadContext(readCtx)
+			cancel()
 		}
-		if timeoutMs <= 0 || time.Now().After(deadline) {
-			return 0
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
+	if pkt == nil {
+		return 0
+	}
+	defer pkt.DecRef()
+	buf := pkt.ToBuffer()
+	defer buf.Release()
+	data := buf.Flatten()
+	if len(data) > int(maxLen) {
+		return -3
+	}
+	// Outbound is from gVisor toward PPP/L2TP. The caller owns the output buffer.
+	noteOutboundPacket(data)
+	copy(unsafe.Slice((*byte)(out), int(maxLen)), data)
+	state.outboundPackets.Add(1)
+	return C.int(len(data))
 }
 
 //export tf_gvisor_tcp_open
@@ -348,6 +346,12 @@ func tf_gvisor_tcp_open_cancelable(openID C.int, remoteIPv4 unsafe.Pointer, port
 
 	state.mu.Lock()
 	delete(state.pendingOpenCancels, open)
+	if !state.running || state.stack != s || state.sessions == nil {
+		finishOpenFailureLocked(open, -2, "stack-stopped")
+		state.mu.Unlock()
+		_ = conn.Close()
+		return -2
+	}
 	id := takeNextID(&state.nextID)
 	state.sessions[id] = &tcpSession{conn: conn}
 	finishOpenSuccessLocked(open, id)
@@ -438,6 +442,10 @@ func finishOpenSuccessLocked(openID int, sessionID int) {
 func finishOpenFailure(openID int, code int, reason string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	finishOpenFailureLocked(openID, code, reason)
+}
+
+func finishOpenFailureLocked(openID int, code int, reason string) {
 	diag := state.pendingOpens[openID]
 	if diag == nil {
 		storeCompletedOpenDiagLocked(openID, fmt.Sprintf("openDiag openId=%d sessionId=0 code=%d reason=%s missing=true", openID, code, reason))
@@ -507,6 +515,33 @@ func sessionByID(id C.int) (*tcpSession, bool) {
 	return session, ok
 }
 
+func classifyIOError(err error) C.int {
+	if errors.Is(err, net.ErrClosed) {
+		return -2
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return -4
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return -5
+	}
+	// gonet wraps tcpip.Error strings via errors.New(...) instead of errno values.
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timed out"):
+		return -4
+	case strings.Contains(msg, "operation aborted"):
+		return -2
+	case strings.Contains(msg, "reset"),
+		strings.Contains(msg, "closed for send"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "connection aborted"):
+		return -5
+	default:
+		return -3
+	}
+}
+
 //export tf_gvisor_tcp_read
 func tf_gvisor_tcp_read(id C.int, out unsafe.Pointer, maxLen C.int, timeoutMs C.int) C.int {
 	if out == nil || maxLen <= 0 {
@@ -524,16 +559,7 @@ func tf_gvisor_tcp_read(id C.int, out unsafe.Pointer, maxLen C.int, timeoutMs C.
 		if errors.Is(err, io.EOF) {
 			return 0
 		}
-		if errors.Is(err, net.ErrClosed) {
-			return -2
-		}
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return -4
-		}
-		if errors.Is(err, syscall.ECONNRESET) {
-			return -5
-		}
-		return -3
+		return classifyIOError(err)
 	}
 	return C.int(n)
 }
@@ -551,16 +577,7 @@ func tf_gvisor_tcp_write(id C.int, data unsafe.Pointer, length C.int, timeoutMs 
 	_ = session.conn.SetWriteDeadline(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond))
 	n, err := session.conn.Write(payload)
 	if err != nil {
-		if errors.Is(err, net.ErrClosed) {
-			return -2
-		}
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return -4
-		}
-		if errors.Is(err, syscall.ECONNRESET) {
-			return -5
-		}
-		return -3
+		return classifyIOError(err)
 	}
 	return C.int(n)
 }

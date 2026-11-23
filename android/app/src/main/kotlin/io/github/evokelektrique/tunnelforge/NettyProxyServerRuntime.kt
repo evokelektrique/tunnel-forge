@@ -28,6 +28,7 @@ import io.netty.handler.codec.http.HttpVersion
 import io.netty.handler.codec.socksx.SocksVersion
 import io.netty.handler.codec.socksx.v5.DefaultSocks5CommandResponse
 import io.netty.handler.codec.socksx.v5.DefaultSocks5InitialResponse
+import io.netty.handler.codec.socksx.v5.DefaultSocks5PasswordAuthResponse
 import io.netty.handler.codec.socksx.v5.Socks5AddressType
 import io.netty.handler.codec.socksx.v5.Socks5CommandRequest
 import io.netty.handler.codec.socksx.v5.Socks5CommandStatus
@@ -36,6 +37,9 @@ import io.netty.handler.codec.socksx.v5.Socks5InitialRequest
 import io.netty.handler.codec.socksx.v5.Socks5AuthMethod
 import io.netty.handler.codec.socksx.v5.Socks5CommandRequestDecoder
 import io.netty.handler.codec.socksx.v5.Socks5InitialRequestDecoder
+import io.netty.handler.codec.socksx.v5.Socks5PasswordAuthRequest
+import io.netty.handler.codec.socksx.v5.Socks5PasswordAuthRequestDecoder
+import io.netty.handler.codec.socksx.v5.Socks5PasswordAuthStatus
 import io.netty.handler.codec.socksx.v5.Socks5ServerEncoder
 import java.io.IOException
 import java.net.InetAddress
@@ -43,8 +47,10 @@ import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -61,7 +67,6 @@ class NettyProxyServerRuntime(
     private val config: ProxyRuntimeConfig,
     private val transport: ProxyTransport,
     private val connectTimeoutMs: Long = DEFAULT_CONNECT_TIMEOUT_MS,
-    private val connectResponseTimeoutMs: Long = connectTimeoutMs,
     private val levelLogger: (Int, String) -> Unit = { _, _ -> },
 ) : LocalProxyRuntime {
     private val running = AtomicBoolean(false)
@@ -74,6 +79,7 @@ class NettyProxyServerRuntime(
         Executors.newCachedThreadPool { task -> Thread(task, "netty-proxy-transport").apply { isDaemon = true } }
     private val serverChannelFactory = ChannelFactory<ServerChannel> { NioServerSocketChannel() }
     private val serverChannels = mutableListOf<Channel>()
+    private val clientChannels = ConcurrentHashMap.newKeySet<Channel>()
     private val activeChannels = AtomicInteger(0)
     private val acceptedChannels = AtomicInteger(0)
     private val failedChannels = AtomicInteger(0)
@@ -111,9 +117,12 @@ class NettyProxyServerRuntime(
             channel.close().awaitUninterruptibly(1000)
         }
         serverChannels.clear()
+        for (channel in clientChannels.toList()) {
+            channel.close()
+        }
+        blockingExecutor.shutdownNow()
         bossGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS)
         workerGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS)
-        blockingExecutor.shutdownNow()
     }
 
     override fun endpointSummary(): String =
@@ -156,6 +165,22 @@ class NettyProxyServerRuntime(
 
     private inner class HttpConnectHandler : SimpleChannelInboundHandler<FullHttpRequest>() {
         override fun channelRead0(ctx: ChannelHandlerContext, request: FullHttpRequest) {
+            if (request.decoderResult().isFailure) {
+                writeHttpError(ctx, HttpResponseStatus.BAD_REQUEST, "Malformed HTTP proxy request.")
+                return
+            }
+            if (config.requiresProxyAuth() &&
+                !config.matchesHttpBasicAuth(request.headers().getAll(HttpHeaderNames.PROXY_AUTHORIZATION))
+            ) {
+                warn("netty proxy reject proto=http-connect reason=proxy-auth-required")
+                writeHttpError(
+                    ctx,
+                    HttpResponseStatus.PROXY_AUTHENTICATION_REQUIRED,
+                    "Proxy authentication required.",
+                    extraHeaders = listOf(HttpHeaderNames.PROXY_AUTHENTICATE to PROXY_AUTH_REALM_HEADER),
+                )
+                return
+            }
             if (!request.method().name().equals("CONNECT", ignoreCase = true)) {
                 writeHttpError(ctx, HttpResponseStatus.NOT_IMPLEMENTED, "Only HTTP CONNECT is supported by the Netty proxy frontend.")
                 return
@@ -200,6 +225,8 @@ class NettyProxyServerRuntime(
     }
 
     private inner class SocksConnectHandler : SimpleChannelInboundHandler<Any>() {
+        private var authenticated = !config.requiresProxyAuth()
+
         override fun channelRead0(ctx: ChannelHandlerContext, msg: Any) {
             when (msg) {
                 is Socks5InitialRequest -> {
@@ -207,10 +234,44 @@ class NettyProxyServerRuntime(
                         ctx.close()
                         return
                     }
-                    ctx.writeAndFlush(DefaultSocks5InitialResponse(Socks5AuthMethod.NO_AUTH))
-                    ctx.pipeline().replace(SOCKS_DECODER_INITIAL, SOCKS_DECODER_COMMAND, Socks5CommandRequestDecoder())
+                    if (config.requiresProxyAuth()) {
+                        if (!msg.authMethods().contains(Socks5AuthMethod.PASSWORD)) {
+                            warn("netty proxy reject proto=socks5 reason=proxy-auth-method-missing")
+                            ctx.writeAndFlush(DefaultSocks5InitialResponse(Socks5AuthMethod.UNACCEPTED))
+                                .addListener(ChannelFutureListener.CLOSE)
+                            return
+                        }
+                        ctx.writeAndFlush(DefaultSocks5InitialResponse(Socks5AuthMethod.PASSWORD))
+                        ctx.pipeline().replace(
+                            SOCKS_DECODER_INITIAL,
+                            SOCKS_DECODER_AUTH,
+                            Socks5PasswordAuthRequestDecoder(),
+                        )
+                    } else {
+                        ctx.writeAndFlush(DefaultSocks5InitialResponse(Socks5AuthMethod.NO_AUTH))
+                        ctx.pipeline().replace(SOCKS_DECODER_INITIAL, SOCKS_DECODER_COMMAND, Socks5CommandRequestDecoder())
+                    }
+                }
+                is Socks5PasswordAuthRequest -> {
+                    if (config.matchesCredentials(msg.username(), msg.password())) {
+                        authenticated = true
+                        ctx.writeAndFlush(DefaultSocks5PasswordAuthResponse(Socks5PasswordAuthStatus.SUCCESS))
+                        ctx.pipeline().replace(
+                            SOCKS_DECODER_AUTH,
+                            SOCKS_DECODER_COMMAND,
+                            Socks5CommandRequestDecoder(),
+                        )
+                    } else {
+                        warn("netty proxy reject proto=socks5 reason=proxy-auth-failed")
+                        ctx.writeAndFlush(DefaultSocks5PasswordAuthResponse(Socks5PasswordAuthStatus.FAILURE))
+                            .addListener(ChannelFutureListener.CLOSE)
+                    }
                 }
                 is Socks5CommandRequest -> {
+                    if (!authenticated) {
+                        ctx.close()
+                        return
+                    }
                     if (msg.type() != Socks5CommandType.CONNECT) {
                         ctx.writeAndFlush(
                             DefaultSocks5CommandResponse(
@@ -252,7 +313,7 @@ class NettyProxyServerRuntime(
             openHttpConnectTunnelEarly(ctx, request, initialClientBytes)
             return
         }
-        blockingExecutor.execute {
+        submitBlocking(onRejected = { ctx.close() }) {
             var session: ProxyTransportSession? = null
             var success = false
             var pendingReleased = false
@@ -260,7 +321,7 @@ class NettyProxyServerRuntime(
             val pendingNow = pendingConnects.incrementAndGet()
             debug(
                 "netty proxy open begin proto=${request.protocol} target=${request.host}:${request.port} " +
-                    "pendingConnects=$pendingNow timeoutMs=${if (httpConnect) connectResponseTimeoutMs else connectTimeoutMs} ${runtimeDiagnostics()}",
+                    "pendingConnects=$pendingNow timeoutMs=$connectTimeoutMs ${runtimeDiagnostics()}",
             )
             try {
                 session = transport.openTcpSession(request)
@@ -268,13 +329,7 @@ class NettyProxyServerRuntime(
                 ctx.channel().closeFuture().addListener {
                     pendingSession.close()
                 }
-                session.awaitConnected(
-                    if (httpConnect) {
-                        connectResponseTimeoutMs.coerceAtLeast(1L)
-                    } else {
-                        connectTimeoutMs.coerceAtLeast(1L)
-                    },
-                )
+                session.awaitConnected(connectTimeoutMs.coerceAtLeast(1L))
                 success = true
                 val establishedSession = session
                 val elapsedMs = System.currentTimeMillis() - openStartMs
@@ -284,23 +339,19 @@ class NettyProxyServerRuntime(
                     "netty proxy open established proto=${request.protocol} sid=${establishedSession.descriptor.sessionId} " +
                         "target=${request.host}:${request.port} openMs=$elapsedMs pendingConnects=$remainingPending ${runtimeDiagnostics()}",
                 )
-                ctx.executor().execute {
-                    if (!ctx.channel().isActive) {
+                runOnChannelExecutor(ctx, onRejected = { establishedSession.close() }) {
+                    if (!running.get() || !ctx.channel().isActive) {
                         establishedSession.close()
                         debug(
                             "netty proxy connect abandoned proto=${request.protocol} sid=${establishedSession.descriptor.sessionId} " +
                                 "target=${request.host}:${request.port} reason=clientChannelInactive ${runtimeDiagnostics()}",
                         )
-                        return@execute
+                        return@runOnChannelExecutor
                     }
-                    val responseFuture = if (httpConnect) {
-                        removeFrontendPipeline(ctx, httpConnect)
-                        ctx.writeAndFlush(Unpooled.copiedBuffer("HTTP/1.1 200 Connection Established\r\n\r\n", StandardCharsets.US_ASCII))
-                    } else {
+                    val responseFuture =
                         ctx.writeAndFlush(DefaultSocks5CommandResponse(Socks5CommandStatus.SUCCESS, Socks5AddressType.IPv4))
-                    }
                     responseFuture.addListener { future ->
-                        if (!future.isSuccess || !ctx.channel().isActive) {
+                        if (!future.isSuccess || !ctx.channel().isActive || !running.get()) {
                             establishedSession.close()
                             ctx.close()
                             warn(
@@ -309,12 +360,8 @@ class NettyProxyServerRuntime(
                             )
                             return@addListener
                         }
-                        if (!httpConnect) {
-                            removeFrontendPipeline(ctx, httpConnect)
-                        }
+                        removeFrontendPipeline(ctx, httpConnect = false)
                         ctx.pipeline().addLast(NettyTunnelRelayHandler(establishedSession))
-                        ctx.channel().config().isAutoRead = true
-                        ctx.read()
                         debug("netty proxy connect ok proto=${request.protocol} sid=${establishedSession.descriptor.sessionId} target=${request.host}:${request.port}")
                     }
                 }
@@ -336,23 +383,9 @@ class NettyProxyServerRuntime(
                 if (!aborted) {
                     warn(failMessage)
                 }
-                ctx.executor().execute {
-                    if (httpConnect) {
-                        if (aborted) {
-                            ctx.close()
-                        } else if (shouldSuppressUpstreamHttpError(e)) {
-                            warn(
-                                "netty proxy suppress-error proto=${request.protocol} phase=${if (success) "post-success" else "pre-success"} " +
-                                    "target=${request.host}:${request.port} reason=${failureReasonForLog(e)}",
-                            )
-                            ctx.close()
-                        } else {
-                            writeHttpError(ctx, statusFor(e), e.message ?: "Proxy connection failed.")
-                        }
-                    } else {
-                        ctx.writeAndFlush(DefaultSocks5CommandResponse(socksStatusFor(e), Socks5AddressType.IPv4))
-                            .addListener(ChannelFutureListener.CLOSE)
-                    }
+                runOnChannelExecutor(ctx) {
+                    ctx.writeAndFlush(DefaultSocks5CommandResponse(socksStatusFor(e), Socks5AddressType.IPv4))
+                        .addListener(ChannelFutureListener.CLOSE)
                 }
             } catch (t: Throwable) {
                 val elapsedMs = System.currentTimeMillis() - openStartMs
@@ -365,12 +398,17 @@ class NettyProxyServerRuntime(
                     }
                 val closeSession = session
                 closeSession?.close()
-                failedChannels.incrementAndGet()
-                warn(
-                    "netty proxy fail proto=${request.protocol} phase=unexpected target=${request.host}:${request.port} " +
-                        "openMs=$elapsedMs pendingConnects=$remainingPending error=${t.message ?: t.javaClass.simpleName} ${runtimeDiagnostics()}",
-                )
-                ctx.executor().execute { ctx.close() }
+                if (t is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                if (running.get() || t !is InterruptedException) {
+                    failedChannels.incrementAndGet()
+                    warn(
+                        "netty proxy fail proto=${request.protocol} phase=unexpected target=${request.host}:${request.port} " +
+                            "openMs=$elapsedMs pendingConnects=$remainingPending error=${t.message ?: t.javaClass.simpleName} ${runtimeDiagnostics()}",
+                    )
+                }
+                runOnChannelExecutor(ctx) { ctx.close() }
             } finally {
                 if (!pendingReleased) {
                     pendingConnects.decrementAndGet()
@@ -407,7 +445,7 @@ class NettyProxyServerRuntime(
                 }
             }
 
-        blockingExecutor.execute {
+        submitBlocking(onRejected = { pendingRelay.fail(ctx, "runtimeStopped", null) }) {
             var session: ProxyTransportSession? = null
             var pendingReleased = false
             val openStartMs = System.currentTimeMillis()
@@ -429,7 +467,13 @@ class NettyProxyServerRuntime(
                         "target=${request.host}:${request.port} openMs=$elapsedMs pendingConnects=$remainingPending " +
                         "bufferedBytes=${pendingRelay.bufferedByteCount()} ${runtimeDiagnostics()}",
                 )
-                ctx.executor().execute {
+                runOnChannelExecutor(
+                    ctx,
+                    onRejected = {
+                        pendingRelay.fail(ctx, "runtimeStopped", null)
+                        pendingSession.close()
+                    },
+                ) {
                     pendingRelay.establish(ctx, pendingSession)
                 }
             } catch (e: IOException) {
@@ -451,7 +495,7 @@ class NettyProxyServerRuntime(
                 if (!aborted) {
                     warn(message)
                 }
-                ctx.executor().execute {
+                runOnChannelExecutor(ctx, onRejected = { pendingRelay.fail(ctx, "runtimeStopped", e) }) {
                     pendingRelay.fail(ctx, failureReasonForLog(e), e)
                 }
             } catch (t: Throwable) {
@@ -465,13 +509,18 @@ class NettyProxyServerRuntime(
                     }
                 val closeSession = session
                 closeSession?.close()
-                failedChannels.incrementAndGet()
-                warn(
-                    "netty proxy earlyConnectOpenFailed proto=${request.protocol} target=${request.host}:${request.port} " +
-                        "openMs=$elapsedMs pendingConnects=$remainingPending reason=unexpected " +
-                        "error=${t.message ?: t.javaClass.simpleName} ${runtimeDiagnostics()}",
-                )
-                ctx.executor().execute {
+                if (t is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                if (running.get() || t !is InterruptedException) {
+                    failedChannels.incrementAndGet()
+                    warn(
+                        "netty proxy earlyConnectOpenFailed proto=${request.protocol} target=${request.host}:${request.port} " +
+                            "openMs=$elapsedMs pendingConnects=$remainingPending reason=unexpected " +
+                            "error=${t.message ?: t.javaClass.simpleName} ${runtimeDiagnostics()}",
+                    )
+                }
+                runOnChannelExecutor(ctx, onRejected = { pendingRelay.fail(ctx, "runtimeStopped", t) }) {
                     pendingRelay.fail(ctx, "unexpected", t)
                 }
             } finally {
@@ -516,7 +565,7 @@ class NettyProxyServerRuntime(
         fun establish(ctx: ChannelHandlerContext, establishedSession: ProxyTransportSession) {
             val buffers =
                 synchronized(lock) {
-                    if (closed || !ctx.channel().isActive) {
+                    if (closed || !running.get() || !ctx.channel().isActive) {
                         closed = true
                         pendingBuffers.clear()
                         pendingBytes = 0
@@ -533,28 +582,7 @@ class NettyProxyServerRuntime(
                 ctx.pipeline().remove(PENDING_HTTP_CONNECT_HANDLER)
             }
             ctx.channel().config().isAutoRead = false
-            ctx.pipeline().addLast(NettyTunnelRelayHandler(establishedSession))
-            blockingExecutor.execute {
-                try {
-                    for (buffer in buffers) {
-                        establishedSession.writeClientBytes(buffer, WRITE_TIMEOUT_MS)
-                    }
-                    ctx.executor().execute {
-                        if (ctx.channel().isActive) {
-                            ctx.channel().config().isAutoRead = true
-                            ctx.read()
-                        } else {
-                            establishedSession.close()
-                        }
-                    }
-                } catch (e: IOException) {
-                    warn(
-                        "netty proxy pending-open flush failed proto=${request.protocol} sid=${establishedSession.descriptor.sessionId} " +
-                            "target=${request.host}:${request.port} error=${e.message}",
-                    )
-                    ctx.executor().execute { ctx.close() }
-                }
-            }
+            ctx.pipeline().addLast(NettyTunnelRelayHandler(establishedSession, buffers))
         }
 
         fun fail(ctx: ChannelHandlerContext, reason: String, cause: Throwable?) {
@@ -623,31 +651,32 @@ class NettyProxyServerRuntime(
 
     private inner class NettyTunnelRelayHandler(
         private val session: ProxyTransportSession,
+        private val initialOutbound: List<ByteArray> = emptyList(),
     ) : SimpleChannelInboundHandler<ByteBuf>() {
         private val closed = AtomicBoolean(false)
+        private val outboundLock = Any()
+        private val pendingOutbound = ArrayDeque<ByteArray>()
+        private var drainingOutbound = false
 
         override fun handlerAdded(ctx: ChannelHandlerContext) {
-            blockingExecutor.execute { pumpRemoteToClient(ctx) }
+            if (!running.get() || !ctx.channel().isActive) {
+                close(ctx)
+                return
+            }
+            submitBlocking(onRejected = { close(ctx) }) { pumpRemoteToClient(ctx) }
+            if (initialOutbound.isEmpty()) {
+                ctx.channel().config().isAutoRead = true
+                ctx.read()
+            } else {
+                enqueueOutbound(ctx, initialOutbound)
+            }
         }
 
         override fun channelRead0(ctx: ChannelHandlerContext, msg: ByteBuf) {
             val bytes = ByteArray(msg.readableBytes())
             msg.readBytes(bytes)
             ctx.channel().config().isAutoRead = false
-            blockingExecutor.execute {
-                try {
-                    session.writeClientBytes(bytes, WRITE_TIMEOUT_MS)
-                    ctx.executor().execute {
-                        if (ctx.channel().isActive) {
-                            ctx.channel().config().isAutoRead = true
-                            ctx.read()
-                        }
-                    }
-                } catch (e: IOException) {
-                    warn("netty tunnel client->remote failed sid=${session.descriptor.sessionId} error=${e.message}")
-                    close(ctx)
-                }
-            }
+            enqueueOutbound(ctx, listOf(bytes))
         }
 
         override fun channelInactive(ctx: ChannelHandlerContext) {
@@ -659,6 +688,60 @@ class NettyProxyServerRuntime(
             close(ctx)
         }
 
+        private fun enqueueOutbound(ctx: ChannelHandlerContext, chunks: List<ByteArray>) {
+            if (chunks.isEmpty() || closed.get()) return
+            val shouldStartDrain =
+                synchronized(outboundLock) {
+                    if (closed.get()) return
+                    for (chunk in chunks) {
+                        if (chunk.isNotEmpty()) pendingOutbound.addLast(chunk)
+                    }
+                    if (drainingOutbound || pendingOutbound.isEmpty()) {
+                        false
+                    } else {
+                        drainingOutbound = true
+                        true
+                    }
+                }
+            if (shouldStartDrain) {
+                submitBlocking(onRejected = { close(ctx) }) { drainOutbound(ctx) }
+            }
+        }
+
+        private fun drainOutbound(ctx: ChannelHandlerContext) {
+            try {
+                while (!closed.get()) {
+                    val next =
+                        synchronized(outboundLock) {
+                            if (pendingOutbound.isEmpty() || closed.get()) {
+                                drainingOutbound = false
+                                null
+                            } else {
+                                pendingOutbound.removeFirst()
+                            }
+                        }
+                            ?: break
+                    session.writeClientBytes(next, WRITE_TIMEOUT_MS)
+                }
+                if (!closed.get()) {
+                    runOnChannelExecutor(ctx, onRejected = { close(ctx) }) {
+                        if (!closed.get() && ctx.channel().isActive && synchronized(outboundLock) { pendingOutbound.isEmpty() && !drainingOutbound }) {
+                            ctx.channel().config().isAutoRead = true
+                            ctx.read()
+                        }
+                    }
+                }
+            } catch (e: IOException) {
+                if (!closed.get()) {
+                    logTunnelFailure("client->remote", e, writePath = true)
+                }
+                close(ctx)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                close(ctx)
+            }
+        }
+
         private fun pumpRemoteToClient(ctx: ChannelHandlerContext) {
             try {
                 while (!closed.get() && ctx.channel().isActive) {
@@ -668,7 +751,7 @@ class NettyProxyServerRuntime(
                 }
             } catch (e: IOException) {
                 if (!closed.get()) {
-                    warn("netty tunnel remote->client failed sid=${session.descriptor.sessionId} error=${e.message}")
+                    logTunnelFailure("remote->client", e, writePath = false)
                 }
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
@@ -677,8 +760,23 @@ class NettyProxyServerRuntime(
             }
         }
 
+        private fun logTunnelFailure(direction: String, error: IOException, writePath: Boolean) {
+            val category = gvisorTcpFailureCategory(error, writePath = writePath)
+            val message = "netty tunnel $direction failed sid=${session.descriptor.sessionId} category=$category error=${error.message}"
+            when (category) {
+                GvisorTcpFailureCategory.connectionReset,
+                GvisorTcpFailureCategory.sessionClosedLocally,
+                -> debug(message)
+                else -> warn(message)
+            }
+        }
+
         private fun close(ctx: ChannelHandlerContext) {
             if (!closed.compareAndSet(false, true)) return
+            synchronized(outboundLock) {
+                pendingOutbound.clear()
+                drainingOutbound = false
+            }
             session.close()
             ctx.close()
         }
@@ -687,18 +785,58 @@ class NettyProxyServerRuntime(
     private fun track(channel: Channel) {
         acceptedChannels.incrementAndGet()
         activeChannels.incrementAndGet()
-        channel.closeFuture().addListener { activeChannels.decrementAndGet() }
+        clientChannels.add(channel)
+        channel.closeFuture().addListener {
+            clientChannels.remove(channel)
+            activeChannels.decrementAndGet()
+        }
+    }
+
+    private fun submitBlocking(
+        onRejected: () -> Unit = {},
+        task: () -> Unit,
+    ) {
+        if (!running.get() || blockingExecutor.isShutdown) {
+            onRejected()
+            return
+        }
+        try {
+            blockingExecutor.execute(task)
+        } catch (_: RejectedExecutionException) {
+            onRejected()
+        }
+    }
+
+    private fun runOnChannelExecutor(
+        ctx: ChannelHandlerContext,
+        onRejected: () -> Unit = {},
+        task: () -> Unit,
+    ) {
+        val executor = ctx.executor()
+        if (!running.get() || executor.isShuttingDown) {
+            onRejected()
+            return
+        }
+        try {
+            executor.execute(task)
+        } catch (_: RejectedExecutionException) {
+            onRejected()
+        }
     }
 
     private fun writeHttpError(
         ctx: ChannelHandlerContext,
         status: HttpResponseStatus,
         message: String,
+        extraHeaders: List<Pair<CharSequence, String>> = emptyList(),
     ) {
         val content = Unpooled.copiedBuffer(message, StandardCharsets.UTF_8)
         val response = DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, content)
         response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes())
         response.headers().set(HttpHeaderNames.CONNECTION, "close")
+        for ((name, value) in extraHeaders) {
+            response.headers().set(name, value)
+        }
         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE)
     }
 
@@ -710,27 +848,6 @@ class NettyProxyServerRuntime(
         val port = trimmed.substring(colon + 1).toIntOrNull() ?: return null
         if (port !in 1..65535) return null
         return host to port
-    }
-
-    private fun statusFor(error: IOException): HttpResponseStatus =
-        when ((error as? ProxyTransportException)?.failureReason) {
-            ProxyTransportFailureReason.localServiceUnavailable -> HttpResponseStatus.SERVICE_UNAVAILABLE
-            ProxyTransportFailureReason.upstreamTimeout -> HttpResponseStatus.GATEWAY_TIMEOUT
-            ProxyTransportFailureReason.dnsFailed -> HttpResponseStatus.BAD_GATEWAY
-            ProxyTransportFailureReason.networkUnreachable -> HttpResponseStatus.BAD_GATEWAY
-            else -> HttpResponseStatus.BAD_GATEWAY
-        }
-
-    private fun shouldSuppressUpstreamHttpError(error: IOException): Boolean {
-        if (!config.suppressUpstreamHttpErrors) return false
-        return when ((error as? ProxyTransportException)?.failureReason) {
-            ProxyTransportFailureReason.upstreamConnectFailed,
-            ProxyTransportFailureReason.upstreamTimeout,
-            ProxyTransportFailureReason.dnsFailed,
-            ProxyTransportFailureReason.networkUnreachable,
-            -> true
-            else -> false
-        }
     }
 
     private fun failureReasonForLog(error: IOException): String =
@@ -795,6 +912,7 @@ class NettyProxyServerRuntime(
         private const val HTTP_AGGREGATOR = "http-aggregator"
         private const val SOCKS_ENCODER = "socks5-encoder"
         private const val SOCKS_DECODER_INITIAL = "socks5-initial-decoder"
+        private const val SOCKS_DECODER_AUTH = "socks5-auth-decoder"
         private const val SOCKS_DECODER_COMMAND = "socks5-command-decoder"
         private const val FRONTEND_HANDLER = "proxy-frontend-handler"
         private const val PENDING_HTTP_CONNECT_HANDLER = "pending-http-connect-handler"
