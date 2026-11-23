@@ -48,10 +48,7 @@ void main() {
   }
 
   testWidgets('first launch shows onboarding instead of home', (tester) async {
-    await pumpApp(
-      tester,
-      onboardingRepository: _FakeOnboardingRepository(),
-    );
+    await pumpApp(tester, onboardingRepository: _FakeOnboardingRepository());
 
     expect(find.byKey(const Key('onboarding_title')), findsOneWidget);
     expect(find.byKey(const Key('vpn_status')), findsNothing);
@@ -62,10 +59,7 @@ void main() {
   testWidgets('onboarding content scrolls on a compact display', (
     tester,
   ) async {
-    await pumpApp(
-      tester,
-      onboardingRepository: _FakeOnboardingRepository(),
-    );
+    await pumpApp(tester, onboardingRepository: _FakeOnboardingRepository());
     await tester.binding.setSurfaceSize(const Size(320, 480));
     await tester.pump();
 
@@ -110,10 +104,7 @@ void main() {
     'debug mode skips intro and security notice after language continue',
     (tester) async {
       final repository = _FakeOnboardingRepository();
-      await pumpApp(
-        tester,
-        onboardingRepository: repository,
-      );
+      await pumpApp(tester, onboardingRepository: repository);
 
       expect(find.text('Choose your language'), findsOneWidget);
       expect(find.byKey(const Key('onboarding_step_indicator')), findsNothing);
@@ -211,10 +202,7 @@ void main() {
   );
 
   testWidgets('blocking onboarding has no cancel affordance', (tester) async {
-    await pumpApp(
-      tester,
-      onboardingRepository: _FakeOnboardingRepository(),
-    );
+    await pumpApp(tester, onboardingRepository: _FakeOnboardingRepository());
 
     expect(find.byKey(const Key('onboarding_cancel_button')), findsNothing);
     expect(find.text('Cancel'), findsNothing);
@@ -222,9 +210,8 @@ void main() {
   });
 
   testWidgets('read-only notice can be dismissed', (tester) async {
-    final bloc = OnboardingBloc(
-      _FakeOnboardingRepository(),
-    )..add(const OnboardingReadOnlyOpened());
+    final bloc = OnboardingBloc(_FakeOnboardingRepository())
+      ..add(const OnboardingReadOnlyOpened());
     addTearDown(bloc.close);
     final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -264,10 +251,7 @@ void main() {
   testWidgets('language step shows system default and switches UI live', (
     tester,
   ) async {
-    await pumpApp(
-      tester,
-      onboardingRepository: _FakeOnboardingRepository(),
-    );
+    await pumpApp(tester, onboardingRepository: _FakeOnboardingRepository());
 
     expect(find.byKey(const Key('language_choice_system')), findsOneWidget);
     expect(find.byKey(const Key('language_choice_en')), findsOneWidget);

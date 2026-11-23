@@ -81,7 +81,9 @@ class DartSubscriptionHttpClient implements SubscriptionHttpClient {
       late HttpClientResponse response;
       for (var redirects = 0; ; redirects++) {
         final stepTimeout = remainingBudget();
-        final connectStep = stepTimeout < connectTimeout ? stepTimeout : connectTimeout;
+        final connectStep = stepTimeout < connectTimeout
+            ? stepTimeout
+            : connectTimeout;
         final request = await client.getUrl(currentUri).timeout(connectStep);
         request.followRedirects = false;
         request.headers.set(HttpHeaders.acceptHeader, 'text/plain, */*;q=0.8');
@@ -99,7 +101,9 @@ class DartSubscriptionHttpClient implements SubscriptionHttpClient {
             statusCode == HttpStatus.temporaryRedirect ||
             statusCode == HttpStatus.permanentRedirect) {
           final location = response.headers.value(HttpHeaders.locationHeader);
-          await response.listen((_) {}, onError: (_) {}, cancelOnError: true).cancel();
+          await response
+              .listen((_) {}, onError: (_) {}, cancelOnError: true)
+              .cancel();
           if (redirects >= maxRedirects) {
             throw const SubscriptionException(
               'Too many redirects',
@@ -276,7 +280,8 @@ class DartSubscriptionHttpClient implements SubscriptionHttpClient {
     if (ipv4 != null) {
       final b0 = ipv4[0];
       final b1 = ipv4[1];
-      final isUnspecified = b0 == 0 && ipv4[1] == 0 && ipv4[2] == 0 && ipv4[3] == 0;
+      final isUnspecified =
+          b0 == 0 && ipv4[1] == 0 && ipv4[2] == 0 && ipv4[3] == 0;
       final isLoopback = b0 == 127;
       final isLinkLocal = b0 == 169 && b1 == 254;
       final isPrivate =

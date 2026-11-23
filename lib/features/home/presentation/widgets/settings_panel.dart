@@ -179,12 +179,14 @@ class _SettingsPanelState extends State<SettingsPanel> {
     }
     if (oldWidget.proxySettings.authUsername !=
             widget.proxySettings.authUsername &&
-        _proxyAuthUsernameController.text != widget.proxySettings.authUsername) {
+        _proxyAuthUsernameController.text !=
+            widget.proxySettings.authUsername) {
       _proxyAuthUsernameController.text = widget.proxySettings.authUsername;
     }
     if (oldWidget.proxySettings.authPassword !=
             widget.proxySettings.authPassword &&
-        _proxyAuthPasswordController.text != widget.proxySettings.authPassword) {
+        _proxyAuthPasswordController.text !=
+            widget.proxySettings.authPassword) {
       _proxyAuthPasswordController.text = widget.proxySettings.authPassword;
     }
     if (oldWidget.connectivityCheckSettings.url !=

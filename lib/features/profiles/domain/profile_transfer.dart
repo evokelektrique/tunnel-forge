@@ -177,7 +177,8 @@ class ProfileTransferEnvelope {
     'v': version,
     'protocol': protocol.jsonValue,
     if (pppAuth != PppAuthMethod.auto) 'pppAuth': pppAuth.jsonValue,
-    if (protocol.isPptp && mppeMode != MppeMode.auto) 'mppe': mppeMode.jsonValue,
+    if (protocol.isPptp && mppeMode != MppeMode.auto)
+      'mppe': mppeMode.jsonValue,
     'displayName': displayName,
     'server': server,
     'user': user,

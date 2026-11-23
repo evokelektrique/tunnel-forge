@@ -59,66 +59,71 @@ void main() {
     expect(selection, {'mail.pkg', 'maps.pkg'});
   });
 
-  testWidgets('updates icon when filtered slot changes and clears cache on dispose', (
-    tester,
-  ) async {
-    var loadCount = 0;
-    Future<Uint8List?> loadIcon(String pkg) async {
-      loadCount++;
-      return pkg == 'aaa.pkg' ? _pngA : _pngB;
-    }
+  testWidgets(
+    'updates icon when filtered slot changes and clears cache on dispose',
+    (tester) async {
+      var loadCount = 0;
+      Future<Uint8List?> loadIcon(String pkg) async {
+        loadCount++;
+        return pkg == 'aaa.pkg' ? _pngA : _pngB;
+      }
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Builder(
-          builder: (context) => Scaffold(
-            body: TextButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<Set<String>>(
-                    builder: (_) => AppSelectorPage(
-                      title: 'Split tunneling',
-                      initialSelection: const {},
-                      loadApps: () async => const [
-                        CandidateApp(packageName: 'aaa.pkg', label: 'Alpha'),
-                        CandidateApp(packageName: 'zzz.pkg', label: 'Zeta'),
-                      ],
-                      loadIcon: loadIcon,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<Set<String>>(
+                      builder: (_) => AppSelectorPage(
+                        title: 'Split tunneling',
+                        initialSelection: const {},
+                        loadApps: () async => const [
+                          CandidateApp(packageName: 'aaa.pkg', label: 'Alpha'),
+                          CandidateApp(packageName: 'zzz.pkg', label: 'Zeta'),
+                        ],
+                        loadIcon: loadIcon,
+                      ),
                     ),
-                  ),
-                );
-              },
-              child: const Text('Open'),
+                  );
+                },
+                child: const Text('Open'),
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    await tester.tap(find.text('Open'));
-    await tester.pumpAndSettle();
-    expect(
-      (tester.widget<CircleAvatar>(find.byType(CircleAvatar).first).backgroundImage
-              as MemoryImage?)
-          ?.bytes,
-      equals(_pngA),
-    );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(
+        (tester
+                    .widget<CircleAvatar>(find.byType(CircleAvatar).first)
+                    .backgroundImage
+                as MemoryImage?)
+            ?.bytes,
+        equals(_pngA),
+      );
 
-    await tester.enterText(find.byType(TextField), 'Zeta');
-    await tester.pumpAndSettle();
-    expect(find.widgetWithText(SwitchListTile, 'Zeta'), findsOneWidget);
-    expect(
-      (tester.widget<CircleAvatar>(find.byType(CircleAvatar).first).backgroundImage
-              as MemoryImage?)
-          ?.bytes,
-      equals(_pngB),
-    );
+      await tester.enterText(find.byType(TextField), 'Zeta');
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(SwitchListTile, 'Zeta'), findsOneWidget);
+      expect(
+        (tester
+                    .widget<CircleAvatar>(find.byType(CircleAvatar).first)
+                    .backgroundImage
+                as MemoryImage?)
+            ?.bytes,
+        equals(_pngB),
+      );
 
-    final loadsBeforePop = loadCount;
-    await tester.tap(find.byIcon(Icons.close));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Open'));
-    await tester.pumpAndSettle();
-    expect(loadCount, greaterThan(loadsBeforePop));
-  });
+      final loadsBeforePop = loadCount;
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(loadCount, greaterThan(loadsBeforePop));
+    },
+  );
 }

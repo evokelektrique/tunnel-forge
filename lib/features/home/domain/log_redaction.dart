@@ -144,8 +144,9 @@ RegExp _logKeyValuePattern(
   final keyPattern = allowCompoundKeys
       ? '(?:[A-Za-z0-9]+_)*(?:$body)|(?:[A-Za-z0-9]+_)+key'
       : body;
-  final bareValueClass =
-      allowCommas ? r'(?:[^\s,;]|,(?=[^\s;]))+' : r'[^\s,;]+';
+  final bareValueClass = allowCommas
+      ? r'(?:[^\s,;]|,(?=[^\s;]))+'
+      : r'[^\s,;]+';
   final valueClass = '("[^"]*"|\'[^\']*\'|\\([^)]+\\)|$bareValueClass)';
   return RegExp(
     '\\b($keyPattern)\\b(\\s*[=:]\\s*)$valueClass',

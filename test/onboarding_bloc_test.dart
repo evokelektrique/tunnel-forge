@@ -94,10 +94,7 @@ void main() {
 
     test('agree requires both checkbox and completed timer', () async {
       final repository = _FakeOnboardingRepository();
-      final bloc = OnboardingBloc(
-        repository,
-        skipDisclosureSteps: false,
-      );
+      final bloc = OnboardingBloc(repository, skipDisclosureSteps: false);
       addTearDown(bloc.close);
 
       bloc.add(const OnboardingStarted());
@@ -137,10 +134,7 @@ void main() {
       'agree saves the acknowledgement version and accepts the flow',
       () async {
         final repository = _FakeOnboardingRepository();
-        final bloc = OnboardingBloc(
-          repository,
-          skipDisclosureSteps: false,
-        );
+        final bloc = OnboardingBloc(repository, skipDisclosureSteps: false);
         addTearDown(bloc.close);
 
         bloc.add(const OnboardingStarted());

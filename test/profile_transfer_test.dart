@@ -797,82 +797,85 @@ void main() {
       expect(persian.displayName, 'پروفایل #1');
     });
 
-    test('round-trips pppAuth and mppe in .tfp and tf:// and validates conflicts', () {
-      const pptpOn = ProfileTransferEnvelope(
-        protocol: TunnelProtocol.pptp,
-        pppAuth: PppAuthMethod.mschapV2,
-        mppeMode: MppeMode.on,
-        displayName: 'Secure PPTP',
-        server: 'pptp.example.com',
-        user: 'alice',
-        password: 'pw',
-        psk: '',
-        dnsAutomatic: true,
-        dns1Host: '',
-        dns1Protocol: DnsProtocol.dnsOverUdp,
-        dns2Host: '',
-        dns2Protocol: DnsProtocol.dnsOverUdp,
-        mtu: Profile.defaultVpnMtu,
-      );
+    test(
+      'round-trips pppAuth and mppe in .tfp and tf:// and validates conflicts',
+      () {
+        const pptpOn = ProfileTransferEnvelope(
+          protocol: TunnelProtocol.pptp,
+          pppAuth: PppAuthMethod.mschapV2,
+          mppeMode: MppeMode.on,
+          displayName: 'Secure PPTP',
+          server: 'pptp.example.com',
+          user: 'alice',
+          password: 'pw',
+          psk: '',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+          mtu: Profile.defaultVpnMtu,
+        );
 
-      final uri = pptpOn.toTfUri();
-      expect(uri, contains('pppAuth=mschapv2'));
-      expect(uri, contains('mppe=on'));
-      final decodedUri = ProfileTransferEnvelope.fromTfUri(uri);
-      expect(decodedUri.pppAuth, PppAuthMethod.mschapV2);
-      expect(decodedUri.mppeMode, MppeMode.on);
+        final uri = pptpOn.toTfUri();
+        expect(uri, contains('pppAuth=mschapv2'));
+        expect(uri, contains('mppe=on'));
+        final decodedUri = ProfileTransferEnvelope.fromTfUri(uri);
+        expect(decodedUri.pppAuth, PppAuthMethod.mschapV2);
+        expect(decodedUri.mppeMode, MppeMode.on);
 
-      final decodedJson = ProfileTransferEnvelope.fromFileJson(
-        pptpOn.toFileJson(),
-      );
-      expect(decodedJson.pppAuth, PppAuthMethod.mschapV2);
-      expect(decodedJson.mppeMode, MppeMode.on);
-      expect(decodedJson.toProfile('p1').mppeMode, MppeMode.on);
+        final decodedJson = ProfileTransferEnvelope.fromFileJson(
+          pptpOn.toFileJson(),
+        );
+        expect(decodedJson.pppAuth, PppAuthMethod.mschapV2);
+        expect(decodedJson.mppeMode, MppeMode.on);
+        expect(decodedJson.toProfile('p1').mppeMode, MppeMode.on);
 
-      // L2TP ignores/normalizes mppe to auto while keeping pppAuth.
-      final l2tpFromUri = ProfileTransferEnvelope.fromTfUri(
-        'tf://l2tp.example.com?protocol=l2tp&pppAuth=pap&mppe=on',
-      );
-      expect(l2tpFromUri.pppAuth, PppAuthMethod.pap);
-      expect(l2tpFromUri.mppeMode, MppeMode.auto);
+        // L2TP ignores/normalizes mppe to auto while keeping pppAuth.
+        final l2tpFromUri = ProfileTransferEnvelope.fromTfUri(
+          'tf://l2tp.example.com?protocol=l2tp&pppAuth=pap&mppe=on',
+        );
+        expect(l2tpFromUri.pppAuth, PppAuthMethod.pap);
+        expect(l2tpFromUri.mppeMode, MppeMode.auto);
 
-      // Rejects invalid wire values and incompatible PPTP MPPE On + PAP/CHAP-MD5.
-      expect(
-        () => ProfileTransferEnvelope.fromTfUri(
-          'tf://pptp.example.com?protocol=pptp&pppAuth=eap',
-        ),
-        throwsA(
-          isA<ProfileTransferFormatException>().having(
-            (e) => e.code,
-            'code',
-            ProfileTransferErrorCode.unsupportedPppAuth,
+        // Rejects invalid wire values and incompatible PPTP MPPE On + PAP/CHAP-MD5.
+        expect(
+          () => ProfileTransferEnvelope.fromTfUri(
+            'tf://pptp.example.com?protocol=pptp&pppAuth=eap',
           ),
-        ),
-      );
-      expect(
-        () => ProfileTransferEnvelope.fromTfUri(
-          'tf://pptp.example.com?protocol=pptp&mppe=force',
-        ),
-        throwsA(
-          isA<ProfileTransferFormatException>().having(
-            (e) => e.code,
-            'code',
-            ProfileTransferErrorCode.unsupportedMppe,
+          throwsA(
+            isA<ProfileTransferFormatException>().having(
+              (e) => e.code,
+              'code',
+              ProfileTransferErrorCode.unsupportedPppAuth,
+            ),
           ),
-        ),
-      );
-      expect(
-        () => ProfileTransferEnvelope.fromTfUri(
-          'tf://pptp.example.com?protocol=pptp&pppAuth=pap&mppe=on',
-        ),
-        throwsA(
-          isA<ProfileTransferFormatException>().having(
-            (e) => e.code,
-            'code',
-            ProfileTransferErrorCode.incompatibleAuthAndMppe,
+        );
+        expect(
+          () => ProfileTransferEnvelope.fromTfUri(
+            'tf://pptp.example.com?protocol=pptp&mppe=force',
           ),
-        ),
-      );
-    });
+          throwsA(
+            isA<ProfileTransferFormatException>().having(
+              (e) => e.code,
+              'code',
+              ProfileTransferErrorCode.unsupportedMppe,
+            ),
+          ),
+        );
+        expect(
+          () => ProfileTransferEnvelope.fromTfUri(
+            'tf://pptp.example.com?protocol=pptp&pppAuth=pap&mppe=on',
+          ),
+          throwsA(
+            isA<ProfileTransferFormatException>().having(
+              (e) => e.code,
+              'code',
+              ProfileTransferErrorCode.incompatibleAuthAndMppe,
+            ),
+          ),
+        );
+      },
+    );
   });
 }

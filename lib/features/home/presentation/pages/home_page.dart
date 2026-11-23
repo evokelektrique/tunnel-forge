@@ -908,9 +908,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                                 const SizedBox(width: 6),
                                 Text(
                                   logsState.levelLabel,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .labelMedium
+                                  style: Theme.of(context).textTheme.labelMedium
                                       ?.copyWith(
                                         color: Theme.of(
                                           context,

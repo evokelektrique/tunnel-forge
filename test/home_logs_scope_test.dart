@@ -67,7 +67,7 @@ void main() {
     DiagnosticsBridge.instance = MethodChannelDiagnosticsBridge();
   });
 
-  Future<({ _CappedStreamLogsRepository logs, AppLanguageController lang })>
+  Future<({_CappedStreamLogsRepository logs, AppLanguageController lang})>
   pumpHome(WidgetTester tester, {required int initialCount}) async {
     SharedPreferences.setMockInitialValues({});
     final initial = List<LogEntry>.generate(
@@ -112,31 +112,32 @@ void main() {
     return (logs: logs, lang: lang);
   }
 
-  testWidgets('connection tab does not rebuild when LogsBloc receives entries', (
-    tester,
-  ) async {
-    final env = await pumpHome(tester, initialCount: 1);
-    final beforePanel = tester.widget<ConnectionPanel>(
-      find.byType(ConnectionPanel),
-    );
+  testWidgets(
+    'connection tab does not rebuild when LogsBloc receives entries',
+    (tester) async {
+      final env = await pumpHome(tester, initialCount: 1);
+      final beforePanel = tester.widget<ConnectionPanel>(
+        find.byType(ConnectionPanel),
+      );
 
-    env.logs.append(
-      LogEntry(
-        timestamp: DateTime.utc(2026, 1, 1, 0, 1, 0),
-        level: LogLevel.info,
-        source: LogSource.dart,
-        tag: 'test',
-        message: 'new-log-entry',
-      ),
-    );
-    await tester.pump();
-    await tester.pump();
+      env.logs.append(
+        LogEntry(
+          timestamp: DateTime.utc(2026, 1, 1, 0, 1, 0),
+          level: LogLevel.info,
+          source: LogSource.dart,
+          tag: 'test',
+          message: 'new-log-entry',
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
 
-    final afterPanel = tester.widget<ConnectionPanel>(
-      find.byType(ConnectionPanel),
-    );
-    expect(identical(beforePanel, afterPanel), isTrue);
-  });
+      final afterPanel = tester.widget<ConnectionPanel>(
+        find.byType(ConnectionPanel),
+      );
+      expect(identical(beforePanel, afterPanel), isTrue);
+    },
+  );
 
   testWidgets('logs tab auto-scrolls on entry 5001 when buffer stays at 5000', (
     tester,
@@ -148,7 +149,10 @@ void main() {
     final listViewFinder = find.byType(ListView);
     expect(listViewFinder, findsOneWidget);
     final controller = tester.widget<ListView>(listViewFinder).controller!;
-    expect(controller.position.pixels, equals(controller.position.maxScrollExtent));
+    expect(
+      controller.position.pixels,
+      equals(controller.position.maxScrollExtent),
+    );
 
     env.logs.append(
       LogEntry(

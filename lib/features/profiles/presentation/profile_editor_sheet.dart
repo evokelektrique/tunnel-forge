@@ -519,10 +519,11 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                             onChanged: (value) => context
                                 .read<ProfileFormBloc>()
                                 .add(ProfileFormUserChanged(value)),
-                            decoration: _deco(context, label: t.username).copyWith(
-                              errorText: state.userErrorText,
-                              errorMaxLines: 2,
-                            ),
+                            decoration: _deco(context, label: t.username)
+                                .copyWith(
+                                  errorText: state.userErrorText,
+                                  errorMaxLines: 2,
+                                ),
                           ),
                           const SizedBox(height: 12),
                           _secretField(

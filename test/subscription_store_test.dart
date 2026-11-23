@@ -408,7 +408,10 @@ void main() {
         });
         final prefs = await SharedPreferences.getInstance();
         final secrets = MemorySecretStore();
-        final store = ProfileStore(prefsOverride: prefs, secretsOverride: secrets);
+        final store = ProfileStore(
+          prefsOverride: prefs,
+          secretsOverride: secrets,
+        );
 
         final loaded = await store.loadSubscriptions();
         expect(loaded.single.url, 'https://legacy.example/sub');

@@ -870,7 +870,9 @@ void main() {
     'fast native connected event during connect() is not overwritten when connect returns',
     () async {
       final connectCompleter = Completer<void>();
-      final repo = _RaceTunnelRepository(connectFuture: connectCompleter.future);
+      final repo = _RaceTunnelRepository(
+        connectFuture: connectCompleter.future,
+      );
       final bloc = TunnelBloc(repo, _FakeLogsRepository());
       addTearDown(bloc.close);
 

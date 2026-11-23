@@ -521,7 +521,10 @@ void main() {
     await tester.enterText(userField, 'alice');
     await tester.enterText(passwordField, 'p' * 256);
     await tester.pumpAndSettle();
-    expect(find.textContaining('255-byte PAP limit (RFC 1334)'), findsOneWidget);
+    expect(
+      find.textContaining('255-byte PAP limit (RFC 1334)'),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
@@ -561,7 +564,9 @@ void main() {
 
     await tester.ensureVisible(mppeFinder);
     expect(mppeFinder, findsOneWidget);
-    final mtuBottom = tester.getBottomLeft(find.byKey(const Key('mtu_field'))).dy;
+    final mtuBottom = tester
+        .getBottomLeft(find.byKey(const Key('mtu_field')))
+        .dy;
     final authTop = tester.getTopLeft(authFinder).dy;
     final mppeTop = tester.getTopLeft(mppeFinder).dy;
     expect(authTop, greaterThan(mtuBottom));

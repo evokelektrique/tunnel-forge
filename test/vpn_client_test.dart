@@ -155,35 +155,39 @@ void main() {
       expect(args[VpnContract.argPsk], isEmpty);
     });
 
-    test('sends explicit pppAuth and mppeMode for PPTP and normalizes L2TP mppe', () async {
-      MethodCall? capturedCall;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (
-            call,
-          ) async {
-            capturedCall = call;
-            return null;
-          });
+    test(
+      'sends explicit pppAuth and mppeMode for PPTP and normalizes L2TP mppe',
+      () async {
+        MethodCall? capturedCall;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+              const MethodChannel(VpnContract.channel),
+              (call) async {
+                capturedCall = call;
+                return null;
+              },
+            );
 
-      await VpnClient().connect(
-        server: 'pptp.example',
-        protocol: TunnelProtocol.pptp,
-        pppAuth: PppAuthMethod.mschapV2,
-        mppeMode: MppeMode.off,
-      );
-      var args = Map<Object?, Object?>.from(capturedCall?.arguments as Map);
-      expect(args[VpnContract.argPppAuth], VpnContract.pppAuthMschapV2);
-      expect(args[VpnContract.argMppe], VpnContract.mppeOff);
+        await VpnClient().connect(
+          server: 'pptp.example',
+          protocol: TunnelProtocol.pptp,
+          pppAuth: PppAuthMethod.mschapV2,
+          mppeMode: MppeMode.off,
+        );
+        var args = Map<Object?, Object?>.from(capturedCall?.arguments as Map);
+        expect(args[VpnContract.argPppAuth], VpnContract.pppAuthMschapV2);
+        expect(args[VpnContract.argMppe], VpnContract.mppeOff);
 
-      await VpnClient().connect(
-        server: 'l2tp.example',
-        protocol: TunnelProtocol.l2tp,
-        pppAuth: PppAuthMethod.pap,
-        mppeMode: MppeMode.on,
-      );
-      args = Map<Object?, Object?>.from(capturedCall?.arguments as Map);
-      expect(args[VpnContract.argPppAuth], VpnContract.pppAuthPap);
-      expect(args[VpnContract.argMppe], VpnContract.mppeAuto);
-    });
+        await VpnClient().connect(
+          server: 'l2tp.example',
+          protocol: TunnelProtocol.l2tp,
+          pppAuth: PppAuthMethod.pap,
+          mppeMode: MppeMode.on,
+        );
+        args = Map<Object?, Object?>.from(capturedCall?.arguments as Map);
+        expect(args[VpnContract.argPppAuth], VpnContract.pppAuthPap);
+        expect(args[VpnContract.argMppe], VpnContract.mppeAuto);
+      },
+    );
   });
 }
