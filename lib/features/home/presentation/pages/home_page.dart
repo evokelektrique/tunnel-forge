@@ -91,7 +91,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   int _lastSettingsMessageId = 0;
   bool _lastTunnelUp = false;
   bool _connectionAttemptActive = false;
-  int _lastLogsEntryCount = 0;
+  int _lastLogsRevision = 0;
   bool _hasSyncedQuickSettings = false;
   QuickSettingsProfileConfig? _lastSyncedQuickSettingsConfig;
   bool _pendingQuickSettingsConnect = false;
@@ -283,14 +283,21 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     final url = connectivitySettings.url;
     final timeoutMs = connectivitySettings.timeoutMs;
     if (settingsState.connectionMode == ConnectionMode.proxyOnly) {
+      final proxySettings = settingsState.proxySettings;
       final proxyPort = tunnelState.proxyExposure?.httpPort;
+      final useProxyAuth =
+          proxySettings.authEnabled &&
+          proxySettings.authUsername.isNotEmpty &&
+          proxySettings.authPassword.isNotEmpty;
       return ConnectivityPingRequest.localHttpProxy(
         url: url,
         timeoutMs: timeoutMs,
         proxyPort: ProxySettings.normalizePort(
-          proxyPort ?? settingsState.proxySettings.httpPort,
+          proxyPort ?? proxySettings.httpPort,
           fallback: ProxySettings.defaultHttpPort,
         ),
+        proxyUsername: useProxyAuth ? proxySettings.authUsername : null,
+        proxyPassword: useProxyAuth ? proxySettings.authPassword : null,
       );
     }
     return ConnectivityPingRequest.directWithTimeout(
@@ -370,8 +377,8 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   }
 
   Future<void> _handleLogsStateChange(LogsState current) async {
-    if (_lastLogsEntryCount != current.entries.length) {
-      _lastLogsEntryCount = current.entries.length;
+    if (_lastLogsRevision != current.revision) {
+      _lastLogsRevision = current.revision;
       _scheduleScrollLogsToEnd();
     }
   }
@@ -750,11 +757,9 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     final profilesState = context.watch<ProfilesBloc>().state;
     final settingsState = context.watch<SettingsBloc>().state;
     final tunnelState = context.watch<TunnelBloc>().state;
-    final logsState = context.watch<LogsBloc>().state;
     final connectivityState = context.watch<ConnectivityBloc>().state;
     final appThemeState = context.watch<AppThemeBloc>().state;
     final t = AppL10n.of(context);
-    final hasDebugLogs = logsState.entries.isNotEmpty;
     final languageController = AppLanguageController.of(context);
 
     final effectiveProfileId = profilesState.hasActiveProfile
@@ -806,7 +811,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
         ),
         BlocListener<LogsBloc, LogsState>(
           listenWhen: (previous, current) =>
-              previous.entries.length != current.entries.length,
+              previous.revision != current.revision,
           listener: (context, state) => _handleLogsStateChange(state),
         ),
         BlocListener<SettingsBloc, SettingsState>(
@@ -855,83 +860,94 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
           ),
           actions: [
             if (navState.index == 1)
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    PopupMenuButton<LogDisplayLevel>(
-                      tooltip: t.logLevel,
-                      initialValue: logsState.level,
-                      onSelected: (level) => context.read<LogsBloc>().add(
-                        LogsLevelChangeRequested(level),
-                      ),
-                      itemBuilder: (context) => const [
-                        PopupMenuItem<LogDisplayLevel>(
-                          value: LogDisplayLevel.info,
-                          child: Text('INFO'),
-                        ),
-                        PopupMenuItem<LogDisplayLevel>(
-                          value: LogDisplayLevel.warning,
-                          child: Text('WARNING'),
-                        ),
-                        PopupMenuItem<LogDisplayLevel>(
-                          value: LogDisplayLevel.error,
-                          child: Text('ERROR'),
-                        ),
-                        PopupMenuItem<LogDisplayLevel>(
-                          value: LogDisplayLevel.debug,
-                          child: Text('DEBUG'),
-                        ),
-                      ],
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 8,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.filter_list_rounded, size: 20),
-                            const SizedBox(width: 6),
-                            Text(
-                              logsState.levelLabel,
-                              style: Theme.of(context).textTheme.labelMedium
-                                  ?.copyWith(
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
-                                  ),
+              BlocBuilder<LogsBloc, LogsState>(
+                builder: (context, logsState) {
+                  final hasDebugLogs = logsState.entries.isNotEmpty;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        PopupMenuButton<LogDisplayLevel>(
+                          tooltip: t.logLevel,
+                          initialValue: logsState.level,
+                          onSelected: (level) => context.read<LogsBloc>().add(
+                            LogsLevelChangeRequested(level),
+                          ),
+                          itemBuilder: (context) => const [
+                            PopupMenuItem<LogDisplayLevel>(
+                              value: LogDisplayLevel.info,
+                              child: Text('INFO'),
+                            ),
+                            PopupMenuItem<LogDisplayLevel>(
+                              value: LogDisplayLevel.warning,
+                              child: Text('WARNING'),
+                            ),
+                            PopupMenuItem<LogDisplayLevel>(
+                              value: LogDisplayLevel.error,
+                              child: Text('ERROR'),
+                            ),
+                            PopupMenuItem<LogDisplayLevel>(
+                              value: LogDisplayLevel.debug,
+                              child: Text('DEBUG'),
                             ),
                           ],
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.filter_list_rounded, size: 20),
+                                const SizedBox(width: 6),
+                                Text(
+                                  logsState.levelLabel,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelMedium
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
+                        IconButton(
+                          tooltip: logsState.wordWrap
+                              ? t.wordWrapOff
+                              : t.wordWrapOn,
+                          onPressed: () => context.read<LogsBloc>().add(
+                            const LogsWordWrapToggled(),
+                          ),
+                          icon: Icon(
+                            logsState.wordWrap
+                                ? Icons.wrap_text
+                                : Icons.swap_horiz,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: t.shareDebugLogs,
+                          onPressed: hasDebugLogs
+                              ? () => _shareDebugLogs(logsState)
+                              : null,
+                          icon: const Icon(Icons.ios_share_rounded),
+                        ),
+                        IconButton(
+                          tooltip: t.clear,
+                          onPressed: logsState.entries.isEmpty
+                              ? null
+                              : _clearLogs,
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      tooltip: logsState.wordWrap
-                          ? t.wordWrapOff
-                          : t.wordWrapOn,
-                      onPressed: () => context.read<LogsBloc>().add(
-                        const LogsWordWrapToggled(),
-                      ),
-                      icon: Icon(
-                        logsState.wordWrap ? Icons.wrap_text : Icons.swap_horiz,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: t.shareDebugLogs,
-                      onPressed: hasDebugLogs
-                          ? () => _shareDebugLogs(logsState)
-                          : null,
-                      icon: const Icon(Icons.ios_share_rounded),
-                    ),
-                    IconButton(
-                      tooltip: t.clear,
-                      onPressed: logsState.entries.isEmpty ? null : _clearLogs,
-                      icon: const Icon(Icons.delete_outline),
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
           ],
         ),
@@ -1009,15 +1025,17 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                       textTheme: Theme.of(context).textTheme,
                     ),
                   ),
-                  1 => LogsPanel(
-                    logs: logsState.visibleLogs,
-                    scrollController: _logsScroll,
-                    colorScheme: Theme.of(context).colorScheme,
-                    textTheme: Theme.of(context).textTheme,
-                    stickToBottom: _logsStickToBottom,
-                    onJumpToLatest: _jumpLogsToBottom,
-                    wordWrap: logsState.wordWrap,
-                    hasAnyLogs: logsState.entries.isNotEmpty,
+                  1 => BlocBuilder<LogsBloc, LogsState>(
+                    builder: (context, logsState) => LogsPanel(
+                      logs: logsState.visibleLogs,
+                      scrollController: _logsScroll,
+                      colorScheme: Theme.of(context).colorScheme,
+                      textTheme: Theme.of(context).textTheme,
+                      stickToBottom: _logsStickToBottom,
+                      onJumpToLatest: _jumpLogsToBottom,
+                      wordWrap: logsState.wordWrap,
+                      hasAnyLogs: logsState.entries.isNotEmpty,
+                    ),
                   ),
                   _ => SettingsPanel(
                     selectedLocale: languageController.locale,

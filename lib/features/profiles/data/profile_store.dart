@@ -99,6 +99,9 @@ class ProfileStore {
   static const prefsKeyProxySocksPort = 'proxy_socks_port_v1';
   static const prefsKeyProxyAllowLanConnections =
       'proxy_allow_lan_connections_v1';
+  static const prefsKeyProxyAuthEnabled = 'proxy_auth_enabled_v1';
+  static const prefsKeyProxyAuthUsername = 'proxy_auth_username_v1';
+  static const secretKeyProxyAuthPassword = 'tunnel_forge/proxy/auth_password';
   static const prefsKeySplitTunnelEnabled = 'split_tunnel_enabled_v1';
   static const prefsKeySplitTunnelMode = 'split_tunnel_mode_v1';
   static const prefsKeySplitTunnelInclusivePackages =
@@ -222,6 +225,8 @@ class ProfileStore {
       'tunnel_forge/profile/$profileId/password';
   static String pskKey(String profileId) =>
       'tunnel_forge/profile/$profileId/psk';
+  static String subscriptionUrlKey(String subscriptionId) =>
+      'tunnel_forge/subscription/$subscriptionId/url';
 
   String _passwordKey(String profileId) => passwordKey(profileId);
   String _pskKey(String profileId) => pskKey(profileId);
@@ -357,6 +362,12 @@ class ProfileStore {
 
   Future<ProxySettings> loadProxySettings() async {
     final p = await _prefs();
+    String authPassword = '';
+    try {
+      authPassword = (await _secrets.read(secretKeyProxyAuthPassword)) ?? '';
+    } catch (_) {
+      authPassword = '';
+    }
     return ProxySettings(
       httpPort: ProxySettings.normalizePort(
         p.getInt(prefsKeyProxyHttpPort) ?? ProxySettings.defaultHttpPort,
@@ -367,6 +378,9 @@ class ProfileStore {
         fallback: ProxySettings.defaultSocksPort,
       ),
       allowLanConnections: p.getBool(prefsKeyProxyAllowLanConnections) ?? false,
+      authEnabled: p.getBool(prefsKeyProxyAuthEnabled) ?? false,
+      authUsername: p.getString(prefsKeyProxyAuthUsername) ?? '',
+      authPassword: authPassword,
     );
   }
 
@@ -390,6 +404,18 @@ class ProfileStore {
       prefsKeyProxyAllowLanConnections,
       settings.allowLanConnections,
     );
+    await p.setBool(prefsKeyProxyAuthEnabled, settings.authEnabled);
+    final username = settings.authUsername.trim();
+    if (username.isEmpty) {
+      await p.remove(prefsKeyProxyAuthUsername);
+    } else {
+      await p.setString(prefsKeyProxyAuthUsername, username);
+    }
+    if (settings.authPassword.isEmpty) {
+      await _secrets.delete(secretKeyProxyAuthPassword);
+    } else {
+      await _secrets.write(secretKeyProxyAuthPassword, settings.authPassword);
+    }
   }
 
   Future<SplitTunnelSettings> loadSplitTunnelSettings() async {
@@ -649,12 +675,14 @@ class ProfileStore {
     });
   }
 
-  Future<void> resetSecureStorage() async {
-    _onLog?.call(
-      LogLevel.warning,
-      'Resetting secure storage (deleting all saved credentials)',
-    );
-    await _secrets.deleteAll();
+  Future<void> resetSecureStorage() {
+    return _runSerialized(() async {
+      _onLog?.call(
+        LogLevel.warning,
+        'Resetting secure storage (deleting all saved credentials)',
+      );
+      await _secrets.deleteAll();
+    });
   }
 
   Future<String?> _readSecret(String key, String id, String label) async {
@@ -733,9 +761,43 @@ class ProfileStore {
       final decoded = jsonDecode(raw);
       if (decoded is! List) return const <Subscription>[];
       final out = <Subscription>[];
+      var migrated = false;
       for (final entry in decoded) {
         final sub = Subscription.tryFromJson(entry);
-        if (sub != null) out.add(sub);
+        if (sub == null) continue;
+        if (sub.url.isNotEmpty) {
+          try {
+            await _secrets.write(subscriptionUrlKey(sub.id), sub.url);
+            migrated = true;
+            out.add(sub.copyWith(urlMissing: false));
+          } catch (e) {
+            _onLog?.call(
+              LogLevel.warning,
+              'Subscription URL secret migration failed id=${sub.id} error=${e.runtimeType}',
+            );
+            out.add(sub.copyWith(urlMissing: false));
+          }
+        } else {
+          String? secretUrl;
+          try {
+            secretUrl = await _secrets.read(subscriptionUrlKey(sub.id));
+          } catch (e) {
+            _onLog?.call(
+              LogLevel.error,
+              'Subscription URL secret read failed id=${sub.id} error=${e.runtimeType}',
+            );
+            secretUrl = null;
+          }
+          final clean = secretUrl?.trim() ?? '';
+          if (clean.isEmpty) {
+            out.add(sub.copyWith(url: '', urlMissing: true));
+          } else {
+            out.add(sub.copyWith(url: clean, urlMissing: false));
+          }
+        }
+      }
+      if (migrated) {
+        await _saveSubscriptions(out);
       }
       return out;
     } catch (e) {
@@ -751,18 +813,28 @@ class ProfileStore {
     final p = await _prefs();
     await p.setString(
       prefsKeySubscriptionsJson,
-      jsonEncode(subscriptions.map((s) => s.toJson()).toList()),
+      jsonEncode(
+        subscriptions.map((s) => s.toJson(includeUrl: false)).toList(),
+      ),
     );
   }
 
   Future<void> saveSubscription(Subscription subscription) {
     return _runSerialized(() async {
       final list = List<Subscription>.of(await loadSubscriptions());
-      final idx = list.indexWhere((s) => s.id == subscription.id);
+      final cleanUrl = subscription.url.trim();
+      if (cleanUrl.isNotEmpty) {
+        await _secrets.write(subscriptionUrlKey(subscription.id), cleanUrl);
+      }
+      final stored = subscription.copyWith(
+        url: cleanUrl,
+        urlMissing: cleanUrl.isEmpty,
+      );
+      final idx = list.indexWhere((s) => s.id == stored.id);
       if (idx >= 0) {
-        list[idx] = subscription;
+        list[idx] = stored;
       } else {
-        list.add(subscription);
+        list.add(stored);
       }
       await _saveSubscriptions(list);
     });
@@ -792,6 +864,22 @@ class ProfileStore {
     void Function(int processed, int total)? onProgress,
   }) {
     return _runSerialized(() async {
+      await reloadPreferences();
+      final subs = List<Subscription>.of(await loadSubscriptions());
+      final subIdx = subs.indexWhere((s) => s.id == subscription.id);
+      if (trigger != SubscriptionSyncTrigger.initialAdd && subIdx < 0) {
+        return SubscriptionSyncSummary(
+          subscriptionId: subscription.id,
+          subscriptionName: subscription.name,
+          importedCount: 0,
+          updatedCount: 0,
+          removedCount: 0,
+          skippedInvalidLines: skippedInvalidLines,
+          syncedAtMs: syncedAt.millisecondsSinceEpoch,
+          trigger: trigger,
+        );
+      }
+
       final allProfiles = await loadProfiles();
       final otherProfiles = allProfiles
           .where((p) => p.subscriptionId != subscription.id)
@@ -905,15 +993,18 @@ class ProfileStore {
         await setLastProfileId(null);
       }
 
-      final updatedSub = subscription.copyWith(
+      final baseSub = subIdx >= 0 ? subs[subIdx] : subscription;
+      final updatedSub = baseSub.copyWith(
         lastUpdatedAtMs: syncedAt.millisecondsSinceEpoch,
         clearLastError: true,
       );
-      final subs = List<Subscription>.of(await loadSubscriptions());
-      final subIdx = subs.indexWhere((s) => s.id == updatedSub.id);
       if (subIdx >= 0) {
         subs[subIdx] = updatedSub;
       } else {
+        final cleanUrl = updatedSub.url.trim();
+        if (cleanUrl.isNotEmpty) {
+          await _secrets.write(subscriptionUrlKey(updatedSub.id), cleanUrl);
+        }
         subs.add(updatedSub);
       }
       await _saveSubscriptions(subs);
@@ -938,6 +1029,7 @@ class ProfileStore {
       final subs = List<Subscription>.of(await loadSubscriptions());
       subs.removeWhere((s) => s.id == subscriptionId);
       await _saveSubscriptions(subs);
+      await _secrets.delete(subscriptionUrlKey(subscriptionId));
 
       final profiles = await loadProfiles();
       final removedIds = profiles

@@ -828,6 +828,106 @@ void main() {
     expect(bloc.state.tunnelUp, isTrue);
     expect(bloc.state.activeAttemptId, 'qs-123');
   });
+
+  test(
+    'runtime sync while prepareVpn is pending preserves activeAttemptId and connected transition',
+    () async {
+      final prepCompleter = Completer<bool>();
+      final repo = _RaceTunnelRepository(prepareFuture: prepCompleter.future);
+      final bloc = TunnelBloc(repo, _FakeLogsRepository());
+      addTearDown(bloc.close);
+
+      bloc.add(const TunnelStarted());
+      await Future<void>.delayed(Duration.zero);
+
+      bloc.add(TunnelConnectRequested(_connectRequest()));
+      await Future<void>.delayed(Duration.zero);
+      final attemptId = bloc.state.activeAttemptId;
+      expect(attemptId, isNotNull);
+      expect(bloc.state.busy, isTrue);
+
+      // Simulate Activity resume from Android VPN consent dialog while prepareVpn is pending.
+      bloc.add(const TunnelRuntimeSyncRequested());
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.activeAttemptId, attemptId);
+
+      prepCompleter.complete(true);
+      await Future<void>.delayed(Duration.zero);
+
+      repo.emitState(
+        TunnelHostUpdate(
+          state: VpnTunnelState.connected,
+          detail: 'Connected',
+          attemptId: attemptId!,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.tunnelUp, isTrue);
+    },
+  );
+
+  test(
+    'fast native connected event during connect() is not overwritten when connect returns',
+    () async {
+      final connectCompleter = Completer<void>();
+      final repo = _RaceTunnelRepository(connectFuture: connectCompleter.future);
+      final bloc = TunnelBloc(repo, _FakeLogsRepository());
+      addTearDown(bloc.close);
+
+      bloc.add(const TunnelStarted());
+      await Future<void>.delayed(Duration.zero);
+
+      bloc.add(TunnelConnectRequested(_connectRequest()));
+      await Future<void>.delayed(Duration.zero);
+      final attemptId = repo.lastAttemptId;
+      expect(attemptId, isNotNull);
+
+      repo.emitState(
+        TunnelHostUpdate(
+          state: VpnTunnelState.connected,
+          detail: 'Connected fast',
+          attemptId: attemptId!,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.tunnelUp, isTrue);
+
+      connectCompleter.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.tunnelUp, isTrue);
+      expect(bloc.state.awaitingTunnel, isFalse);
+      expect(bloc.state.busy, isFalse);
+    },
+  );
+}
+
+class _RaceTunnelRepository extends _FakeTunnelRepository {
+  _RaceTunnelRepository({this.prepareFuture, this.connectFuture});
+
+  final Future<bool>? prepareFuture;
+  final Future<void>? connectFuture;
+  final StreamController<TunnelHostUpdate> _states =
+      StreamController<TunnelHostUpdate>.broadcast();
+  String? lastAttemptId;
+
+  @override
+  Stream<TunnelHostUpdate> get tunnelStates => _states.stream;
+
+  void emitState(TunnelHostUpdate update) => _states.add(update);
+
+  @override
+  Future<bool> prepareVpn() => prepareFuture ?? Future.value(true);
+
+  @override
+  Future<void> connect(TunnelConnectRequest request) {
+    lastAttemptId = request.attemptId;
+    return connectFuture ?? Future.value();
+  }
+
+  @override
+  void dispose() {
+    _states.close();
+  }
 }
 
 late _MutableRuntimeTunnelRepository _mutableRuntimeRepository;

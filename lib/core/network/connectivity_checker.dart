@@ -58,6 +58,8 @@ class ConnectivityPingRequest extends Equatable {
     required this.route,
     this.proxyHost,
     this.proxyPort,
+    this.proxyUsername,
+    this.proxyPassword,
   });
 
   const ConnectivityPingRequest.direct(String url)
@@ -81,12 +83,16 @@ class ConnectivityPingRequest extends Equatable {
     int timeoutMs = ConnectivityCheckSettings.defaultTimeoutMs,
     String proxyHost = _defaultProxyHost,
     required int proxyPort,
+    String? proxyUsername,
+    String? proxyPassword,
   }) : this._(
          url: url,
          timeoutMs: timeoutMs,
          route: ConnectivityPingRoute.localHttpProxy,
          proxyHost: proxyHost,
          proxyPort: proxyPort,
+         proxyUsername: proxyUsername,
+         proxyPassword: proxyPassword,
        );
 
   static const String _defaultProxyHost = '127.0.0.1';
@@ -96,9 +102,62 @@ class ConnectivityPingRequest extends Equatable {
   final ConnectivityPingRoute route;
   final String? proxyHost;
   final int? proxyPort;
+  final String? proxyUsername;
+  final String? proxyPassword;
 
   @override
-  List<Object?> get props => [url, timeoutMs, route, proxyHost, proxyPort];
+  List<Object?> get props => [
+    url,
+    timeoutMs,
+    route,
+    proxyHost,
+    proxyPort,
+    proxyUsername,
+    proxyPassword,
+  ];
+}
+
+/// Registers single-shot Basic auth credentials on [client] for a local HTTP proxy 407 challenge.
+void configureLocalHttpProxyAuth(
+  HttpClient client, {
+  required String? proxyHost,
+  required int? proxyPort,
+  required String? username,
+  required String? password,
+}) {
+  final host = proxyHost?.trim();
+  if (host == null ||
+      host.isEmpty ||
+      proxyPort == null ||
+      username == null ||
+      username.isEmpty ||
+      password == null ||
+      password.isEmpty) {
+    return;
+  }
+  var attempted = false;
+  client.authenticateProxy =
+      (
+        String challengeHost,
+        int challengePort,
+        String scheme,
+        String? realm,
+      ) async {
+        if (attempted ||
+            challengeHost != host ||
+            challengePort != proxyPort ||
+            scheme.toLowerCase() != 'basic') {
+          return false;
+        }
+        attempted = true;
+        client.addProxyCredentials(
+          challengeHost,
+          challengePort,
+          realm ?? '',
+          HttpClientBasicCredentials(username, password),
+        );
+        return true;
+      };
 }
 
 abstract class ConnectivityChecker {
@@ -142,6 +201,15 @@ class HttpConnectivityChecker implements ConnectivityChecker {
     final client = _clientFactory();
     client.connectionTimeout = effectiveTimeout;
     client.findProxy = (_) => _proxyDirectiveFor(request);
+    if (request.route == ConnectivityPingRoute.localHttpProxy) {
+      configureLocalHttpProxyAuth(
+        client,
+        proxyHost: request.proxyHost,
+        proxyPort: request.proxyPort,
+        username: request.proxyUsername,
+        password: request.proxyPassword,
+      );
+    }
 
     var clientClosed = false;
     void closeClient() {

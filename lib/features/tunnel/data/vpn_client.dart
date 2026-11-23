@@ -320,6 +320,9 @@ class VpnClient {
         fallback: ProxySettings.defaultSocksPort,
       ),
       VpnContract.argProxyAllowLan: proxySettings.allowLanConnections,
+      VpnContract.argProxyAuthEnabled: proxySettings.authEnabled,
+      VpnContract.argProxyAuthUsername: proxySettings.authUsername.trim(),
+      VpnContract.argProxyAuthPassword: proxySettings.authPassword,
     };
   }
 

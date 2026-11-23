@@ -48,6 +48,9 @@ abstract final class VpnContract {
   static const String argProxyHttpPort = 'proxyHttpPort';
   static const String argProxySocksPort = 'proxySocksPort';
   static const String argProxyAllowLan = 'proxyAllowLan';
+  static const String argProxyAuthEnabled = 'proxyAuthEnabled';
+  static const String argProxyAuthUsername = 'proxyAuthUsername';
+  static const String argProxyAuthPassword = 'proxyAuthPassword';
   static const String argSplitTunnelEnabled = 'splitTunnelEnabled';
   static const String argSplitTunnelMode = 'splitTunnelMode';
   static const String argSplitTunnelInclusivePackages =

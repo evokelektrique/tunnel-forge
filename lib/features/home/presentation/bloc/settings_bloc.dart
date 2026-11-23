@@ -625,13 +625,16 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     final lanChanged =
         state.proxySettings.allowLanConnections !=
         event.settings.allowLanConnections;
+    final authChanged =
+        state.proxySettings.authEnabled != event.settings.authEnabled;
     emit(state.copyWith(proxySettings: event.settings));
     await _settingsRepository.saveProxySettings(event.settings);
     final message =
         'Proxy settings updated http=${event.settings.httpPort} '
         'socks=${event.settings.socksPort} '
-        'lan=${event.settings.allowLanConnections}';
-    if (lanChanged) {
+        'lan=${event.settings.allowLanConnections} '
+        'auth=${event.settings.authEnabled}';
+    if (lanChanged || authChanged) {
       _debouncedLogTimers.remove('proxy')?.cancel();
       _appendLog(LogLevel.debug, message, tag: 'settings');
     } else {

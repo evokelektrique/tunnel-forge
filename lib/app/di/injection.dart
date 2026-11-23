@@ -11,8 +11,6 @@ import 'package:tunnel_forge/features/subscriptions/data/subscription_http_clien
 import 'package:tunnel_forge/features/subscriptions/data/subscription_sync_service.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_client.dart';
 import 'package:tunnel_forge/features/onboarding/data/shared_prefs_onboarding_repository.dart';
-import 'package:tunnel_forge/features/onboarding/data/system_app_exit_controller.dart';
-import 'package:tunnel_forge/features/onboarding/domain/app_exit_controller.dart';
 import 'package:tunnel_forge/features/onboarding/domain/onboarding_repository.dart';
 import 'package:tunnel_forge/features/onboarding/presentation/bloc/onboarding_bloc.dart';
 import 'package:tunnel_forge/features/app_theme/data/shared_prefs_theme_repository.dart';
@@ -37,7 +35,6 @@ GetIt createAppLocator({
   AppVersionRepository? appVersionRepository,
   AppUpdateRepository? appUpdateRepository,
   OnboardingRepository? onboardingRepository,
-  AppExitController? appExitController,
   bool? skipOnboardingDisclosure,
 }) {
   final locator = GetIt.asNewInstance();
@@ -67,9 +64,6 @@ GetIt createAppLocator({
   );
   locator.registerLazySingleton<OnboardingRepository>(
     () => onboardingRepository ?? SharedPrefsOnboardingRepository(),
-  );
-  locator.registerLazySingleton<AppExitController>(
-    () => appExitController ?? SystemAppExitController(),
   );
   locator.registerLazySingleton<ProfilesRepository>(
     () => ProfilesRepositoryImpl(locator<ProfileStore>()),
@@ -132,7 +126,6 @@ GetIt createAppLocator({
   locator.registerFactory<OnboardingBloc>(
     () => OnboardingBloc(
       locator<OnboardingRepository>(),
-      locator<AppExitController>(),
       skipDisclosureSteps: skipOnboardingDisclosure,
       logsRepository: locator<LogsRepository>(),
     ),
@@ -176,11 +169,5 @@ GetIt createAppLocator({
 }
 
 void disposeLocator(GetIt locator) {
-  if (locator.isRegistered<LogsRepository>()) {
-    final logs = locator<LogsRepository>();
-    if (logs is LogsRepositoryImpl) {
-      unawaited(logs.dispose());
-    }
-  }
   unawaited(locator.reset(dispose: true));
 }

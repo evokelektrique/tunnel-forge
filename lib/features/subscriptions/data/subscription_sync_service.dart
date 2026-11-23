@@ -102,7 +102,10 @@ class SubscriptionSyncService {
     required SubscriptionSyncTrigger trigger,
     required bool persistErrorOnFailure,
   }) async {
-    final uri = Uri.tryParse(subscription.url.trim());
+    final cleanUrl = subscription.url.trim();
+    final uri = (subscription.urlMissing || cleanUrl.isEmpty)
+        ? null
+        : Uri.tryParse(cleanUrl);
     if (uri == null) {
       throw const SubscriptionException(
         'Invalid subscription URL',
@@ -111,7 +114,18 @@ class SubscriptionSyncService {
     }
 
     final showProgress = trigger.isAuto;
-    final route = await _bridge.getActiveNetworkRoute();
+    var route = await _bridge.getActiveNetworkRoute();
+    if (route.kind == SubscriptionRouteKind.localHttpProxy) {
+      final proxySettings = await _store.loadProxySettings();
+      if (proxySettings.authEnabled &&
+          proxySettings.authUsername.isNotEmpty &&
+          proxySettings.authPassword.isNotEmpty) {
+        route = route.withProxyCredentials(
+          username: proxySettings.authUsername,
+          password: proxySettings.authPassword,
+        );
+      }
+    }
     _onLog?.call(
       LogLevel.debug,
       'Subscription sync start id=${subscription.id} trigger=${trigger.jsonValue} route=${route.kind.name}',

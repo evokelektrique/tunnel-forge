@@ -6,12 +6,11 @@ import 'package:flutter/foundation.dart';
 
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
-import '../../domain/app_exit_controller.dart';
 import '../../domain/onboarding_repository.dart';
 
 const int kOnboardingAgreeCountdownSeconds = 10;
 
-enum OnboardingFlowStatus { loading, presenting, accepted, exiting }
+enum OnboardingFlowStatus { loading, presenting, accepted }
 
 enum OnboardingMode { blockingFirstLaunch, readOnly }
 
@@ -36,10 +35,6 @@ final class OnboardingContinuePressed extends OnboardingEvent {
   const OnboardingContinuePressed();
 }
 
-final class OnboardingBackPressed extends OnboardingEvent {
-  const OnboardingBackPressed();
-}
-
 final class OnboardingCheckboxChanged extends OnboardingEvent {
   const OnboardingCheckboxChanged(this.checked);
 
@@ -51,10 +46,6 @@ final class OnboardingCheckboxChanged extends OnboardingEvent {
 
 final class OnboardingAgreePressed extends OnboardingEvent {
   const OnboardingAgreePressed();
-}
-
-final class OnboardingCancelPressed extends OnboardingEvent {
-  const OnboardingCancelPressed();
 }
 
 final class _OnboardingTimerTicked extends OnboardingEvent {
@@ -125,8 +116,7 @@ class OnboardingState extends Equatable {
 
 class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
   OnboardingBloc(
-    this._repository,
-    this._appExitController, {
+    this._repository, {
     bool? skipDisclosureSteps,
     LogsRepository? logsRepository,
   }) : _skipDisclosureSteps = skipDisclosureSteps ?? kDebugMode,
@@ -135,15 +125,12 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
     on<OnboardingStarted>(_onStarted);
     on<OnboardingReadOnlyOpened>(_onReadOnlyOpened);
     on<OnboardingContinuePressed>(_onContinuePressed);
-    on<OnboardingBackPressed>(_onBackPressed);
     on<OnboardingCheckboxChanged>(_onCheckboxChanged);
     on<OnboardingAgreePressed>(_onAgreePressed);
-    on<OnboardingCancelPressed>(_onCancelPressed);
     on<_OnboardingTimerTicked>(_onTimerTicked);
   }
 
   final OnboardingRepository _repository;
-  final AppExitController _appExitController;
   final bool _skipDisclosureSteps;
   final LogsRepository? _logsRepository;
   StreamSubscription<int>? _countdownSubscription;
@@ -222,27 +209,6 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
     _startCountdown();
   }
 
-  Future<void> _onBackPressed(
-    OnboardingBackPressed event,
-    Emitter<OnboardingState> emit,
-  ) async {
-    if (!state.isBlocking) {
-      return;
-    }
-    if (state.step == OnboardingStep.acknowledgement) {
-      await _stopCountdown();
-      emit(
-        state.copyWith(
-          step: OnboardingStep.intro,
-          checkboxChecked: false,
-          secondsRemaining: kOnboardingAgreeCountdownSeconds,
-        ),
-      );
-    } else if (state.step == OnboardingStep.intro) {
-      emit(state.copyWith(step: OnboardingStep.language));
-    }
-  }
-
   void _onCheckboxChanged(
     OnboardingCheckboxChanged event,
     Emitter<OnboardingState> emit,
@@ -264,17 +230,6 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
       'Onboarding L2TP disclosure accepted version=$kCurrentL2tpDisclosureVersion',
     );
     emit(state.copyWith(status: OnboardingFlowStatus.accepted));
-  }
-
-  Future<void> _onCancelPressed(
-    OnboardingCancelPressed event,
-    Emitter<OnboardingState> emit,
-  ) async {
-    if (!state.isBlocking) return;
-    await _stopCountdown();
-    _logDebug('Onboarding cancelled by user step=${state.step.name}');
-    emit(state.copyWith(status: OnboardingFlowStatus.exiting));
-    await _appExitController.closeApp();
   }
 
   void _onTimerTicked(

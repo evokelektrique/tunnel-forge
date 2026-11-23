@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/l10n/generated/app_localizations_en.dart';
 
@@ -214,6 +216,9 @@ class ProxySettings {
     this.httpPort = defaultHttpPort,
     this.socksPort = defaultSocksPort,
     this.allowLanConnections = false,
+    this.authEnabled = false,
+    this.authUsername = '',
+    this.authPassword = '',
   });
 
   static const int defaultHttpPort = 8080;
@@ -232,6 +237,9 @@ class ProxySettings {
   final int httpPort;
   final int socksPort;
   final bool allowLanConnections;
+  final bool authEnabled;
+  final String authUsername;
+  final String authPassword;
 
   static bool isAllowedPort(int port) {
     return port >= minPort &&
@@ -279,11 +287,17 @@ class ProxySettings {
     int? httpPort,
     int? socksPort,
     bool? allowLanConnections,
+    bool? authEnabled,
+    String? authUsername,
+    String? authPassword,
   }) {
     return ProxySettings(
       httpPort: httpPort ?? this.httpPort,
       socksPort: socksPort ?? this.socksPort,
       allowLanConnections: allowLanConnections ?? this.allowLanConnections,
+      authEnabled: authEnabled ?? this.authEnabled,
+      authUsername: authUsername ?? this.authUsername,
+      authPassword: authPassword ?? this.authPassword,
     );
   }
 }
@@ -506,6 +520,15 @@ class Profile {
 
   static const int minVpnMtu = 576;
   static const int maxVpnMtu = 1450;
+
+  /// RFC 1334 (PAP) Peer-ID / Passwd length octets max out at 255 bytes.
+  static const int maxPppUsernameUtf8Bytes = 255;
+  static const int maxPppPapPasswordUtf8Bytes = 255;
+
+  /// RFC 2759 section 8.1 bounds MS-CHAPv2 passwords to 256 UTF-16LE chars.
+  static const int maxPppMschapV2PasswordUtf16CodeUnits = 256;
+
+  static int utf8ByteLength(String value) => utf8.encode(value).length;
 
   final String id;
   final String displayName;

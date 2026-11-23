@@ -6,7 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tunnel_forge/core/logging/diagnostics_bridge.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_background_runner.dart';
 import 'package:tunnel_forge/features/subscriptions/data/subscription_contract.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_http_client.dart';
 import 'package:tunnel_forge/features/subscriptions/domain/subscription_models.dart';
 import 'package:tunnel_forge/main.dart';
 
@@ -72,7 +74,8 @@ void main() {
         request.response.statusCode = 403;
         await request.response.close();
       });
-      await ProfileStore().saveSubscription(
+      final store = ProfileStore(secretsOverride: MemorySecretStore());
+      await store.saveSubscription(
         Subscription(
           id: 'fixture',
           name: 'Local fixture',
@@ -96,7 +99,10 @@ void main() {
         diagnosticWrites++;
         throw PlatformException(code: 'fixture-log-offline');
       });
-      await subscriptionBackgroundMain();
+      await runSubscriptionBackgroundMain(
+        profileStore: store,
+        httpClient: DartSubscriptionHttpClient(allowLoopback: true),
+      );
       expect(
         await runScheduledUpdate('fixture', isBackground: false),
         SubscriptionContract.outcomeRetry,

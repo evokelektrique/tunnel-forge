@@ -1,10 +1,7 @@
-import 'dart:async';
-
 import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
-import 'package:tunnel_forge/features/onboarding/domain/app_exit_controller.dart';
 import 'package:tunnel_forge/features/onboarding/domain/onboarding_repository.dart';
 import 'package:tunnel_forge/features/onboarding/presentation/bloc/onboarding_bloc.dart';
 
@@ -24,26 +21,12 @@ class _FakeOnboardingRepository implements OnboardingRepository {
   }
 }
 
-class _FakeAppExitController implements AppExitController {
-  int closeCalls = 0;
-  final Completer<void> closeCompleter = Completer<void>();
-
-  @override
-  Future<void> closeApp() async {
-    closeCalls += 1;
-    if (!closeCompleter.isCompleted) {
-      closeCompleter.complete();
-    }
-  }
-}
-
 void main() {
   group('OnboardingBloc', () {
     blocTest<OnboardingBloc, OnboardingState>(
       'accepts immediately when the stored version matches',
       build: () => OnboardingBloc(
         _FakeOnboardingRepository(version: kCurrentL2tpDisclosureVersion),
-        _FakeAppExitController(),
       ),
       act: (bloc) => bloc.add(const OnboardingStarted()),
       expect: () => [
@@ -55,7 +38,6 @@ void main() {
       'presents language choice on first launch',
       build: () => OnboardingBloc(
         _FakeOnboardingRepository(),
-        _FakeAppExitController(),
         skipDisclosureSteps: false,
       ),
       act: (bloc) => bloc.add(const OnboardingStarted()),
@@ -68,7 +50,7 @@ void main() {
       'debug mode skips intro and security notice on continue from language',
       () async {
         final repository = _FakeOnboardingRepository();
-        final bloc = OnboardingBloc(repository, _FakeAppExitController());
+        final bloc = OnboardingBloc(repository);
         addTearDown(bloc.close);
 
         bloc.add(const OnboardingStarted());
@@ -90,7 +72,6 @@ void main() {
       () async {
         final bloc = OnboardingBloc(
           _FakeOnboardingRepository(),
-          _FakeAppExitController(),
           skipDisclosureSteps: false,
         );
         addTearDown(bloc.close);
@@ -115,7 +96,6 @@ void main() {
       final repository = _FakeOnboardingRepository();
       final bloc = OnboardingBloc(
         repository,
-        _FakeAppExitController(),
         skipDisclosureSteps: false,
       );
       addTearDown(bloc.close);
@@ -159,7 +139,6 @@ void main() {
         final repository = _FakeOnboardingRepository();
         final bloc = OnboardingBloc(
           repository,
-          _FakeAppExitController(),
           skipDisclosureSteps: false,
         );
         addTearDown(bloc.close);
@@ -186,24 +165,9 @@ void main() {
       },
     );
 
-    test('cancel transitions to exiting and closes the app', () async {
-      final exitController = _FakeAppExitController();
-      final bloc = OnboardingBloc(_FakeOnboardingRepository(), exitController);
-      addTearDown(bloc.close);
-
-      bloc.add(const OnboardingStarted());
-      await Future<void>.delayed(Duration.zero);
-      bloc.add(const OnboardingCancelPressed());
-      await exitController.closeCompleter.future;
-
-      expect(bloc.state.status, OnboardingFlowStatus.exiting);
-      expect(exitController.closeCalls, 1);
-    });
-
     blocTest<OnboardingBloc, OnboardingState>(
       'read-only mode skips timer and checkbox requirements',
-      build: () =>
-          OnboardingBloc(_FakeOnboardingRepository(), _FakeAppExitController()),
+      build: () => OnboardingBloc(_FakeOnboardingRepository()),
       act: (bloc) => bloc.add(const OnboardingReadOnlyOpened()),
       expect: () => [
         const OnboardingState(
@@ -218,10 +182,8 @@ void main() {
     test('emits DEBUG logs for onboarding transitions and actions', () async {
       final logs = _RecordingLogsRepository();
       final repository = _FakeOnboardingRepository();
-      final exitController = _FakeAppExitController();
       final bloc = OnboardingBloc(
         repository,
-        exitController,
         skipDisclosureSteps: false,
         logsRepository: logs,
       );
@@ -251,26 +213,9 @@ void main() {
         'Onboarding L2TP disclosure accepted version=$kCurrentL2tpDisclosureVersion',
       ]);
 
-      final cancelLogs = _RecordingLogsRepository();
-      final cancelBloc = OnboardingBloc(
-        _FakeOnboardingRepository(),
-        _FakeAppExitController(),
-        logsRepository: cancelLogs,
-      );
-      addTearDown(cancelBloc.close);
-      cancelBloc.add(const OnboardingStarted());
-      await Future<void>.delayed(Duration.zero);
-      cancelBloc.add(const OnboardingCancelPressed());
-      await Future<void>.delayed(Duration.zero);
-      expect(
-        cancelLogs.entries.single.message,
-        'Onboarding cancelled by user step=language',
-      );
-
       final readOnlyLogs = _RecordingLogsRepository();
       final readOnlyBloc = OnboardingBloc(
         _FakeOnboardingRepository(),
-        _FakeAppExitController(),
         logsRepository: readOnlyLogs,
       );
       addTearDown(readOnlyBloc.close);

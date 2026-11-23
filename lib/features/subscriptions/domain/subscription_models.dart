@@ -139,6 +139,7 @@ class Subscription extends Equatable {
     required this.id,
     required this.name,
     required this.url,
+    this.urlMissing = false,
     this.autoUpdate = false,
     this.updateIntervalMinutes = defaultIntervalMinutes,
     this.intervalUnit = SubscriptionIntervalUnit.hours,
@@ -164,6 +165,7 @@ class Subscription extends Equatable {
   final String id;
   final String name;
   final String url;
+  final bool urlMissing;
   final bool autoUpdate;
   final int updateIntervalMinutes;
   final SubscriptionIntervalUnit intervalUnit;
@@ -329,6 +331,7 @@ class Subscription extends Equatable {
   Subscription copyWith({
     String? name,
     String? url,
+    bool? urlMissing,
     bool? autoUpdate,
     int? updateIntervalMinutes,
     SubscriptionIntervalUnit? intervalUnit,
@@ -341,6 +344,7 @@ class Subscription extends Equatable {
       id: id,
       name: name ?? this.name,
       url: url ?? this.url,
+      urlMissing: urlMissing ?? this.urlMissing,
       autoUpdate: autoUpdate ?? this.autoUpdate,
       updateIntervalMinutes: normalizeIntervalMinutes(
         updateIntervalMinutes ?? this.updateIntervalMinutes,
@@ -353,10 +357,10 @@ class Subscription extends Equatable {
     );
   }
 
-  Map<String, Object?> toJson() => <String, Object?>{
+  Map<String, Object?> toJson({bool includeUrl = true}) => <String, Object?>{
     'id': id,
     'name': name,
-    'url': url,
+    if (includeUrl && url.isNotEmpty) 'url': url,
     'autoUpdate': autoUpdate,
     'updateIntervalMinutes': normalizeIntervalMinutes(updateIntervalMinutes),
     'intervalUnit': intervalUnit.jsonValue,
@@ -369,12 +373,12 @@ class Subscription extends Equatable {
     final m = Map<String, Object?>.from(raw);
     final id = m['id'];
     final name = m['name'];
-    final url = m['url'];
-    if (id is! String || name is! String || url is! String) return null;
+    if (id is! String || name is! String) return null;
     final cleanId = id.trim();
     final cleanName = name.trim();
-    final cleanUrl = url.trim();
-    if (cleanId.isEmpty || cleanName.isEmpty || cleanUrl.isEmpty) return null;
+    if (cleanId.isEmpty || cleanName.isEmpty) return null;
+    final rawUrl = m['url'];
+    final cleanUrl = rawUrl is String ? rawUrl.trim() : '';
     final autoUpdate = m['autoUpdate'] is bool
         ? m['autoUpdate'] as bool
         : false;
@@ -399,6 +403,7 @@ class Subscription extends Equatable {
       id: cleanId,
       name: cleanName,
       url: cleanUrl,
+      urlMissing: cleanUrl.isEmpty,
       autoUpdate: autoUpdate,
       updateIntervalMinutes: intervalMinutes,
       intervalUnit: intervalUnit,
@@ -412,6 +417,7 @@ class Subscription extends Equatable {
     id,
     name,
     url,
+    urlMissing,
     autoUpdate,
     updateIntervalMinutes,
     intervalUnit,

@@ -48,15 +48,28 @@ class LogsState extends Equatable {
     this.entries = const <LogEntry>[],
     this.level = LogDisplayLevel.info,
     this.wordWrap = true,
-  });
+    this.revision = 0,
+    List<LogEntry>? visibleLogs,
+  }) : _visibleLogs = visibleLogs;
 
   final List<LogEntry> entries;
   final LogDisplayLevel level;
   final bool wordWrap;
+  final int revision;
+  final List<LogEntry>? _visibleLogs;
 
-  List<LogEntry> get visibleLogs {
-    return entries.where((entry) => level.includes(entry.level)).toList();
+  static List<LogEntry> _filterVisible(
+    List<LogEntry> entries,
+    LogDisplayLevel level,
+  ) {
+    if (entries.isEmpty) return const <LogEntry>[];
+    return List<LogEntry>.unmodifiable(
+      entries.where((entry) => level.includes(entry.level)),
+    );
   }
+
+  List<LogEntry> get visibleLogs =>
+      _visibleLogs ?? _filterVisible(entries, level);
 
   String get levelLabel => level.label;
 
@@ -64,16 +77,25 @@ class LogsState extends Equatable {
     List<LogEntry>? entries,
     LogDisplayLevel? level,
     bool? wordWrap,
+    int? revision,
   }) {
+    final nextEntries = entries ?? this.entries;
+    final nextLevel = level ?? this.level;
+    final nextVisible =
+        (entries == null && level == null && _visibleLogs != null)
+        ? _visibleLogs
+        : _filterVisible(nextEntries, nextLevel);
     return LogsState(
-      entries: entries ?? this.entries,
-      level: level ?? this.level,
+      entries: nextEntries,
+      level: nextLevel,
       wordWrap: wordWrap ?? this.wordWrap,
+      revision: revision ?? this.revision,
+      visibleLogs: nextVisible,
     );
   }
 
   @override
-  List<Object?> get props => [entries, level, wordWrap];
+  List<Object?> get props => [entries, level, wordWrap, revision];
 }
 
 class LogsBloc extends Bloc<LogsEvent, LogsState> {
@@ -102,11 +124,18 @@ class LogsBloc extends Bloc<LogsEvent, LogsState> {
     });
     await _tunnelRepository.setLogLevel(LogDisplayLevel.debug);
     await _logsRepository.loadPersisted();
-    emit(state.copyWith(level: level, entries: _logsRepository.entries));
+    final initialEntries = _logsRepository.entries;
+    emit(
+      state.copyWith(
+        level: level,
+        entries: initialEntries,
+        revision: initialEntries.isEmpty ? state.revision : state.revision + 1,
+      ),
+    );
   }
 
   void _onEntriesChanged(LogsEntriesChanged event, Emitter<LogsState> emit) {
-    emit(state.copyWith(entries: event.entries));
+    emit(state.copyWith(entries: event.entries, revision: state.revision + 1));
   }
 
   Future<void> _onLevelChangeRequested(

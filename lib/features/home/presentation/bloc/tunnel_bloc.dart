@@ -226,7 +226,9 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     TunnelRuntimeSyncRequested event,
     Emitter<TunnelState> emit,
   ) async {
-    if (_runtimeBootstrapFuture != null) return;
+    if (_runtimeBootstrapFuture != null || state.busy || state.stopRequested) {
+      return;
+    }
     await _runRuntimeBootstrap(emit);
   }
 
@@ -425,6 +427,18 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'attempt=$attemptId',
         tag: 'tunnel',
       );
+      emit(
+        state.copyWith(
+          awaitingTunnel: true,
+          tunnelUp: false,
+          stopRequested: false,
+        ),
+      );
+      _scheduleAwaitTimeout(attemptId);
+      _toast(
+        emit,
+        proxyMode ? AppL10n.current.startingProxy : AppL10n.current.connecting,
+      );
       await _tunnelRepository.connect(
         TunnelConnectRequest(
           activeProfileId: request.activeProfileId,
@@ -447,20 +461,9 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'Connect acknowledged; waiting for ${proxyMode ? 'proxy readiness' : 'TUN'} from Android... attempt=$attemptId',
         tag: 'tunnel',
       );
-      emit(
-        state.copyWith(
-          busy: false,
-          awaitingTunnel: true,
-          tunnelUp: false,
-          stopRequested: false,
-        ),
-      );
-      _scheduleAwaitTimeout(attemptId);
-      _toast(
-        emit,
-        proxyMode ? AppL10n.current.startingProxy : AppL10n.current.connecting,
-      );
+      emit(state.copyWith(busy: false));
     } on PlatformException catch (error) {
+      _cancelAwaitTimer();
       _logError(
         'Platform error: ${error.code} ${error.message ?? ''} attempt=$attemptId',
         tag: 'tunnel',
@@ -478,6 +481,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
       emit(
         state.copyWith(
           busy: false,
+          awaitingTunnel: false,
           clearActiveAttemptId: true,
           clearConnectStartedAt: true,
           clearProxyExposure: true,
@@ -869,7 +873,9 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
   }
 
   Future<void> _bootstrapRuntimeState(Emitter<TunnelState> emit) async {
+    if (state.busy || state.stopRequested) return;
     final runtimeState = await _tunnelRepository.getRuntimeState();
+    if (state.busy || state.stopRequested) return;
     if (runtimeState.state == VpnTunnelState.stopped) {
       if (state.tunnelUp ||
           state.awaitingTunnel ||

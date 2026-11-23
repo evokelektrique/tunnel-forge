@@ -904,5 +904,40 @@
   "subscriptionErrorTooLarge": "Subscription response is too large.",
   "subscriptionErrorInvalidEncoding": "Subscription response is not valid UTF-8 text.",
   "subscriptionErrorTunnelRecovering": "VPN tunnel is reconnecting. Try again once connected or disconnected.",
-  "subscriptionErrorUnexpected": "Couldn't update subscription."
+  "subscriptionErrorUnexpected": "Couldn't update subscription.",
+  "proxyAuthTitle": "Require proxy authentication",
+  "proxyAuthSubtitle": "Require a username and password for HTTP and SOCKS5 connections.",
+  "proxyAuthUsername": "Proxy username",
+  "proxyAuthPassword": "Proxy password",
+  "proxyAuthCredentialsRequired": "Enter both username and password so authentication can succeed.",
+  "usernameTooLong": "Username exceeds {max} UTF-8 bytes (RFC 1334 / 1994 PPP limit). Currently {bytes} bytes.",
+  "@usernameTooLong": {
+    "placeholders": {
+      "max": {
+        "type": "int"
+      },
+      "bytes": {
+        "type": "int"
+      }
+    }
+  },
+  "passwordTooLong": "Password exceeds {max} characters (RFC 2759 MS-CHAPv2 limit). Currently {chars} characters.",
+  "@passwordTooLong": {
+    "placeholders": {
+      "max": {
+        "type": "int"
+      },
+      "chars": {
+        "type": "int"
+      }
+    }
+  },
+  "passwordPapLimitWarning": "Exceeds {max}-byte PAP limit (RFC 1334); works with MS-CHAPv2 and CHAP-MD5 only.",
+  "@passwordPapLimitWarning": {
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  }
 }

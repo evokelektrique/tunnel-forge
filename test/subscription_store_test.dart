@@ -356,5 +356,77 @@ void main() {
         }
       },
     );
+
+    test(
+      'applySubscriptionSync aborts if deleted mid-flight and preserves concurrent edits',
+      () async {
+        SharedPreferences.setMockInitialValues(<String, Object>{});
+        final secrets = MemorySecretStore();
+        final store = ProfileStore(secretsOverride: secrets);
+
+        const initialSub = Subscription(
+          id: 'sub-race',
+          name: 'Original Name',
+          url: 'https://example.com/race',
+          autoUpdate: false,
+        );
+        await store.saveSubscription(initialSub);
+        await store.saveSubscription(
+          initialSub.copyWith(name: 'Renamed Name', autoUpdate: true),
+        );
+
+        // Sync started with stale snapshot `initialSub`; should preserve concurrent rename/toggle.
+        await store.applySubscriptionSync(
+          subscription: initialSub,
+          envelopes: [_env(name: 'One', server: 'one.example.com')],
+          trigger: SubscriptionSyncTrigger.manual,
+          syncedAt: DateTime.utc(2026, 11, 22),
+        );
+        final subsAfterEdit = await store.loadSubscriptions();
+        expect(subsAfterEdit.single.name, 'Renamed Name');
+        expect(subsAfterEdit.single.autoUpdate, isTrue);
+
+        // Now delete the subscription, then finish an in-flight manual sync -> must abort cleanly.
+        await store.deleteSubscription('sub-race');
+        await store.applySubscriptionSync(
+          subscription: initialSub,
+          envelopes: [_env(name: 'Ghost', server: 'ghost.example.com')],
+          trigger: SubscriptionSyncTrigger.manual,
+          syncedAt: DateTime.utc(2026, 11, 22),
+        );
+        expect(await store.loadSubscriptions(), isEmpty);
+        expect(await store.loadProfiles(), isEmpty);
+      },
+    );
+
+    test(
+      'stores subscription URL in SecretStore, scrubs SharedPreferences, migrates legacy, and clears on reset',
+      () async {
+        SharedPreferences.setMockInitialValues(<String, Object>{
+          ProfileStore.prefsKeySubscriptionsJson:
+              '[{"id":"legacy-1","name":"Legacy","url":"https://legacy.example/sub"}]',
+        });
+        final prefs = await SharedPreferences.getInstance();
+        final secrets = MemorySecretStore();
+        final store = ProfileStore(prefsOverride: prefs, secretsOverride: secrets);
+
+        final loaded = await store.loadSubscriptions();
+        expect(loaded.single.url, 'https://legacy.example/sub');
+        expect(loaded.single.urlMissing, isFalse);
+        expect(
+          await secrets.read(ProfileStore.subscriptionUrlKey('legacy-1')),
+          'https://legacy.example/sub',
+        );
+        expect(
+          prefs.getString(ProfileStore.prefsKeySubscriptionsJson),
+          isNot(contains('legacy.example')),
+        );
+
+        await store.resetSecureStorage();
+        final afterReset = await store.loadSubscriptions();
+        expect(afterReset.single.url, isEmpty);
+        expect(afterReset.single.urlMissing, isTrue);
+      },
+    );
   });
 }

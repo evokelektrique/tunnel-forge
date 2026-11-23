@@ -48,6 +48,7 @@ enum LogDisplayLevel {
   static LogDisplayLevel fromStorage(Object? raw) {
     if (raw is! String) return LogDisplayLevel.info;
     return switch (raw.trim().toLowerCase()) {
+      'error' => LogDisplayLevel.error,
       'info' => LogDisplayLevel.info,
       'warning' => LogDisplayLevel.warning,
       'debug' => LogDisplayLevel.debug,

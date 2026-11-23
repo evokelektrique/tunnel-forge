@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -88,6 +89,69 @@ void main() {
       expect(result.reachable, isFalse);
       expect(result.error, 'Cancelled');
       verify(() => client.close(force: true)).called(1);
+    },
+  );
+
+  test(
+    'authenticates HTTP proxy challenges when proxy credentials are provided',
+    () async {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      final expectedAuth = 'Basic ${base64Encode(utf8.encode('user:secret'))}';
+      final authHeadersSeen = <String?>[];
+
+      unawaited(() async {
+        await for (final socket in server) {
+          final buffer = StringBuffer();
+          await for (final chunk in socket) {
+            buffer.write(utf8.decode(chunk, allowMalformed: true));
+            if (buffer.toString().contains('\r\n\r\n')) break;
+          }
+          final lines = buffer.toString().split('\r\n');
+          String? authHeader;
+          for (final line in lines) {
+            final idx = line.indexOf(':');
+            if (idx > 0 &&
+                line.substring(0, idx).trim().toLowerCase() ==
+                    'proxy-authorization') {
+              authHeader = line.substring(idx + 1).trim();
+            }
+          }
+          authHeadersSeen.add(authHeader);
+          if (authHeader == expectedAuth) {
+            socket.write(
+              'HTTP/1.1 204 No Content\r\n'
+              'Content-Length: 0\r\n'
+              'Connection: close\r\n'
+              '\r\n',
+            );
+          } else {
+            socket.write(
+              'HTTP/1.1 407 Proxy Authentication Required\r\n'
+              'Proxy-Authenticate: Basic realm="TunnelForge"\r\n'
+              'Content-Length: 0\r\n'
+              'Connection: close\r\n'
+              '\r\n',
+            );
+          }
+          await socket.flush();
+          await socket.close();
+          if (authHeader == expectedAuth) break;
+        }
+      }());
+
+      final result = await HttpConnectivityChecker().ping(
+        ConnectivityPingRequest.localHttpProxy(
+          url: 'http://example.com/generate_204',
+          proxyPort: server.port,
+          proxyUsername: 'user',
+          proxyPassword: 'secret',
+        ),
+      );
+
+      expect(result.reachable, isTrue);
+      expect(result.statusCode, 204);
+      expect(authHeadersSeen, [null, expectedAuth]);
     },
   );
 }

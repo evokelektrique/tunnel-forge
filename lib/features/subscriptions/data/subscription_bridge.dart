@@ -11,6 +11,8 @@ class SubscriptionFetchRoute extends Equatable {
     required this.kind,
     this.proxyHost,
     this.proxyPort,
+    this.proxyUsername,
+    this.proxyPassword,
     this.reason,
   });
 
@@ -20,10 +22,14 @@ class SubscriptionFetchRoute extends Equatable {
   const SubscriptionFetchRoute.localHttpProxy({
     String host = '127.0.0.1',
     required int port,
+    String? proxyUsername,
+    String? proxyPassword,
   }) : this._(
          kind: SubscriptionRouteKind.localHttpProxy,
          proxyHost: host,
          proxyPort: port,
+         proxyUsername: proxyUsername,
+         proxyPassword: proxyPassword,
        );
 
   const SubscriptionFetchRoute.defer({String? reason})
@@ -32,7 +38,22 @@ class SubscriptionFetchRoute extends Equatable {
   final SubscriptionRouteKind kind;
   final String? proxyHost;
   final int? proxyPort;
+  final String? proxyUsername;
+  final String? proxyPassword;
   final String? reason;
+
+  SubscriptionFetchRoute withProxyCredentials({
+    required String? username,
+    required String? password,
+  }) {
+    if (kind != SubscriptionRouteKind.localHttpProxy) return this;
+    return SubscriptionFetchRoute.localHttpProxy(
+      host: proxyHost ?? '127.0.0.1',
+      port: proxyPort ?? ProxySettings.defaultHttpPort,
+      proxyUsername: username,
+      proxyPassword: password,
+    );
+  }
 
   static SubscriptionFetchRoute fromMap(Object? raw) {
     if (raw is! Map) return const SubscriptionFetchRoute.direct();
@@ -65,7 +86,14 @@ class SubscriptionFetchRoute extends Equatable {
   }
 
   @override
-  List<Object?> get props => [kind, proxyHost, proxyPort, reason];
+  List<Object?> get props => [
+    kind,
+    proxyHost,
+    proxyPort,
+    proxyUsername,
+    proxyPassword,
+    reason,
+  ];
 }
 
 typedef ScheduledSubscriptionUpdateHandler =

@@ -354,8 +354,10 @@ void main() {
       expect(await store.loadLogDisplayLevel(), LogDisplayLevel.info);
 
       await store.saveLogDisplayLevel(LogDisplayLevel.warning);
-
       expect(await store.loadLogDisplayLevel(), LogDisplayLevel.warning);
+
+      await store.saveLogDisplayLevel(LogDisplayLevel.error);
+      expect(await store.loadLogDisplayLevel(), LogDisplayLevel.error);
     });
 
     test('persists battery optimization connect prompt flag', () async {

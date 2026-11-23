@@ -487,5 +487,13 @@
   "subscriptionErrorTooLarge": "حجم پاسخ اشتراک بیش از حد مجاز است.",
   "subscriptionErrorInvalidEncoding": "پاسخ اشتراک متن معتبر UTF-8 نیست.",
   "subscriptionErrorTunnelRecovering": "تونل وی‌پی‌ان در حال اتصال مجدد است. پس از برقراری یا قطع اتصال دوباره امتحان کنید.",
-  "subscriptionErrorUnexpected": "به‌روزرسانی اشتراک انجام نشد."
+  "subscriptionErrorUnexpected": "به‌روزرسانی اشتراک انجام نشد.",
+  "proxyAuthTitle": "احراز هویت پروکسی",
+  "proxyAuthSubtitle": "درخواست نام کاربری و رمز عبور برای اتصال‌های HTTP و SOCKS5.",
+  "proxyAuthUsername": "نام کاربری پروکسی",
+  "proxyAuthPassword": "رمز عبور پروکسی",
+  "proxyAuthCredentialsRequired": "برای فعال شدن احراز هویت، نام کاربری و رمز عبور را وارد کنید.",
+  "usernameTooLong": "نام کاربری از حد مجاز {max} بایت UTF-8 (استاندارد PPP در RFC 1334 / 1994) بیشتر است. اکنون {bytes} بایت است.",
+  "passwordTooLong": "رمز عبور از حد مجاز {max} نویسه (استاندارد MS-CHAPv2 در RFC 2759) بیشتر است. اکنون {chars} نویسه است.",
+  "passwordPapLimitWarning": "از حد مجاز {max} بایت PAP (RFC 1334) بیشتر است؛ فقط با MS-CHAPv2 و CHAP-MD5 کار می‌کند."
 }

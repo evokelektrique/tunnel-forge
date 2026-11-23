@@ -96,6 +96,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
   bool _passwordVisible = false;
   bool _pskVisible = false;
   int _lastMessageId = 0;
+  String? _hydratedProfileId;
 
   @override
   void initState() {
@@ -147,10 +148,13 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
   }
 
   Widget _secretField({
+    Key? fieldKey,
     required BuildContext context,
     required TextEditingController controller,
     required String label,
     String? hint,
+    String? errorText,
+    String? helperText,
     required bool visible,
     required String showTooltip,
     required String hideTooltip,
@@ -158,12 +162,17 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     required ValueChanged<String> onChanged,
   }) {
     return TextField(
+      key: fieldKey,
       controller: controller,
       obscureText: !visible,
       enableSuggestions: false,
       autocorrect: false,
       onChanged: onChanged,
       decoration: _deco(context, label: label, hint: hint).copyWith(
+        errorText: errorText,
+        errorMaxLines: 2,
+        helperText: helperText,
+        helperMaxLines: 2,
         suffixIcon: IconButton(
           tooltip: visible ? hideTooltip : showTooltip,
           icon: Icon(
@@ -372,14 +381,19 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
         }
       },
       builder: (context, state) {
-        _syncController(_displayNameController, state.displayName);
-        _syncController(_serverController, state.server);
-        _syncController(_userController, state.user);
-        _syncController(_passwordController, state.password);
-        _syncController(_pskController, state.psk);
-        _syncController(_dns1Controller, state.dns1);
-        _syncController(_dns2Controller, state.dns2);
-        _syncController(_mtuController, state.mtu);
+        if (!state.loading &&
+            state.loadError == null &&
+            _hydratedProfileId != state.profileId) {
+          _hydratedProfileId = state.profileId;
+          _syncController(_displayNameController, state.displayName);
+          _syncController(_serverController, state.server);
+          _syncController(_userController, state.user);
+          _syncController(_passwordController, state.password);
+          _syncController(_pskController, state.psk);
+          _syncController(_dns1Controller, state.dns1);
+          _syncController(_dns2Controller, state.dns2);
+          _syncController(_mtuController, state.mtu);
+        }
 
         if (state.loadError != null) {
           return Padding(
@@ -499,18 +513,25 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                           ),
                           const SizedBox(height: 12),
                           TextField(
+                            key: const Key('username_field'),
                             controller: _userController,
                             textInputAction: TextInputAction.next,
                             onChanged: (value) => context
                                 .read<ProfileFormBloc>()
                                 .add(ProfileFormUserChanged(value)),
-                            decoration: _deco(context, label: t.username),
+                            decoration: _deco(context, label: t.username).copyWith(
+                              errorText: state.userErrorText,
+                              errorMaxLines: 2,
+                            ),
                           ),
                           const SizedBox(height: 12),
                           _secretField(
+                            fieldKey: const Key('password_field'),
                             context: context,
                             controller: _passwordController,
                             label: t.password,
+                            errorText: state.passwordErrorText,
+                            helperText: state.passwordHelperText,
                             visible: _passwordVisible,
                             showTooltip: t.showPassword,
                             hideTooltip: t.hidePassword,

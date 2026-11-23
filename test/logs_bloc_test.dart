@@ -71,6 +71,40 @@ void main() {
     expect(logs.clearCalls, 1);
     expect(logs.entries, isEmpty);
   });
+
+  test('revision increments on entry emissions and caches visibleLogs', () async {
+    final bloc = LogsBloc(
+      _FakeLogsRepository(),
+      settingsRepository,
+      tunnelRepository,
+    );
+    addTearDown(bloc.close);
+
+    final e1 = LogEntry(
+      timestamp: DateTime.utc(2026, 1, 1),
+      level: LogLevel.info,
+      source: LogSource.dart,
+      tag: 't',
+      message: 'one',
+    );
+    final e2 = LogEntry(
+      timestamp: DateTime.utc(2026, 1, 1, 0, 0, 1),
+      level: LogLevel.info,
+      source: LogSource.dart,
+      tag: 't',
+      message: 'two',
+    );
+
+    bloc.add(LogsEntriesChanged([e1]));
+    await Future<void>.delayed(Duration.zero);
+    expect(bloc.state.revision, 1);
+    final cachedVisible = bloc.state.visibleLogs;
+    expect(identical(cachedVisible, bloc.state.visibleLogs), isTrue);
+
+    bloc.add(LogsEntriesChanged([e2]));
+    await Future<void>.delayed(Duration.zero);
+    expect(bloc.state.revision, 2);
+  });
 }
 
 class _RecordingLogsRepository implements LogsRepository {

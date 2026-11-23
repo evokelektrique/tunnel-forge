@@ -1136,7 +1136,7 @@ void main() {
         );
         expect(
           logs.appended.last.message,
-          'Proxy settings updated http=18082 socks=1080 lan=false',
+          'Proxy settings updated http=18082 socks=1080 lan=false auth=[REDACTED]',
         );
 
         // Allow-LAN toggle logs immediately.
@@ -1148,7 +1148,7 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(
           logs.appended.last.message,
-          'Proxy settings updated http=18082 socks=1080 lan=true',
+          'Proxy settings updated http=18082 socks=1080 lan=true auth=[REDACTED]',
         );
 
         // Invalid connectivity URL logs a warning immediately.

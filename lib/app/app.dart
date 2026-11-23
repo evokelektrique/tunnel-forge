@@ -19,7 +19,6 @@ import 'package:tunnel_forge/features/tunnel/data/vpn_client.dart';
 import 'package:tunnel_forge/features/home/domain/home_repositories.dart';
 import 'package:tunnel_forge/features/app_theme/presentation/bloc/app_theme_bloc.dart';
 import 'package:tunnel_forge/features/home/presentation/pages/home_page.dart';
-import 'package:tunnel_forge/features/onboarding/domain/app_exit_controller.dart';
 import 'package:tunnel_forge/features/onboarding/domain/onboarding_repository.dart';
 import 'package:tunnel_forge/features/onboarding/presentation/bloc/onboarding_bloc.dart';
 import 'package:tunnel_forge/features/onboarding/presentation/pages/onboarding_page.dart';
@@ -37,7 +36,6 @@ class TunnelForgeApp extends StatefulWidget {
     this.appVersionRepository,
     this.appUpdateRepository,
     this.onboardingRepository,
-    this.appExitController,
     this.skipOnboardingDisclosure,
   });
 
@@ -50,7 +48,6 @@ class TunnelForgeApp extends StatefulWidget {
   final AppVersionRepository? appVersionRepository;
   final AppUpdateRepository? appUpdateRepository;
   final OnboardingRepository? onboardingRepository;
-  final AppExitController? appExitController;
   final bool? skipOnboardingDisclosure;
 
   @override
@@ -104,7 +101,6 @@ class _TunnelForgeAppState extends State<TunnelForgeApp>
       appVersionRepository: widget.appVersionRepository,
       appUpdateRepository: widget.appUpdateRepository,
       onboardingRepository: widget.onboardingRepository,
-      appExitController: widget.appExitController,
       skipOnboardingDisclosure: widget.skipOnboardingDisclosure,
     );
   }

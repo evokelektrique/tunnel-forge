@@ -117,8 +117,11 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   late final _ProxyPortSlot _httpPortSlot;
   late final _ProxyPortSlot _socksPortSlot;
+  late final TextEditingController _proxyAuthUsernameController;
+  late final TextEditingController _proxyAuthPasswordController;
   late final TextEditingController _connectivityUrlController;
   late final TextEditingController _connectivityTimeoutController;
+  bool _obscureProxyPassword = true;
   String? _connectivityUrlError;
   String? _connectivityTimeoutError;
 
@@ -134,6 +137,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
       onBlur: () => _handlePortFieldBlur(_socksPortSlot),
     );
     _syncProxyFieldValidation(allowCheck: false);
+    _proxyAuthUsernameController = TextEditingController(
+      text: widget.proxySettings.authUsername,
+    );
+    _proxyAuthPasswordController = TextEditingController(
+      text: widget.proxySettings.authPassword,
+    );
     _connectivityUrlController = TextEditingController(
       text: widget.connectivityCheckSettings.url,
     );
@@ -168,6 +177,16 @@ class _SettingsPanelState extends State<SettingsPanel> {
         immediateCheck: allowLanChanged,
       );
     }
+    if (oldWidget.proxySettings.authUsername !=
+            widget.proxySettings.authUsername &&
+        _proxyAuthUsernameController.text != widget.proxySettings.authUsername) {
+      _proxyAuthUsernameController.text = widget.proxySettings.authUsername;
+    }
+    if (oldWidget.proxySettings.authPassword !=
+            widget.proxySettings.authPassword &&
+        _proxyAuthPasswordController.text != widget.proxySettings.authPassword) {
+      _proxyAuthPasswordController.text = widget.proxySettings.authPassword;
+    }
     if (oldWidget.connectivityCheckSettings.url !=
         widget.connectivityCheckSettings.url) {
       final nextText = widget.connectivityCheckSettings.url;
@@ -194,6 +213,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
   void dispose() {
     _httpPortSlot.dispose();
     _socksPortSlot.dispose();
+    _proxyAuthUsernameController.dispose();
+    _proxyAuthPasswordController.dispose();
     _connectivityUrlController.dispose();
     _connectivityTimeoutController.dispose();
     super.dispose();
@@ -566,6 +587,67 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       widget.proxySettings.copyWith(allowLanConnections: value),
                     ),
             ),
+            if (widget.proxySettings.allowLanConnections) ...[
+              const SizedBox(height: 8),
+              SwitchListTile(
+                key: const Key('proxy_auth_switch'),
+                contentPadding: EdgeInsets.zero,
+                title: _cardTitle(t.proxyAuthTitle),
+                subtitle: _cardText(
+                  t.proxyAuthSubtitle,
+                  color: widget.colorScheme.onSurfaceVariant,
+                ),
+                value: widget.proxySettings.authEnabled,
+                onChanged: widget.routingLocked
+                    ? null
+                    : (value) => widget.onProxySettingsChanged(
+                        widget.proxySettings.copyWith(authEnabled: value),
+                      ),
+              ),
+              if (widget.proxySettings.authEnabled) ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const Key('proxy_auth_username_field'),
+                  controller: _proxyAuthUsernameController,
+                  enabled: !widget.routingLocked,
+                  decoration: InputDecoration(labelText: t.proxyAuthUsername),
+                  onChanged: (value) => widget.onProxySettingsChanged(
+                    widget.proxySettings.copyWith(authUsername: value),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const Key('proxy_auth_password_field'),
+                  controller: _proxyAuthPasswordController,
+                  enabled: !widget.routingLocked,
+                  obscureText: _obscureProxyPassword,
+                  decoration: InputDecoration(
+                    labelText: t.proxyAuthPassword,
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscureProxyPassword
+                            ? Icons.visibility
+                            : Icons.visibility_off,
+                      ),
+                      onPressed: () => setState(
+                        () => _obscureProxyPassword = !_obscureProxyPassword,
+                      ),
+                    ),
+                  ),
+                  onChanged: (value) => widget.onProxySettingsChanged(
+                    widget.proxySettings.copyWith(authPassword: value),
+                  ),
+                ),
+                if (widget.proxySettings.authUsername.trim().isEmpty ||
+                    widget.proxySettings.authPassword.isEmpty) ...[
+                  const SizedBox(height: 8),
+                  _cardText(
+                    t.proxyAuthCredentialsRequired,
+                    color: widget.colorScheme.error,
+                  ),
+                ],
+              ],
+            ],
             const SizedBox(height: 12),
             _cardTitle(t.proxyEndpoints),
             const SizedBox(height: 8),

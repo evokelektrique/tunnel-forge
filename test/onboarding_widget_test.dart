@@ -1,12 +1,7 @@
-import 'dart:async';
-
-import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tunnel_forge/features/onboarding/data/system_app_exit_controller.dart';
-import 'package:tunnel_forge/features/onboarding/domain/app_exit_controller.dart';
 import 'package:tunnel_forge/features/onboarding/domain/onboarding_repository.dart';
 import 'package:tunnel_forge/features/onboarding/presentation/bloc/onboarding_bloc.dart';
 import 'package:tunnel_forge/features/onboarding/presentation/pages/onboarding_page.dart';
@@ -29,43 +24,12 @@ class _FakeOnboardingRepository implements OnboardingRepository {
   }
 }
 
-class _FakeAppExitController implements AppExitController {
-  int closeCalls = 0;
-  final Completer<void> closeCompleter = Completer<void>();
-
-  @override
-  Future<void> closeApp() async {
-    closeCalls += 1;
-    if (!closeCompleter.isCompleted) {
-      closeCompleter.complete();
-    }
-  }
-}
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  test('production exit controller asks Android to close the app', () async {
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    final calls = <String>[];
-    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
-      calls.add(call.method);
-      return null;
-    });
-    addTearDown(
-      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
-    );
-
-    await SystemAppExitController().closeApp();
-
-    expect(calls, ['SystemNavigator.pop']);
-  });
 
   Future<void> pumpApp(
     WidgetTester tester, {
     required OnboardingRepository onboardingRepository,
-    required AppExitController appExitController,
     bool? skipOnboardingDisclosure,
   }) async {
     SharedPreferences.setMockInitialValues({});
@@ -77,7 +41,6 @@ void main() {
       TunnelForgeApp(
         profileStore: ProfileStore(secretsOverride: MemorySecretStore()),
         onboardingRepository: onboardingRepository,
-        appExitController: appExitController,
         skipOnboardingDisclosure: skipOnboardingDisclosure,
       ),
     );
@@ -88,7 +51,6 @@ void main() {
     await pumpApp(
       tester,
       onboardingRepository: _FakeOnboardingRepository(),
-      appExitController: _FakeAppExitController(),
     );
 
     expect(find.byKey(const Key('onboarding_title')), findsOneWidget);
@@ -103,7 +65,6 @@ void main() {
     await pumpApp(
       tester,
       onboardingRepository: _FakeOnboardingRepository(),
-      appExitController: _FakeAppExitController(),
     );
     await tester.binding.setSurfaceSize(const Size(320, 480));
     await tester.pump();
@@ -138,7 +99,6 @@ void main() {
       onboardingRepository: _FakeOnboardingRepository(
         version: kCurrentL2tpDisclosureVersion,
       ),
-      appExitController: _FakeAppExitController(),
     );
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -153,7 +113,6 @@ void main() {
       await pumpApp(
         tester,
         onboardingRepository: repository,
-        appExitController: _FakeAppExitController(),
       );
 
       expect(find.text('Choose your language'), findsOneWidget);
@@ -181,7 +140,6 @@ void main() {
       await pumpApp(
         tester,
         onboardingRepository: repository,
-        appExitController: _FakeAppExitController(),
         skipOnboardingDisclosure: false,
       );
 
@@ -256,7 +214,6 @@ void main() {
     await pumpApp(
       tester,
       onboardingRepository: _FakeOnboardingRepository(),
-      appExitController: _FakeAppExitController(),
     );
 
     expect(find.byKey(const Key('onboarding_cancel_button')), findsNothing);
@@ -267,7 +224,6 @@ void main() {
   testWidgets('read-only notice can be dismissed', (tester) async {
     final bloc = OnboardingBloc(
       _FakeOnboardingRepository(),
-      _FakeAppExitController(),
     )..add(const OnboardingReadOnlyOpened());
     addTearDown(bloc.close);
     final navigatorKey = GlobalKey<NavigatorState>();
@@ -311,7 +267,6 @@ void main() {
     await pumpApp(
       tester,
       onboardingRepository: _FakeOnboardingRepository(),
-      appExitController: _FakeAppExitController(),
     );
 
     expect(find.byKey(const Key('language_choice_system')), findsOneWidget);

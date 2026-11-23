@@ -198,7 +198,10 @@ void main() {
             }
           });
 
-          final client = DartSubscriptionHttpClient(maxResponseBytes: 1024);
+          final client = DartSubscriptionHttpClient(
+            maxResponseBytes: 1024,
+            allowLoopback: true,
+          );
           final base = 'http://127.0.0.1:${server.port}';
 
           final body = await client.fetchBody(
@@ -232,6 +235,106 @@ void main() {
               ),
             ),
           );
+        }, _PassthroughHttpOverrides());
+      },
+    );
+
+    test(
+      'blocks loopback/SSRF redirects, https-to-http downgrades, and hanging 500 body streams',
+      () async {
+        await HttpOverrides.runWithHttpOverrides(() async {
+          final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+          addTearDown(() => server.close(force: true));
+          final openResponses = <HttpResponse>[];
+          addTearDown(() async {
+            for (final resp in openResponses) {
+              try {
+                await resp.close();
+              } catch (_) {}
+            }
+          });
+          server.listen((request) async {
+            switch (request.uri.path) {
+              case '/redirect-loopback':
+                request.response.statusCode = 302;
+                request.response.headers.set(
+                  HttpHeaders.locationHeader,
+                  'http://127.0.0.1:${server.port}/secret',
+                );
+                await request.response.close();
+              case '/hang-500':
+                request.response.statusCode = 500;
+                request.response.write('err');
+                await request.response.flush();
+                // Intentionally keep stream open; client must not hang on drain().
+                openResponses.add(request.response);
+              case '/secret':
+                request.response
+                  ..statusCode = 200
+                  ..write('tf://should-never-reach.example.com');
+                await request.response.close();
+            }
+          });
+
+          final client = DartSubscriptionHttpClient(
+            readTimeout: const Duration(seconds: 2),
+          );
+          final base = 'http://127.0.0.1:${server.port}';
+
+          // 1. Default client rejects direct loopback SSRF targets.
+          await expectLater(
+            client.fetchBody(
+              Uri.parse('$base/secret'),
+              route: const SubscriptionFetchRoute.direct(),
+            ),
+            throwsA(isA<SubscriptionException>()),
+          );
+
+          // 2. Redirects from https->http, public->RFC1918, or to loopback are blocked,
+          //    and /hang-500 closes immediately without hanging on response.drain().
+          await expectLater(
+            DartSubscriptionHttpClient.validateRedirectTarget(
+              Uri.parse('http://example.com/downgrade'),
+              previousUri: Uri.parse('https://example.com/sub'),
+              initialUri: Uri.parse('https://example.com/sub'),
+            ),
+            throwsA(isA<SubscriptionException>()),
+          );
+          await expectLater(
+            DartSubscriptionHttpClient.validateRedirectTarget(
+              Uri.parse('https://10.0.0.1/internal'),
+              previousUri: Uri.parse('https://example.com/sub'),
+              initialUri: Uri.parse('https://example.com/sub'),
+            ),
+            throwsA(isA<SubscriptionException>()),
+          );
+
+          final hangClient = DartSubscriptionHttpClient(
+            readTimeout: const Duration(seconds: 3),
+            allowLoopback: true,
+          );
+          await expectLater(
+            hangClient.fetchBody(
+              Uri.parse('$base/redirect-loopback'),
+              route: const SubscriptionFetchRoute.direct(),
+            ),
+            throwsA(isA<SubscriptionException>()),
+          );
+
+          final sw = Stopwatch()..start();
+          await expectLater(
+            hangClient.fetchBody(
+              Uri.parse('$base/hang-500'),
+              route: const SubscriptionFetchRoute.direct(),
+            ),
+            throwsA(
+              isA<SubscriptionException>()
+                  .having((e) => e.code, 'code', SubscriptionErrorCode.http)
+                  .having((e) => e.statusCode, 'statusCode', 500),
+            ),
+          );
+          sw.stop();
+          expect(sw.elapsedMilliseconds, lessThan(500));
         }, _PassthroughHttpOverrides());
       },
     );

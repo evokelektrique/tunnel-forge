@@ -477,4 +477,55 @@ void main() {
     expect(savedRow.psk, isEmpty);
     expect(savedRow.secretsMissing, isFalse);
   });
+
+  testWidgets('validates PPP RFC limits for username and password', (
+    tester,
+  ) async {
+    final store = await buildStore();
+    const profile = Profile(
+      id: 'profile-ppp-limits',
+      displayName: 'Office',
+      server: 'vpn.example.com',
+      user: 'alice',
+      protocol: TunnelProtocol.pptp,
+    );
+    await store.upsertProfile(profile, password: 'valid', psk: '');
+
+    await pumpHost(tester, store: store, profileId: profile.id);
+
+    final userField = find.byKey(const Key('username_field'));
+    final passwordField = find.byKey(const Key('password_field'));
+
+    // Password > 256 UTF-16 code units triggers RFC 2759 error and blocks Save.
+    await tester.enterText(passwordField, 'a' * 257);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('256 characters (RFC 2759'), findsOneWidget);
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final unchanged = await store.loadProfileWithSecrets(profile.id);
+    expect(unchanged!.password, 'valid');
+
+    // Username > 255 UTF-8 bytes triggers RFC 1334/1994 error and blocks Save.
+    await tester.enterText(passwordField, 'okpw');
+    await tester.enterText(userField, 'u' * 256);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('255 UTF-8 bytes (RFC 1334'), findsOneWidget);
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final unchangedUser = await store.loadProfileWithSecrets(profile.id);
+    expect(unchangedUser!.profile.user, 'alice');
+
+    // 256-char ASCII password (> 255 bytes PAP limit, <= 256 chars MS-CHAPv2) warns but saves.
+    await tester.enterText(userField, 'alice');
+    await tester.enterText(passwordField, 'p' * 256);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('255-byte PAP limit (RFC 1334)'), findsOneWidget);
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final updated = await store.loadProfileWithSecrets(profile.id);
+    expect(updated!.password, 'p' * 256);
+  });
 }

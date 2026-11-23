@@ -189,6 +189,9 @@ class ProfileFormState extends Equatable {
   final bool saved;
   final bool secureStorageWriteFailed;
 
+  String? get userErrorText => _userValidationMessage(user);
+  String? get passwordErrorText => _passwordValidationMessage(password);
+  String? get passwordHelperText => _passwordPapWarningMessage(password);
   String? get dns1ErrorText =>
       dnsAutomatic ? null : _dnsErrorText('DNS 1', dns1, dns1Protocol);
   String? get dns2ErrorText =>
@@ -276,6 +279,39 @@ class ProfileFormState extends Equatable {
     saved,
     secureStorageWriteFailed,
   ];
+}
+
+String? _userValidationMessage(String value) {
+  final bytes = Profile.utf8ByteLength(value);
+  if (bytes > Profile.maxPppUsernameUtf8Bytes) {
+    return AppL10n.current.usernameTooLong(
+      Profile.maxPppUsernameUtf8Bytes,
+      bytes,
+    );
+  }
+  return null;
+}
+
+String? _passwordValidationMessage(String value) {
+  if (value.length > Profile.maxPppMschapV2PasswordUtf16CodeUnits) {
+    return AppL10n.current.passwordTooLong(
+      Profile.maxPppMschapV2PasswordUtf16CodeUnits,
+      value.length,
+    );
+  }
+  return null;
+}
+
+String? _passwordPapWarningMessage(String value) {
+  if (value.length > Profile.maxPppMschapV2PasswordUtf16CodeUnits) {
+    return null;
+  }
+  if (Profile.utf8ByteLength(value) > Profile.maxPppPapPasswordUtf8Bytes) {
+    return AppL10n.current.passwordPapLimitWarning(
+      Profile.maxPppPapPasswordUtf8Bytes,
+    );
+  }
+  return null;
 }
 
 String? _mtuValidationMessage(String value) {
@@ -446,6 +482,18 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     if (serverTrim.isEmpty) {
       _log(LogLevel.debug, 'Profile save blocked: empty server');
       emit(_messageState(AppL10n.current.enterServerAddress));
+      return null;
+    }
+    final userErrorText = state.userErrorText;
+    if (userErrorText != null) {
+      _log(LogLevel.debug, 'Profile save blocked: username exceeds RFC limit');
+      emit(_messageState(userErrorText));
+      return null;
+    }
+    final passwordErrorText = state.passwordErrorText;
+    if (passwordErrorText != null) {
+      _log(LogLevel.debug, 'Profile save blocked: password exceeds RFC limit');
+      emit(_messageState(passwordErrorText));
       return null;
     }
     final mtuErrorText = state.mtuErrorText;

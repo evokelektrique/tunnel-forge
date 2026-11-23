@@ -966,6 +966,63 @@ void main() {
     expect(connectivityStatusText(tester), '84 ms');
   });
 
+  testWidgets('proxy mode forwards configured proxy auth credentials to connectivity checks', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      ProfileStore.prefsKeyProfilesJson: jsonEncode([
+        {
+          'id': 'widget_test_proxy_auth_connectivity',
+          'displayName': 'Proxy Auth Connectivity',
+          'server': 'vpn.test.example',
+          'user': '',
+          'dnsAutomatic': true,
+          'dns1Host': '',
+          'dns1Protocol': 'dnsOverUdp',
+          'dns2Host': '',
+          'dns2Protocol': 'dnsOverUdp',
+        },
+      ]),
+      ProfileStore.prefsKeyLastProfileId: 'widget_test_proxy_auth_connectivity',
+      ProfileStore.prefsKeyConnectionMode: 'proxyOnly',
+      ProfileStore.prefsKeyProxyHttpPort: 18080,
+      ProfileStore.prefsKeyProxyAuthEnabled: true,
+      ProfileStore.prefsKeyProxyAuthUsername: 'proxyuser',
+    });
+    final secrets = _seededSecrets('widget_test_proxy_auth_connectivity');
+    await secrets.write(ProfileStore.secretKeyProxyAuthPassword, 'proxypass');
+    final checker = FakeConnectivityChecker();
+    installVpnChannelMock(<String>[]);
+    addTearDown(uninstallVpnChannelMock);
+
+    await tester.pumpWidget(
+      TunnelForgeApp(
+        onboardingRepository: const _AcceptedOnboardingRepository(),
+        profileStore: ProfileStore(secretsOverride: secrets),
+        connectivityChecker: checker,
+      ),
+    );
+
+    await tester.pump();
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    await simulateHostTunnelState(tester, VpnTunnelState.connected, 'proxy0');
+    await tester.pump();
+
+    expect(checker.requests, [
+      const ConnectivityPingRequest.localHttpProxy(
+        url: ConnectivityCheckSettings.defaultUrl,
+        timeoutMs: ConnectivityCheckSettings.defaultTimeoutMs,
+        proxyPort: 18080,
+        proxyUsername: 'proxyuser',
+        proxyPassword: 'proxypass',
+      ),
+    ]);
+    expect(connectivityStatusText(tester), '84 ms');
+  });
+
   testWidgets('closing editor for another profile returns to the picker list', (
     WidgetTester tester,
   ) async {

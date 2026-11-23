@@ -61,6 +61,7 @@ class _AppSelectorViewState extends State<_AppSelectorView> {
   @override
   void dispose() {
     _searchController.dispose();
+    _selectorIconCache.clear();
     super.dispose();
   }
 
@@ -174,6 +175,7 @@ class _AppSelectorViewState extends State<_AppSelectorView> {
                   final selected = state.selected.contains(app.packageName);
                   return SwitchListTile(
                     secondary: _SelectorAppIcon(
+                      key: ValueKey<String>(app.packageName),
                       packageName: app.packageName,
                       loadIcon: widget.loadIcon,
                     ),
@@ -210,7 +212,11 @@ class _AppSelectorViewState extends State<_AppSelectorView> {
 final Map<String, Uint8List?> _selectorIconCache = {};
 
 class _SelectorAppIcon extends StatefulWidget {
-  const _SelectorAppIcon({required this.packageName, required this.loadIcon});
+  const _SelectorAppIcon({
+    super.key,
+    required this.packageName,
+    required this.loadIcon,
+  });
 
   final String packageName;
   final Future<Uint8List?> Function(String packageName) loadIcon;
@@ -229,6 +235,16 @@ class _SelectorAppIconState extends State<_SelectorAppIcon> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant _SelectorAppIcon oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.packageName != widget.packageName) {
+      _bytes = null;
+      _done = false;
+      _load();
+    }
+  }
+
   Future<void> _load() async {
     final key = widget.packageName;
     if (_selectorIconCache.containsKey(key)) {
@@ -241,7 +257,7 @@ class _SelectorAppIconState extends State<_SelectorAppIcon> {
     }
     final bytes = await widget.loadIcon(key);
     _selectorIconCache[key] = bytes;
-    if (!mounted) return;
+    if (!mounted || key != widget.packageName) return;
     setState(() {
       _bytes = bytes;
       _done = true;

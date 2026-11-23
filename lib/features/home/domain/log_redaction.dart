@@ -10,22 +10,26 @@ final RegExp _logUriPattern = RegExp(
   r'\b(?:[a-z][a-z0-9+.-]*):\/\/[^\s]+',
   caseSensitive: false,
 );
-final RegExp _logSecretFieldPattern = _logKeyValuePattern(<String>[
-  'password',
-  'psk',
-  'secret',
-  'token',
-  'cookie',
-  'authorization',
-  'auth',
-  'user',
-  'username',
-  'displayName',
-  'profileName',
-  'name',
-  'file',
-  'filename',
-]);
+final RegExp _logSecretFieldPattern = _logKeyValuePattern(
+  <String>[
+    'password',
+    'psk',
+    'secret',
+    'token',
+    'cookie',
+    'authorization',
+    'auth',
+    'user',
+    'username',
+    'displayName',
+    'profileName',
+    'name',
+    'file',
+    'filename',
+  ],
+  allowCommas: true,
+  allowCompoundKeys: true,
+);
 final RegExp _logDnsFieldPattern = _logKeyValuePattern(<String>[
   'dns',
 ], allowCommas: true);
@@ -46,6 +50,9 @@ final RegExp _logLocationFieldPattern = _logKeyValuePattern(<String>[
 final RegExp _logContextFieldPattern = RegExp(
   "\\b(server|host|hostname|dns|uri|url|target)\\b(\\s+)(\\([^)]+\\)|\"[^\"]*\"|'[^']*'|[^\\s,;]+)",
   caseSensitive: false,
+);
+final RegExp _logIpv6Pattern = RegExp(
+  r'(?<![0-9A-Za-z:])(?:\[(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:%[A-Za-z0-9._-]+)?\](?::\d{1,5})?|(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}(?:%[A-Za-z0-9._-]+)?|(?:[0-9A-Fa-f]{1,4}:){1,7}:(?:%[A-Za-z0-9._-]+)?|:(?::[0-9A-Fa-f]{1,4}){1,7}(?:%[A-Za-z0-9._-]+)?|(?:[0-9A-Fa-f]{1,4}:){1,6}(?::[0-9A-Fa-f]{1,4}){1,6}(?:%[A-Za-z0-9._-]+)?|::(?:[fF]{4}:)?(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9A-Fa-f]{1,4}:){1,5}:(?:\d{1,3}\.){3}\d{1,3})(?![0-9A-Za-z:])',
 );
 final RegExp _logIpv4Pattern = RegExp(
   r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b',
@@ -94,6 +101,13 @@ String redactLogMessage(String input) {
     if (replacement == null) return match.group(0)!;
     return '${match.group(1)}${match.group(2)}${_preserveLogWrapping(rawValue, replacement)}';
   });
+  output = output.replaceAllMapped(_logIpv6Pattern, (match) {
+    final value = match.group(0)!;
+    return _preserveLogWrapping(
+      value,
+      _logPlaceholderWithPort(value, '[REDACTED_HOST]'),
+    );
+  });
   output = output.replaceAllMapped(_logIpv4Pattern, (match) {
     final value = match.group(0)!;
     if (_isLocalIpv4Endpoint(value)) return value;
@@ -121,11 +135,22 @@ String _replaceLogKeyedValues(
   });
 }
 
-RegExp _logKeyValuePattern(List<String> keys, {bool allowCommas = false}) {
+RegExp _logKeyValuePattern(
+  List<String> keys, {
+  bool allowCommas = false,
+  bool allowCompoundKeys = false,
+}) {
   final body = keys.map(RegExp.escape).join('|');
-  final bareValueClass = allowCommas ? '[^\\s;]+' : '[^\\s,;]+';
+  final keyPattern = allowCompoundKeys
+      ? '(?:[A-Za-z0-9]+_)*(?:$body)|(?:[A-Za-z0-9]+_)+key'
+      : body;
+  final bareValueClass =
+      allowCommas ? r'(?:[^\s,;]|,(?=[^\s;]))+' : r'[^\s,;]+';
   final valueClass = '("[^"]*"|\'[^\']*\'|\\([^)]+\\)|$bareValueClass)';
-  return RegExp('\\b($body)\\b(\\s*[=:]\\s*)$valueClass', caseSensitive: false);
+  return RegExp(
+    '\\b($keyPattern)\\b(\\s*[=:]\\s*)$valueClass',
+    caseSensitive: false,
+  );
 }
 
 String? _logLocationPlaceholder(String key, String value) {
@@ -139,6 +164,9 @@ String? _logLocationPlaceholder(String key, String value) {
     'uri' || 'url' => '[REDACTED_URI]',
     _ => '[REDACTED_HOST]',
   };
+  if (_logIpv6Pattern.hasMatch(token)) {
+    return _logPlaceholderWithPort(token, placeholder);
+  }
   if (_logIpv4EndpointPattern.hasMatch(token)) {
     return _logPlaceholderWithPort(token, placeholder);
   }
@@ -184,9 +212,17 @@ String _preserveLogWrapping(String original, String replacement) {
 }
 
 String _logPlaceholderWithPort(String original, String placeholder) {
-  final colon = original.lastIndexOf(':');
-  if (colon <= 0 || colon == original.length - 1) return placeholder;
-  final port = original.substring(colon + 1);
+  final core = _trimLogWrappedToken(original);
+  if (core.startsWith('[')) {
+    final match = RegExp(r'\]:(\d{1,5})$').firstMatch(core);
+    if (match == null) return placeholder;
+    return '$placeholder:${match.group(1)}';
+  }
+  final firstColon = core.indexOf(':');
+  final lastColon = core.lastIndexOf(':');
+  if (firstColon != lastColon) return placeholder;
+  if (lastColon <= 0 || lastColon == core.length - 1) return placeholder;
+  final port = core.substring(lastColon + 1);
   if (!RegExp(r'^\d{1,5}$').hasMatch(port)) return placeholder;
   return '$placeholder:$port';
 }

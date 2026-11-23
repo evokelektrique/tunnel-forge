@@ -6,11 +6,15 @@ import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/subscriptions/data/subscription_bridge.dart';
 import 'package:tunnel_forge/features/subscriptions/data/subscription_contract.dart';
+import 'package:tunnel_forge/features/subscriptions/data/subscription_http_client.dart';
 import 'package:tunnel_forge/features/subscriptions/data/subscription_sync_service.dart';
 import 'package:tunnel_forge/features/subscriptions/domain/subscription_models.dart';
 
 /// Entrypoint body executed inside Android WorkManager's headless [FlutterEngine].
-Future<void> runSubscriptionBackgroundMain() async {
+Future<void> runSubscriptionBackgroundMain({
+  ProfileStore? profileStore,
+  SubscriptionHttpClient? httpClient,
+}) async {
   WidgetsFlutterBinding.ensureInitialized();
   final bridge = SubscriptionBridge();
 
@@ -30,10 +34,11 @@ Future<void> runSubscriptionBackgroundMain() async {
     );
   }
 
-  final store = ProfileStore(onLog: writeLog);
+  final store = profileStore ?? ProfileStore(onLog: writeLog);
   final syncService = SubscriptionSyncService(
     profileStore: store,
     bridge: bridge,
+    httpClient: httpClient,
     onLog: writeLog,
   );
 

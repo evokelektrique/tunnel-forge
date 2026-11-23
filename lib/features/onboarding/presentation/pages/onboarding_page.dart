@@ -14,8 +14,7 @@ class OnboardingPage extends StatefulWidget {
   State<OnboardingPage> createState() => _OnboardingPageState();
 }
 
-class _OnboardingPageState extends State<OnboardingPage>
-    with SingleTickerProviderStateMixin {
+class _OnboardingPageState extends State<OnboardingPage> {
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<OnboardingBloc, OnboardingState>(
@@ -556,7 +555,6 @@ class _ActionSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isExiting = state.status == OnboardingFlowStatus.exiting;
     final t = AppL10n.of(context);
     final brightness = Theme.of(context).brightness;
     final semanticColors =
@@ -569,10 +567,8 @@ class _ActionSection extends StatelessWidget {
         ? const Color(0xFF5F6B77)
         : const Color(0xFFB4BEC8);
     final isVisuallyEnabled =
-        !isExiting &&
-        (state.isReadOnly || isLanguage || isIntro || state.canAgree);
+        state.isReadOnly || isLanguage || isIntro || state.canAgree;
     void primaryAction() {
-      if (isExiting) return;
       if (state.isReadOnly) {
         onCancel();
         return;
@@ -615,21 +611,14 @@ class _ActionSection extends StatelessWidget {
                     borderRadius: BorderRadius.circular(18),
                   ),
                   child: Center(
-                    child: isExiting
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Text(
-                            _primaryLabel(t),
-                            style: Theme.of(context).textTheme.labelLarge
-                                ?.copyWith(
-                                  color: isVisuallyEnabled
-                                      ? semanticColors.onConnected
-                                      : disabledLabelColor,
-                                ),
-                          ),
+                    child: Text(
+                      _primaryLabel(t),
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: isVisuallyEnabled
+                            ? semanticColors.onConnected
+                            : disabledLabelColor,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -642,7 +631,7 @@ class _ActionSection extends StatelessWidget {
               width: double.infinity,
               child: TextButton(
                 key: const Key('onboarding_cancel_button'),
-                onPressed: isExiting ? null : onCancel,
+                onPressed: onCancel,
                 style: TextButton.styleFrom(
                   overlayColor: Colors.transparent,
                   animationDuration: Duration.zero,
