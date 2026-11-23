@@ -306,16 +306,24 @@ configure<ApplicationExtension> {
             proguardFiles("proguard-rules.pro")
         }
         debug {
+            providers.gradleProperty("tunnelForgeDebugAppIdSuffix").orNull?.takeIf { it.isNotBlank() }?.let {
+                applicationIdSuffix = it
+            }
             val collectCoverage = providers.gradleProperty("tunnelForgeCoverage").isPresent
             enableUnitTestCoverage = collectCoverage
             enableAndroidTestCoverage = collectCoverage
 
-            // One-shot KEYMAT log after Quick Mode (sensitive). Release builds omit this flag.
-            externalNativeBuild {
-                cmake {
-                    arguments += listOf("-DTUNNEL_FORGE_DEBUG_ESP_KEYMAT=1")
-                    if (collectCoverage) {
-                        arguments += "-DTUNNEL_FORGE_NATIVE_COVERAGE=ON"
+            // Opt-in sensitive KEYMAT log: pass -PtunnelForgeDebugEspKeymat=1 when debugging IPsec interop.
+            val debugEspKeymat = providers.gradleProperty("tunnelForgeDebugEspKeymat").orNull == "1"
+            if (debugEspKeymat || collectCoverage) {
+                externalNativeBuild {
+                    cmake {
+                        if (debugEspKeymat) {
+                            arguments += listOf("-DTUNNEL_FORGE_DEBUG_ESP_KEYMAT=1")
+                        }
+                        if (collectCoverage) {
+                            arguments += "-DTUNNEL_FORGE_NATIVE_COVERAGE=ON"
+                        }
                     }
                 }
             }

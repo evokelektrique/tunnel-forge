@@ -233,4 +233,26 @@ class TunnelVpnServiceTest {
             VpnDisconnectReasonPolicy.systemDestroyReason(taskRemoved = true),
         )
     }
+
+    @Test
+    fun vpnDisconnectReasonPolicySuppressesSystemDestroyAfterAppStop() {
+        assertFalse(
+            VpnDisconnectReasonPolicy.shouldReportSystemDestroy(
+                hasActiveSession = true,
+                stopRequested = true,
+            ),
+        )
+        assertFalse(
+            VpnDisconnectReasonPolicy.shouldReportSystemDestroy(
+                hasActiveSession = false,
+                stopRequested = false,
+            ),
+        )
+        assertTrue(
+            VpnDisconnectReasonPolicy.shouldReportSystemDestroy(
+                hasActiveSession = true,
+                stopRequested = false,
+            ),
+        )
+    }
 }

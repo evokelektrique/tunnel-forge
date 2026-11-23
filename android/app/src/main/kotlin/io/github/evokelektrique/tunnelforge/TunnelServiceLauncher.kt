@@ -26,6 +26,9 @@ internal object TunnelServiceLauncher {
                 putExtra(ProxyTunnelService.EXTRA_PROXY_HTTP_PORT, config.proxyHttpPort)
                 putExtra(ProxyTunnelService.EXTRA_PROXY_SOCKS_PORT, config.proxySocksPort)
                 putExtra(ProxyTunnelService.EXTRA_PROXY_ALLOW_LAN, config.proxyAllowLan)
+                putExtra(ProxyTunnelService.EXTRA_PROXY_AUTH_ENABLED, config.proxyAuthEnabled)
+                putExtra(ProxyTunnelService.EXTRA_PROXY_AUTH_USERNAME, config.proxyAuthUsername)
+                putExtra(ProxyTunnelService.EXTRA_PROXY_AUTH_PASSWORD, config.proxyAuthPassword)
             }
         } else {
             Intent(context, TunnelVpnService::class.java).apply {
@@ -45,6 +48,9 @@ internal object TunnelServiceLauncher {
                 putExtra(TunnelVpnService.EXTRA_PROXY_HTTP_PORT, config.proxyHttpPort)
                 putExtra(TunnelVpnService.EXTRA_PROXY_SOCKS_PORT, config.proxySocksPort)
                 putExtra(TunnelVpnService.EXTRA_PROXY_ALLOW_LAN, config.proxyAllowLan)
+                putExtra(TunnelVpnService.EXTRA_PROXY_AUTH_ENABLED, config.proxyAuthEnabled)
+                putExtra(TunnelVpnService.EXTRA_PROXY_AUTH_USERNAME, config.proxyAuthUsername)
+                putExtra(TunnelVpnService.EXTRA_PROXY_AUTH_PASSWORD, config.proxyAuthPassword)
                 putStringArrayListExtra(
                     TunnelVpnService.EXTRA_SPLIT_TUNNEL_INCLUSIVE_PACKAGES,
                     ArrayList(config.inclusivePackages),

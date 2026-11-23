@@ -4,6 +4,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 internal data class QuickSettingsStrings(
     val defaultLabel: String,
@@ -39,9 +41,21 @@ internal data class QuickSettingsTilePresentation(
 internal object QuickSettingsTileController {
     @Volatile
     private var appContext: Context? = null
+    private val pendingConnectToken = AtomicReference<String?>(null)
 
     fun init(context: Context) {
         appContext = context.applicationContext
+    }
+
+    fun issueConnectLaunchToken(): String {
+        val token = UUID.randomUUID().toString()
+        pendingConnectToken.set(token)
+        return token
+    }
+
+    fun consumeConnectLaunchToken(token: String?): Boolean {
+        if (token.isNullOrBlank()) return false
+        return pendingConnectToken.compareAndSet(token, null)
     }
 
     fun requestUpdate(context: Context? = appContext) {

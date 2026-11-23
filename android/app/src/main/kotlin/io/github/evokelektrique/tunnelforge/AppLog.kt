@@ -57,6 +57,8 @@ private val secretFieldPattern =
             "file",
             "filename",
         ),
+        allowCommas = true,
+        allowCompoundKeys = true,
     )
 private val dnsFieldPattern = keyValuePattern(listOf("dns"), allowCommas = true)
 private val locationFieldPattern =
@@ -81,6 +83,10 @@ private val contextFieldPattern =
     Regex(
         """\b(server|host|hostname|dns|uri|url|target)\b(\s+)(\([^)]+\)|"[^"]*"|'[^']*'|[^\s,;]+)""",
         RegexOption.IGNORE_CASE,
+    )
+private val ipv6Pattern =
+    Regex(
+        """(?<![0-9A-Za-z:])(?:\[(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:%[A-Za-z0-9._-]+)?\](?::\d{1,5})?|(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}(?:%[A-Za-z0-9._-]+)?|(?:[0-9A-Fa-f]{1,4}:){1,7}:(?:%[A-Za-z0-9._-]+)?|:(?::[0-9A-Fa-f]{1,4}){1,7}(?:%[A-Za-z0-9._-]+)?|(?:[0-9A-Fa-f]{1,4}:){1,6}(?::[0-9A-Fa-f]{1,4}){1,6}(?:%[A-Za-z0-9._-]+)?|::(?:[fF]{4}:)?(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9A-Fa-f]{1,4}:){1,5}:(?:\d{1,3}\.){3}\d{1,3})(?![0-9A-Za-z:])""",
     )
 private val ipv4Pattern =
     Regex("""\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b""")
@@ -109,6 +115,10 @@ internal fun sanitizeLogMessage(input: String): String {
             val rawValue = match.groupValues[3]
             val replacement = locationPlaceholder(key, rawValue) ?: return@replace match.value
             "$key$separator${preserveWrapping(rawValue, replacement)}"
+        }
+    output =
+        ipv6Pattern.replace(output) { match ->
+            preserveWrapping(match.value, placeholderWithPort(match.value, "[REDACTED_HOST]"))
         }
     output =
         ipv4Pattern.replace(output) { match ->
@@ -156,6 +166,7 @@ private fun looksLikeSensitiveEndpoint(rawValue: String): Boolean {
     val value = unwrapLogValue(rawValue)
     if (uriPattern.containsMatchIn(value)) return true
     if (ipv4EndpointPattern.matches(value)) return !isLocalIpv4Endpoint(value)
+    if (ipv6Pattern.matches(value)) return true
     return hostnameEndpointPattern.matches(value)
 }
 
@@ -165,6 +176,13 @@ private fun placeholderWithPort(
 ): String {
     if (placeholder == "[REDACTED_URI]") return placeholder
     val core = unwrapLogValue(rawValue)
+    if (core.startsWith("[")) {
+        val match = Regex("""\]:(\d{1,5})$""").find(core) ?: return placeholder
+        return "$placeholder:${match.groupValues[1]}"
+    }
+    if (core.indexOf(':') != core.lastIndexOf(':')) {
+        return placeholder
+    }
     val match = Regex(""":(\d{1,5})$""").find(core) ?: return placeholder
     return "$placeholder:${match.groupValues[1]}"
 }
@@ -215,11 +233,18 @@ private fun isLocalIpv4Endpoint(rawValue: String): Boolean {
 private fun keyValuePattern(
     keys: List<String>,
     allowCommas: Boolean = false,
+    allowCompoundKeys: Boolean = false,
 ): Regex {
     val body = keys.joinToString("|") { Regex.escape(it) }
-    val bareValuePattern = if (allowCommas) """[^\s;]+""" else """[^\s,;]+"""
+    val keyPattern =
+        if (allowCompoundKeys) {
+            """(?:[A-Za-z0-9]+_)*(?:$body)|(?:[A-Za-z0-9]+_)+key"""
+        } else {
+            body
+        }
+    val bareValuePattern = if (allowCommas) """(?:[^\s,;]|,(?=[^\s;]))+""" else """[^\s,;]+"""
     return Regex(
-        """\b($body)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|\([^)]+\)|$bareValuePattern)""",
+        """\b($keyPattern)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|\([^)]+\)|$bareValuePattern)""",
         RegexOption.IGNORE_CASE,
     )
 }

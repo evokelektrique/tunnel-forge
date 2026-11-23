@@ -23,6 +23,7 @@ import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.Socket
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
@@ -34,6 +35,10 @@ class TunnelVpnService : VpnService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessionLock = Any()
+    private val stopLifecycleExecutor =
+        Executors.newSingleThreadExecutor { task ->
+            Thread(task, "vpn-stop-lifecycle").apply { isDaemon = true }
+        }
     private val pendingStopSelfRunnable =
         Runnable {
             try {
@@ -119,7 +124,8 @@ class TunnelVpnService : VpnService() {
         cancelPendingStopSelf()
         val attemptId = currentAttemptId()
         val batteryAttemptId = attemptId.ifEmpty { lastSessionAttemptId }
-        if (hasActiveSession()) {
+        val wasStopRequested = sessionStopRequested
+        if (VpnDisconnectReasonPolicy.shouldReportSystemDestroy(hasActiveSession(), wasStopRequested)) {
             val (reason, uiDetail) = VpnDisconnectReasonPolicy.systemDestroyReason(taskRemovedDuringSession)
             val failureCode =
                 if (taskRemovedDuringSession) {
@@ -130,7 +136,6 @@ class TunnelVpnService : VpnService() {
             val failure = VpnAndroidFailure.map(failureCode)
             val profileLabel = currentProfileLabel()
             val wasConnected = sessionHasConnected
-            val wasStopRequested = sessionStopRequested
             recordDisconnectReason(
                 attemptId = attemptId,
                 reason = reason,
@@ -170,12 +175,12 @@ class TunnelVpnService : VpnService() {
     override fun onRevoke() {
         cancelPendingStopSelf()
         val attemptId = currentAttemptId()
-        if (hasActiveSession()) {
+        val wasStopRequested = sessionStopRequested
+        if (VpnDisconnectReasonPolicy.shouldReportSystemDestroy(hasActiveSession(), wasStopRequested)) {
             val failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_VPN_REVOKED)
             val uiDetail = "Disconnected: VPN revoked by Android"
             val profileLabel = currentProfileLabel()
             val wasConnected = sessionHasConnected
-            val wasStopRequested = sessionStopRequested
             recordDisconnectReason(
                 attemptId = attemptId,
                 reason = "revoked_by_android",
@@ -293,6 +298,9 @@ class TunnelVpnService : VpnService() {
                         ProxyTunnelService.DEFAULT_SOCKS_PORT,
                     )
                 val proxyAllowLan = intent.getBooleanExtra(EXTRA_PROXY_ALLOW_LAN, false)
+                val proxyAuthEnabled = intent.getBooleanExtra(EXTRA_PROXY_AUTH_ENABLED, false)
+                val proxyAuthUsername = intent.getStringExtra(EXTRA_PROXY_AUTH_USERNAME).orEmpty()
+                val proxyAuthPassword = intent.getStringExtra(EXTRA_PROXY_AUTH_PASSWORD).orEmpty()
                 val proxyConfig =
                     ProxyRuntimeConfig(
                         httpEnabled = true,
@@ -300,6 +308,9 @@ class TunnelVpnService : VpnService() {
                         socksEnabled = true,
                         socksPort = proxySocksPort,
                         allowLanConnections = proxyAllowLan,
+                        authEnabled = proxyAuthEnabled,
+                        authUsername = proxyAuthUsername,
+                        authPassword = proxyAuthPassword,
                     )
                 if (proxyConfig.httpPort == proxyConfig.socksPort) {
                     AppLog.e(TAG, "${prefixAttempt(attemptId)}ACTION_START invalid proxy ports http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort}")
@@ -332,6 +343,7 @@ class TunnelVpnService : VpnService() {
                     lastSessionAttemptId = attemptId
                     recordedDisconnectReason = null
                     taskRemovedDuringSession = false
+                    sessionStopRequested = false
                 }
                 activeProxyConfig = proxyConfig
                 activeServer = server
@@ -851,7 +863,6 @@ class TunnelVpnService : VpnService() {
                         break
                     }
                     AttemptResultKind.RECOVERABLE_DISCONNECT -> {
-                        sessionHasConnected = true
                         immediateSwitchReconnect =
                             networkInterruptEvent == NetworkTransitionEvent.ACTIVE_NETWORK_SWITCHED
                         if (!immediateSwitchReconnect && monitor.hasUsableNetwork()) {
@@ -870,7 +881,9 @@ class TunnelVpnService : VpnService() {
                                 profileLabel = currentProfileLabel(),
                             )
                         }
-                        activateBlockingTun(attemptId)
+                        if (sessionHasConnected) {
+                            activateBlockingTun(attemptId)
+                        }
                         closeLiveDataplane()
                     }
                 }
@@ -1158,32 +1171,10 @@ class TunnelVpnService : VpnService() {
             supervisorSignal.signalAll()
         }
         val capturedSetupThread = setupThread
+        val capturedEngineThread = engineThread
         val capturedAttemptId = synchronized(sessionLock) { activeAttemptId }
         val owner = capturedAttemptId.takeIf { it.isNotEmpty() }?.let(::nativeOwner)
         NativeTunnelSessions.shared.stopOwner(owner, reason = stopReason)
-        try {
-            if (capturedSetupThread != null && capturedSetupThread !== Thread.currentThread()) {
-                capturedSetupThread.join(8_000)
-            }
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
-        val capturedEngineThread = engineThread
-        try {
-            if (capturedEngineThread != null && capturedEngineThread !== Thread.currentThread()) {
-                capturedEngineThread.join(8_000)
-            }
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
-        synchronized(sessionLock) {
-            if (setupThread === capturedSetupThread) {
-                setupThread = null
-            }
-            if (engineThread === capturedEngineThread) {
-                engineThread = null
-            }
-        }
         closeLiveDataplane()
         val oldBlocking = blockingTunInterface
         blockingTunInterface = null
@@ -1196,8 +1187,38 @@ class TunnelVpnService : VpnService() {
         activeProfileName = null
         connectedEmitted.set(false)
         running.set(false)
-        owner?.let {
-            NativeTunnelSessions.shared.release(it, reason = "vpn service stopped")
+        val finishThreadTeardown =
+            Runnable {
+                try {
+                    if (capturedSetupThread != null && capturedSetupThread !== Thread.currentThread()) {
+                        capturedSetupThread.join(8_000)
+                    }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                try {
+                    if (capturedEngineThread != null && capturedEngineThread !== Thread.currentThread()) {
+                        capturedEngineThread.join(8_000)
+                    }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                synchronized(sessionLock) {
+                    if (setupThread === capturedSetupThread) {
+                        setupThread = null
+                    }
+                    if (engineThread === capturedEngineThread) {
+                        engineThread = null
+                    }
+                }
+                owner?.let {
+                    NativeTunnelSessions.shared.release(it, reason = "vpn service stopped")
+                }
+            }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            stopLifecycleExecutor.execute(finishThreadTeardown)
+        } else {
+            finishThreadTeardown.run()
         }
     }
 
@@ -1497,6 +1518,9 @@ class TunnelVpnService : VpnService() {
         const val EXTRA_PROXY_HTTP_PORT = "proxyHttpPort"
         const val EXTRA_PROXY_SOCKS_PORT = "proxySocksPort"
         const val EXTRA_PROXY_ALLOW_LAN = "proxyAllowLan"
+        const val EXTRA_PROXY_AUTH_ENABLED = "proxyAuthEnabled"
+        const val EXTRA_PROXY_AUTH_USERNAME = "proxyAuthUsername"
+        const val EXTRA_PROXY_AUTH_PASSWORD = "proxyAuthPassword"
 
         private const val CHANNEL_ID = "tunnel_forge_vpn"
         private const val NOTIFICATION_ID = 7101
@@ -1736,6 +1760,9 @@ internal object VpnStopAttemptPolicy {
 }
 
 internal object VpnDisconnectReasonPolicy {
+    fun shouldReportSystemDestroy(hasActiveSession: Boolean, stopRequested: Boolean): Boolean =
+        hasActiveSession && !stopRequested
+
     fun systemDestroyReason(taskRemoved: Boolean): Pair<String, String> =
         if (taskRemoved) {
             "destroyed_by_system_after_task_removed" to "Disconnected: service stopped after app removed from recents"

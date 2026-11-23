@@ -121,6 +121,27 @@ class AppLogTest {
         assertTrue(rendered.contains("filename=[REDACTED]"))
     }
 
+    @Test
+    fun renderForwardedMessageRedactsUnderscoreSecretsCommaTokensAndIpv6() {
+        val rendered =
+            AppLog.renderForwardedMessage(
+                "api_key=sec123,456 access_token=tok_a,tok_b host=2001:db8::1 peer=[2001:db8::2]:443",
+                null,
+            )
+
+        assertFalse(rendered.contains("sec123"))
+        assertFalse(rendered.contains(",456"))
+        assertFalse(rendered.contains("tok_a"))
+        assertFalse(rendered.contains("tok_b"))
+        assertFalse(rendered.contains("2001:db8::1"))
+        assertFalse(rendered.contains("2001:db8::2"))
+        assertTrue(rendered.contains("api_key=[REDACTED]"))
+        assertTrue(rendered.contains("access_token=[REDACTED]"))
+        assertTrue(rendered.contains("host=[REDACTED_HOST]"))
+        assertFalse(rendered.contains("[REDACTED_HOST]:1"))
+        assertTrue(rendered.contains("peer=[REDACTED_HOST]:443"))
+    }
+
     private fun captureThrowable(): Throwable {
         return try {
             throw IllegalStateException("boom")

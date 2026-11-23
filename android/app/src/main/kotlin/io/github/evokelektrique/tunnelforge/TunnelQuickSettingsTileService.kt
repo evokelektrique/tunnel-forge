@@ -22,6 +22,14 @@ class TunnelQuickSettingsTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        if (isLocked) {
+            unlockAndRun { handleTileClick() }
+            return
+        }
+        handleTileClick()
+    }
+
+    private fun handleTileClick() {
         val activeRuntime = QuickSettingsTileController.activeRuntimeSnapshot()
         val activeState = activeRuntime?.get(VpnContract.ARG_TUNNEL_STATE) as? String
         if (QuickSettingsTileController.isActiveTunnelState(activeState)) {
@@ -86,6 +94,7 @@ class TunnelQuickSettingsTileService : TileService() {
         val intent =
             Intent(this, MainActivity::class.java).apply {
                 action = MainActivity.ACTION_QUICK_SETTINGS_CONNECT
+                putExtra(MainActivity.EXTRA_QS_CONNECT_TOKEN, QuickSettingsTileController.issueConnectLaunchToken())
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

@@ -41,12 +41,17 @@
                 <data android:scheme="tf" />
             </intent-filter>
             <!-- Local profile import, not an Android App Link. -->
-            <intent-filter tools:ignore="AppLinkUrlError">
-                <action android:name="android.intent.action.VIEW" />
+            <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/vnd.tunnelforge.profile+json" />
+            </intent-filter>
+            <intent-filter tools:ignore="AppLinkUrlError">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
                 <data android:pathPattern=".*\\.tfp" />
             </intent-filter>
             <intent-filter>

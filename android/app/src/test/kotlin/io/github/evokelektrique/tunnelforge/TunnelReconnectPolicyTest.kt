@@ -191,58 +191,58 @@ class TunnelReconnectPolicyTest {
             ),
         )
         assertEquals(
-            "Work: Carrier lost.",
-            TunnelDisconnectNotification.formatDisconnectMessage(
-                detail = "Disconnected by peer",
+            TunnelDisconnectNotification.LocalizedReasonSpec(R.string.tunnel_reason_cdn_1),
+            TunnelDisconnectNotification.resolveReasonSpec(
                 failure = mapOf("namespace" to "l2tp-cdn", "code" to 1, "generalError" to 0),
-                profileLabel = "Work",
+                exitCode = 0,
             ),
         )
         assertEquals(
-            "Work: VPN server is shutting down.",
-            TunnelDisconnectNotification.formatDisconnectMessage(
-                detail = "Disconnected by peer",
+            TunnelDisconnectNotification.LocalizedReasonSpec(R.string.tunnel_reason_stopccn_6),
+            TunnelDisconnectNotification.resolveReasonSpec(
                 failure = mapOf("namespace" to "l2tp-stopccn", "code" to 6, "generalError" to 0),
-                profileLabel = "Work",
+                exitCode = 0,
             ),
         )
         assertEquals(
-            "Work: Server reported a general error: Unsupported mandatory attribute.",
-            TunnelDisconnectNotification.formatDisconnectMessage(
-                detail = "Disconnected by peer",
+            TunnelDisconnectNotification.LocalizedReasonSpec(
+                R.string.tunnel_reason_stopccn_2,
+                generalErrorResId = R.string.tunnel_reason_general_8,
+            ),
+            TunnelDisconnectNotification.resolveReasonSpec(
                 failure = mapOf("namespace" to "l2tp-stopccn", "code" to 2, "generalError" to 8),
-                profileLabel = "Work",
+                exitCode = 0,
             ),
         )
         assertEquals(
-            "Authentication failed.",
-            TunnelDisconnectNotification.formatDisconnectMessage(
-                detail = "PPP negotiation failed.",
+            TunnelDisconnectNotification.LocalizedReasonSpec(R.string.tunnel_reason_auth_failed),
+            TunnelDisconnectNotification.resolveReasonSpec(
                 failure = mapOf("namespace" to "mschap", "code" to 691, "generalError" to 0),
+                exitCode = 0,
             ),
         )
         assertEquals(
-            "Work: VPN was revoked by Android.",
-            TunnelDisconnectNotification.formatDisconnectMessage(
-                detail = "Disconnected: VPN revoked by Android",
+            TunnelDisconnectNotification.LocalizedReasonSpec(R.string.tunnel_reason_android_1),
+            TunnelDisconnectNotification.resolveReasonSpec(
                 failure = VpnAndroidFailure.map(VpnAndroidFailure.CODE_VPN_REVOKED),
-                profileLabel = "Work",
+                exitCode = 0,
             ),
         )
         assertEquals(
-            "Work: Superuser (root) permission was denied. Grant root access to TunnelForge to use PPTP.",
-            TunnelDisconnectNotification.formatDisconnectMessage(
-                detail = "Denied",
+            TunnelDisconnectNotification.LocalizedReasonSpec(R.string.tunnel_reason_engine_7),
+            TunnelDisconnectNotification.resolveReasonSpec(
                 failure = mapOf("namespace" to "engine", "code" to VpnBridge.EXIT_ROOT_DENIED, "generalError" to 0),
-                profileLabel = "Work",
+                exitCode = 0,
             ),
         )
         assertEquals(
-            "Work: PPTP control connection rejected (code 4).",
-            TunnelDisconnectNotification.formatDisconnectMessage(
-                detail = "PPTP control handshake failed.",
+            TunnelDisconnectNotification.LocalizedReasonSpec(
+                R.string.tunnel_reason_pptp_ctrl,
+                formatArg = 4,
+            ),
+            TunnelDisconnectNotification.resolveReasonSpec(
                 failure = mapOf("namespace" to "pptp-ctrl", "code" to 4, "generalError" to 0),
-                profileLabel = "Work",
+                exitCode = 0,
             ),
         )
         assertEquals(

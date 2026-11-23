@@ -70,6 +70,11 @@ class SubscriptionAutoUpdateWorker(
         val latch = CountDownLatch(1)
         val outcomeRef = AtomicReference(SubscriptionContract.OUTCOME_RETRY)
         mainHandler.post {
+            if (isStopped) {
+                outcomeRef.set(SubscriptionContract.OUTCOME_RETRY)
+                latch.countDown()
+                return@post
+            }
             try {
                 channel.invokeMethod(
                     SubscriptionContract.METHOD_RUN_SCHEDULED_UPDATE,
@@ -116,6 +121,11 @@ class SubscriptionAutoUpdateWorker(
         val engineRef = AtomicReference<FlutterEngine?>(null)
 
         mainHandler.post {
+            if (isStopped) {
+                outcomeRef.set(SubscriptionContract.OUTCOME_RETRY)
+                latch.countDown()
+                return@post
+            }
             try {
                 val loader = FlutterInjector.instance().flutterLoader()
                 if (!loader.initialized()) {
@@ -182,18 +192,27 @@ class SubscriptionAutoUpdateWorker(
             }
         }
 
-        val completed = latch.await(WORKER_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        val destroyLatch = CountDownLatch(1)
-        mainHandler.post {
+        val completed =
             try {
-                engineRef.getAndSet(null)?.destroy()
-            } catch (t: Throwable) {
-                AppLog.w(TAG, "Headless subscription engine destroy error: ${t.message}")
+                latch.await(WORKER_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             } finally {
-                destroyLatch.countDown()
+                val destroyLatch = CountDownLatch(1)
+                mainHandler.post {
+                    try {
+                        engineRef.getAndSet(null)?.destroy()
+                    } catch (t: Throwable) {
+                        AppLog.w(TAG, "Headless subscription engine destroy error: ${t.message}")
+                    } finally {
+                        destroyLatch.countDown()
+                    }
+                }
+                val savedInterrupt = Thread.interrupted()
+                try {
+                    destroyLatch.await(10L, TimeUnit.SECONDS)
+                } finally {
+                    if (savedInterrupt) Thread.currentThread().interrupt()
+                }
             }
-        }
-        destroyLatch.await(10L, TimeUnit.SECONDS)
 
         if (!completed) {
             SubscriptionNotification.cancelProgress(applicationContext)

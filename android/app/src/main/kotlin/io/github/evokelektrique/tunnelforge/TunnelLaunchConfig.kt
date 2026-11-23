@@ -21,6 +21,9 @@ internal data class TunnelLaunchConfig(
     val proxySocksPort: Int,
     val proxyAllowLan: Boolean,
     val protocol: String = VpnContract.PROTOCOL_L2TP,
+    val proxyAuthEnabled: Boolean = false,
+    val proxyAuthUsername: String = "",
+    val proxyAuthPassword: String = "",
 ) {
     val displayLabel: String
         get() = profileName.ifBlank { server }
@@ -76,6 +79,9 @@ internal data class TunnelLaunchConfig(
             val proxyHttpPort = sanitizePort(args[VpnContract.ARG_PROXY_HTTP_PORT], ProxyTunnelService.DEFAULT_HTTP_PORT)
             val proxySocksPort = sanitizePort(args[VpnContract.ARG_PROXY_SOCKS_PORT], ProxyTunnelService.DEFAULT_SOCKS_PORT)
             val proxyAllowLan = args[VpnContract.ARG_PROXY_ALLOW_LAN] as? Boolean ?: false
+            val proxyAuthEnabled = args[VpnContract.ARG_PROXY_AUTH_ENABLED] as? Boolean ?: false
+            val proxyAuthUsername = (args[VpnContract.ARG_PROXY_AUTH_USERNAME] as? String)?.trim().orEmpty()
+            val proxyAuthPassword = args[VpnContract.ARG_PROXY_AUTH_PASSWORD] as? String ?: ""
             return TunnelLaunchConfig(
                 profileId = profileId,
                 profileName = profileName,
@@ -96,6 +102,9 @@ internal data class TunnelLaunchConfig(
                 proxySocksPort = proxySocksPort,
                 proxyAllowLan = proxyAllowLan,
                 protocol = protocol,
+                proxyAuthEnabled = proxyAuthEnabled,
+                proxyAuthUsername = proxyAuthUsername,
+                proxyAuthPassword = proxyAuthPassword,
             )
         }
 

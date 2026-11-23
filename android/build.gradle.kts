@@ -27,11 +27,16 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 
-    if (name == "flutter_secure_storage") {
-        // Version 11.2.0's Groovy hasProperty check misses the AGP 9 library namespace.
+    val pluginNamespaces = mapOf(
+        "flutter_secure_storage" to "com.it_nomads.fluttersecurestorage",
+        "jni" to "com.github.dart_lang.jni",
+        "jni_flutter" to "com.github.dart_lang.jni_flutter",
+    )
+    pluginNamespaces[name]?.let { ns ->
+        // Older Groovy hasProperty("namespace") checks miss AGP 9's library namespace DSL.
         pluginManager.withPlugin("com.android.library") {
             extensions.configure<LibraryExtension> {
-                namespace = "com.it_nomads.fluttersecurestorage"
+                namespace = ns
             }
         }
     }

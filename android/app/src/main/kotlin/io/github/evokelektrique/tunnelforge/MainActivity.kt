@@ -891,6 +891,12 @@ class MainActivity : FlutterActivity() {
 
     private fun handleQuickSettingsConnectIntent(intent: Intent?) {
         if (intent?.action != ACTION_QUICK_SETTINGS_CONNECT) return
+        val token = intent.getStringExtra(EXTRA_QS_CONNECT_TOKEN)
+        setIntent(Intent(Intent.ACTION_MAIN))
+        if (!QuickSettingsTileController.consumeConnectLaunchToken(token)) {
+            AppLog.w(TAG, "qs_connect ignored: missing or invalid launch token")
+            return
+        }
         val channel = quickSettingsChannel
         if (!quickSettingsConnectConsumerReady || channel == null) {
             pendingQuickSettingsConnect = true
@@ -1090,6 +1096,8 @@ class MainActivity : FlutterActivity() {
     companion object {
         const val ACTION_QUICK_SETTINGS_CONNECT =
             "io.github.evokelektrique.tunnelforge.action.QUICK_SETTINGS_CONNECT"
+        const val EXTRA_QS_CONNECT_TOKEN =
+            "io.github.evokelektrique.tunnelforge.extra.QS_CONNECT_TOKEN"
         private const val TAG = "MainActivity"
         private const val REQUEST_VPN_PERMISSION = 0x4E50
         private const val REQUEST_POST_NOTIFICATIONS = 0x4E51

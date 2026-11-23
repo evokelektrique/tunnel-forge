@@ -150,6 +150,17 @@ internal class QuickSettingsConfigStore(
                 AppLog.e(TAG, "Failed to encrypt Quick Settings secrets", e)
                 null
             }
+        val encryptedProxyAuthPassword =
+            if (config.proxyAuthPassword.isEmpty()) {
+                null
+            } else {
+                try {
+                    cipher.encrypt(config.proxyAuthPassword.toByteArray(StandardCharsets.UTF_8))
+                } catch (e: Exception) {
+                    AppLog.e(TAG, "Failed to encrypt Quick Settings proxy auth password", e)
+                    null
+                }
+            }
         val secretsMissing = config.secretsMissing || encryptedSecrets == null
         val dns1 = config.dnsServers.getOrNull(0)
         val dns2 = config.dnsServers.getOrNull(1)
@@ -180,6 +191,11 @@ internal class QuickSettingsConfigStore(
             putInt(KEY_PROXY_HTTP_PORT, config.proxyHttpPort)
             putInt(KEY_PROXY_SOCKS_PORT, config.proxySocksPort)
             putBoolean(KEY_PROXY_ALLOW_LAN, config.proxyAllowLan)
+            putBoolean(KEY_PROXY_AUTH_ENABLED, config.proxyAuthEnabled)
+            putString(KEY_PROXY_AUTH_USERNAME, config.proxyAuthUsername)
+            if (encryptedProxyAuthPassword != null) {
+                putString(KEY_PROXY_AUTH_PASSWORD, encryptedProxyAuthPassword)
+            }
         }
     }
 
@@ -223,6 +239,11 @@ internal class QuickSettingsConfigStore(
             } else {
                 VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE
             }
+        val encryptedProxyAuth = store.getString(KEY_PROXY_AUTH_PASSWORD)
+        val decodedProxyAuthPassword =
+            encryptedProxyAuth?.let { encoded ->
+                cipher.decrypt(encoded)?.let { String(it, StandardCharsets.UTF_8) }
+            }.orEmpty()
         return TunnelLaunchConfig(
             profileId = store.getString(KEY_PROFILE_ID).orEmpty(),
             profileName = store.getString(KEY_PROFILE_NAME).orEmpty(),
@@ -251,6 +272,9 @@ internal class QuickSettingsConfigStore(
             ),
             proxyAllowLan = store.getBoolean(KEY_PROXY_ALLOW_LAN, false),
             protocol = protocol,
+            proxyAuthEnabled = store.getBoolean(KEY_PROXY_AUTH_ENABLED, false),
+            proxyAuthUsername = store.getString(KEY_PROXY_AUTH_USERNAME).orEmpty(),
+            proxyAuthPassword = decodedProxyAuthPassword,
         )
     }
 
@@ -332,6 +356,9 @@ internal class QuickSettingsConfigStore(
         private const val KEY_PROXY_HTTP_PORT = "proxy_http_port"
         private const val KEY_PROXY_SOCKS_PORT = "proxy_socks_port"
         private const val KEY_PROXY_ALLOW_LAN = "proxy_allow_lan"
+        private const val KEY_PROXY_AUTH_ENABLED = "proxy_auth_enabled"
+        private const val KEY_PROXY_AUTH_USERNAME = "proxy_auth_username"
+        private const val KEY_PROXY_AUTH_PASSWORD = "proxy_auth_password"
 
         fun create(context: Context): QuickSettingsConfigStore {
             val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
