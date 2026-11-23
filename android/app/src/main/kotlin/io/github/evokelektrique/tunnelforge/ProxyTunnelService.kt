@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -29,11 +30,15 @@ import kotlin.concurrent.withLock
  */
 class ProxyTunnelService : Service() {
     private val sessionLock = Any()
+    private val notificationLock = Any()
+    @Volatile
+    private var foregroundNotificationActive = false
     private val stopLifecycleExecutor =
         Executors.newSingleThreadExecutor { task ->
             Thread(task, "proxy-stop-lifecycle").apply { isDaemon = true }
         }
     private var worker: Thread? = null
+    @Volatile
     private var proxyRuntime: LocalProxyRuntime? = null
     private var proxyTransport: ProxyTransport? = null
     private var proxyLoopThread: Thread? = null
@@ -71,6 +76,9 @@ class ProxyTunnelService : Service() {
     }
 
     override fun onDestroy() {
+        synchronized(notificationLock) {
+            foregroundNotificationActive = false
+        }
         instance = null
         val wasStopRequested = stopRequested
         val attemptId = currentAttemptId()
@@ -111,7 +119,7 @@ class ProxyTunnelService : Service() {
                 if (ProxyTunnelServiceStopPolicy.shouldEmitStoppedOnActionStop(hadActiveSession)) {
                     emitTerminalState(VpnContract.TUNNEL_STOPPED, "Stopped by app", stoppedAttemptId)
                 }
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForegroundNotification()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -147,13 +155,13 @@ class ProxyTunnelService : Service() {
                 )
                 if (server.isNullOrBlank()) {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Invalid proxy arguments from the app.", attemptId)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopForegroundNotification()
                     stopSelf()
                     return START_NOT_STICKY
                 }
                 if (httpPort == socksPort) {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "HTTP and SOCKS5 ports must differ.", attemptId)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopForegroundNotification()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -529,7 +537,7 @@ class ProxyTunnelService : Service() {
                 }
             }
             if (shouldStopService) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForegroundNotification()
                 stopSelf()
             }
             if (nativeOwnerAcquired) {
@@ -1174,20 +1182,54 @@ class ProxyTunnelService : Service() {
     }
 
     private fun startForegroundWithType(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            startForeground(NOTIFICATION_ID, notification)
+        synchronized(notificationLock) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            foregroundNotificationActive = true
+        }
+    }
+
+    private fun stopForegroundNotification() {
+        synchronized(notificationLock) {
+            foregroundNotificationActive = false
+            stopForeground(STOP_FOREGROUND_REMOVE)
         }
     }
 
     private fun updateForegroundNotification(text: String) {
         startForegroundWithType(buildNotification(text))
+    }
+
+    private fun currentNotificationText(): String =
+        when (currentTunnelState) {
+            VpnContract.TUNNEL_CONNECTED ->
+                proxyRuntime?.endpointSummary()
+                    ?: AppLocaleSupport.getString(this, R.string.proxy_notification_starting)
+            VpnContract.TUNNEL_WAITING_FOR_NETWORK ->
+                AppLocaleSupport.getString(this, R.string.proxy_notification_waiting_network)
+            VpnContract.TUNNEL_RECONNECTING ->
+                AppLocaleSupport.getString(this, R.string.vpn_notification_reconnecting)
+            else -> AppLocaleSupport.getString(this, R.string.proxy_notification_starting)
+        }
+
+    private fun refreshForegroundNotificationIfActive() {
+        synchronized(notificationLock) {
+            if (!foregroundNotificationActive) return
+            val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            try {
+                nm.notify(NOTIFICATION_ID, buildNotification(currentNotificationText()))
+            } catch (_: SecurityException) {
+                // Permission may be revoked concurrently on Android 13+.
+            }
+        }
     }
 
     private fun createChannelIfNeeded() {
@@ -1279,12 +1321,26 @@ class ProxyTunnelService : Service() {
                 "Stopped proxy service before mode switch reason=$reason",
             )
             try {
-                svc.stopForeground(STOP_FOREGROUND_REMOVE)
+                svc.stopForegroundNotification()
                 svc.stopSelf()
             } catch (e: Exception) {
                 AppLog.w(TAG, "stopActiveSessionForModeSwitch", e)
             }
             return true
+        }
+
+        internal fun refreshNotificationLanguage(context: Context) {
+            val nm = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+            if (nm != null && nm.getNotificationChannel(CHANNEL_ID) != null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        AppLocaleSupport.getString(context, R.string.proxy_notification_title),
+                        NotificationManager.IMPORTANCE_LOW,
+                    ),
+                )
+            }
+            instance?.refreshForegroundNotificationIfActive()
         }
 
         @JvmStatic

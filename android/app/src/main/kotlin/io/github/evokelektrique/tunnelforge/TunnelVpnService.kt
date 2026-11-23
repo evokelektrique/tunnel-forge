@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
@@ -35,6 +36,9 @@ class TunnelVpnService : VpnService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessionLock = Any()
+    private val notificationLock = Any()
+    @Volatile
+    private var foregroundNotificationActive = false
     private val stopLifecycleExecutor =
         Executors.newSingleThreadExecutor { task ->
             Thread(task, "vpn-stop-lifecycle").apply { isDaemon = true }
@@ -168,6 +172,9 @@ class TunnelVpnService : VpnService() {
         synchronized(sessionLock) {
             lastSessionAttemptId = ""
         }
+        synchronized(notificationLock) {
+            foregroundNotificationActive = false
+        }
         instance = null
         super.onDestroy()
     }
@@ -201,7 +208,7 @@ class TunnelVpnService : VpnService() {
                 attemptId,
                 failure,
             )
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundNotification()
         } else {
             VpnTunnelEvents.emitEngineLog(
                 Log.WARN,
@@ -248,7 +255,7 @@ class TunnelVpnService : VpnService() {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_STOPPED, "Stopped by app", stoppedAttemptId)
                 }
                 TunnelDisconnectNotification.cancelAll(this)
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForegroundNotification()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -262,7 +269,7 @@ class TunnelVpnService : VpnService() {
                     AppLog.e(TAG, "${prefixAttempt(attemptId)}ACTION_START missing server")
                     VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}ACTION_START rejected: missing server")
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Invalid tunnel arguments from the app.", attemptId)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopForegroundNotification()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -316,7 +323,7 @@ class TunnelVpnService : VpnService() {
                     AppLog.e(TAG, "${prefixAttempt(attemptId)}ACTION_START invalid proxy ports http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort}")
                     VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}ACTION_START rejected: duplicate proxy ports")
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "HTTP and SOCKS5 ports must differ.", attemptId)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopForegroundNotification()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -460,7 +467,7 @@ class TunnelVpnService : VpnService() {
         activeServer = ""
         activeProfileName = null
         connectedEmitted.set(false)
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopForegroundNotification()
         stopSelf()
     }
 
@@ -1238,7 +1245,7 @@ class TunnelVpnService : VpnService() {
         blockingTunInterface = null
         closePfdQuietly(oldBlocking)
         try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundNotification()
         } catch (e: Exception) {
             AppLog.e(TAG, "stopForeground after tunnel", e)
         }
@@ -1427,20 +1434,52 @@ class TunnelVpnService : VpnService() {
     }
 
     private fun startForegroundWithType(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            startForeground(NOTIFICATION_ID, notification)
+        synchronized(notificationLock) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            foregroundNotificationActive = true
+        }
+    }
+
+    private fun stopForegroundNotification() {
+        synchronized(notificationLock) {
+            foregroundNotificationActive = false
+            stopForeground(STOP_FOREGROUND_REMOVE)
         }
     }
 
     private fun updateForegroundNotification(text: String) {
         startForegroundWithType(buildNotification(text))
+    }
+
+    private fun currentNotificationText(): String =
+        when (currentTunnelState) {
+            VpnContract.TUNNEL_CONNECTED -> connectedNotificationText()
+            VpnContract.TUNNEL_WAITING_FOR_NETWORK ->
+                AppLocaleSupport.getString(this, R.string.vpn_notification_waiting_network)
+            VpnContract.TUNNEL_RECONNECTING ->
+                AppLocaleSupport.getString(this, R.string.vpn_notification_reconnecting)
+            else -> AppLocaleSupport.getString(this, R.string.vpn_notification_connecting)
+        }
+
+    private fun refreshForegroundNotificationIfActive() {
+        synchronized(notificationLock) {
+            if (!foregroundNotificationActive) return
+            val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            try {
+                nm.notify(NOTIFICATION_ID, buildNotification(currentNotificationText()))
+            } catch (_: SecurityException) {
+                // Permission may be revoked concurrently on Android 13+.
+            }
+        }
     }
 
     private fun connectedNotificationText(): String {
@@ -1659,12 +1698,26 @@ class TunnelVpnService : VpnService() {
             svc.cancelPendingStopSelf()
             svc.stopTunnelInternal(stopReason = "mode switch: $reason")
             try {
-                svc.stopForeground(STOP_FOREGROUND_REMOVE)
+                svc.stopForegroundNotification()
                 svc.stopSelf()
             } catch (e: Exception) {
                 AppLog.w(TAG, "stopActiveSessionForModeSwitch", e)
             }
             return true
+        }
+
+        internal fun refreshNotificationLanguage(context: Context) {
+            val nm = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+            if (nm != null && nm.getNotificationChannel(CHANNEL_ID) != null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        AppLocaleSupport.getString(context, R.string.vpn_notification_channel_name),
+                        NotificationManager.IMPORTANCE_LOW,
+                    ),
+                )
+            }
+            instance?.refreshForegroundNotificationIfActive()
         }
 
         @JvmStatic

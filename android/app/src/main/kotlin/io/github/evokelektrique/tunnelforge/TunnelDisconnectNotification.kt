@@ -16,6 +16,21 @@ internal object TunnelDisconnectNotification {
     private const val NOTIFICATION_ID = 7103
     private const val RECONNECT_ALERT_NOTIFICATION_ID = 7104
     private val PEER_TEARDOWN_NAMESPACES = setOf("l2tp-stopccn", "l2tp-cdn", "pptp-cdn")
+    private val stateLock = Any()
+    private var lastDisconnectAlert: DisconnectAlertSnapshot? = null
+    private var lastStalledReconnect: StalledReconnectSnapshot? = null
+
+    private data class DisconnectAlertSnapshot(
+        val detail: String,
+        val failure: Map<String, Any>?,
+        val profileLabel: String?,
+        val exitCode: Int,
+        val wasConnected: Boolean,
+    )
+
+    private data class StalledReconnectSnapshot(
+        val profileLabel: String?,
+    )
 
     internal data class LocalizedReasonSpec(
         val resId: Int,
@@ -208,24 +223,101 @@ internal object TunnelDisconnectNotification {
         exitCode: Int = 0,
         wasConnected: Boolean = true,
     ) {
+        val snapshot =
+            DisconnectAlertSnapshot(
+                detail = detail,
+                failure = failure,
+                profileLabel = profileLabel,
+                exitCode = exitCode,
+                wasConnected = wasConnected,
+            )
+        synchronized(stateLock) {
+            lastDisconnectAlert = snapshot
+            lastStalledReconnect = null
+        }
+        postDisconnectAlert(context, snapshot, silent = false)
+    }
+
+    fun showStalledReconnect(
+        context: Context,
+        profileLabel: String? = null,
+    ) {
+        val snapshot = StalledReconnectSnapshot(profileLabel = profileLabel)
+        synchronized(stateLock) {
+            lastStalledReconnect = snapshot
+        }
+        postStalledReconnect(context, snapshot, silent = false)
+    }
+
+    fun cancelReconnectAlert(context: Context) {
+        synchronized(stateLock) {
+            lastStalledReconnect = null
+        }
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        nm.cancel(RECONNECT_ALERT_NOTIFICATION_ID)
+    }
+
+    fun cancelAll(context: Context) {
+        synchronized(stateLock) {
+            lastDisconnectAlert = null
+            lastStalledReconnect = null
+        }
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        nm.cancel(NOTIFICATION_ID)
+        nm.cancel(RECONNECT_ALERT_NOTIFICATION_ID)
+    }
+
+    fun refreshActiveNotifications(context: Context) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        if (nm.getNotificationChannel(CHANNEL_ID) != null) {
+            createChannelIfNeeded(AppLocaleSupport.localizedContext(context), nm)
+        }
+        val activeIds = runCatching { nm.activeNotifications.map { it.id }.toSet() }.getOrElse { emptySet() }
+        val disconnectToRefresh: DisconnectAlertSnapshot?
+        val reconnectToRefresh: StalledReconnectSnapshot?
+        synchronized(stateLock) {
+            disconnectToRefresh =
+                lastDisconnectAlert?.takeIf { NOTIFICATION_ID in activeIds }
+                    ?: run {
+                        lastDisconnectAlert = null
+                        null
+                    }
+            reconnectToRefresh =
+                lastStalledReconnect?.takeIf { RECONNECT_ALERT_NOTIFICATION_ID in activeIds }
+                    ?: run {
+                        lastStalledReconnect = null
+                        null
+                    }
+        }
+        disconnectToRefresh?.let { postDisconnectAlert(context, it, silent = true) }
+        reconnectToRefresh?.let { postStalledReconnect(context, it, silent = true) }
+    }
+
+    private fun postDisconnectAlert(
+        context: Context,
+        snapshot: DisconnectAlertSnapshot,
+        silent: Boolean,
+    ) {
         val resContext = AppLocaleSupport.localizedContext(context)
         val nm = notificationManagerIfPermitted(resContext) ?: return
-        nm.cancel(RECONNECT_ALERT_NOTIFICATION_ID)
+        if (!silent) {
+            nm.cancel(RECONNECT_ALERT_NOTIFICATION_ID)
+        }
         val pending = launchPendingIntent(context, NOTIFICATION_ID) ?: return
         val titleRes =
-            if (wasConnected) {
+            if (snapshot.wasConnected) {
                 R.string.vpn_notification_disconnected_title
             } else {
                 R.string.vpn_notification_connect_failed_title
             }
-        val specificReason = specificLocalizedReason(resContext, failure, exitCode)
+        val specificReason = specificLocalizedReason(resContext, snapshot.failure, snapshot.exitCode)
         val core =
             when {
                 specificReason != null -> specificReason
-                detail.isNotBlank() -> detail.trim()
+                snapshot.detail.isNotBlank() -> snapshot.detail.trim()
                 else -> resContext.getString(R.string.tunnel_reason_android_6)
             }
-        val cleanLabel = profileLabel?.trim().orEmpty()
+        val cleanLabel = snapshot.profileLabel?.trim().orEmpty()
         val body = if (cleanLabel.isEmpty()) core else "$cleanLabel: $core"
         postNotification(
             context = resContext,
@@ -235,19 +327,21 @@ internal object TunnelDisconnectNotification {
             body = body,
             pending = pending,
             category = NotificationCompat.CATEGORY_ERROR,
+            silent = silent,
         )
     }
 
-    fun showStalledReconnect(
+    private fun postStalledReconnect(
         context: Context,
-        profileLabel: String? = null,
+        snapshot: StalledReconnectSnapshot,
+        silent: Boolean,
     ) {
         val resContext = AppLocaleSupport.localizedContext(context)
         val nm = notificationManagerIfPermitted(resContext) ?: return
         val pending = launchPendingIntent(context, RECONNECT_ALERT_NOTIFICATION_ID) ?: return
         val body =
             formatStalledReconnectMessage(
-                profileLabel = profileLabel,
+                profileLabel = snapshot.profileLabel,
                 baseText = resContext.getString(R.string.vpn_notification_reconnecting_alert_body),
             )
         postNotification(
@@ -258,18 +352,8 @@ internal object TunnelDisconnectNotification {
             body = body,
             pending = pending,
             category = NotificationCompat.CATEGORY_STATUS,
+            silent = silent,
         )
-    }
-
-    fun cancelReconnectAlert(context: Context) {
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        nm.cancel(RECONNECT_ALERT_NOTIFICATION_ID)
-    }
-
-    fun cancelAll(context: Context) {
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        nm.cancel(NOTIFICATION_ID)
-        nm.cancel(RECONNECT_ALERT_NOTIFICATION_ID)
     }
 
     private fun notificationManagerIfPermitted(context: Context): NotificationManager? {
@@ -302,8 +386,9 @@ internal object TunnelDisconnectNotification {
         body: String,
         pending: PendingIntent,
         category: String,
+        silent: Boolean = false,
     ) {
-        val notification =
+        val builder =
             NotificationCompat.Builder(context, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(body)
@@ -312,7 +397,10 @@ internal object TunnelDisconnectNotification {
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setCategory(category)
-                .build()
+        if (silent) {
+            builder.setSilent(true).setOnlyAlertOnce(true)
+        }
+        val notification = builder.build()
         try {
             nm.notify(notificationId, notification)
         } catch (_: SecurityException) {

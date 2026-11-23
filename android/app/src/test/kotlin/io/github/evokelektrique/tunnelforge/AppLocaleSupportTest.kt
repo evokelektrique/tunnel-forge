@@ -89,4 +89,35 @@ class AppLocaleSupportTest {
             )
         }
     }
+
+    @Test
+    fun localizedContextAppliesStoredOrSystemLocaleSynchronouslyAndRefreshesNotifications() {
+        val mainDir = resolveAppMainDir()
+        val kotlinDir = File(mainDir, "kotlin/io/github/evokelektrique/tunnelforge")
+        val localeSupportSource = File(kotlinDir, "AppLocaleSupport.kt").readText()
+
+        assertFalse(
+            "localizedContext must not short-circuit on Android 13+ while LocaleManager propagates asynchronously",
+            Regex("""fun\s+localizedContext[\s\S]*?TIRAMISU""").containsMatchIn(localeSupportSource),
+        )
+        assertTrue(localeSupportSource.contains("Resources.getSystem().configuration.locales"))
+        assertTrue(localeSupportSource.contains("refreshActiveNotifications(context)"))
+        assertTrue(localeSupportSource.contains("TunnelVpnService.refreshNotificationLanguage(appContext)"))
+        assertTrue(localeSupportSource.contains("ProxyTunnelService.refreshNotificationLanguage(appContext)"))
+        assertTrue(localeSupportSource.contains("TunnelDisconnectNotification.refreshActiveNotifications(appContext)"))
+        assertTrue(localeSupportSource.contains("SubscriptionNotification.refreshActiveNotifications(appContext)"))
+    }
+
+    @Test
+    fun alertAndSubscriptionNotificationsRefreshSilentlyInPlace() {
+        val mainDir = resolveAppMainDir()
+        val kotlinDir = File(mainDir, "kotlin/io/github/evokelektrique/tunnelforge")
+        val disconnectSource = File(kotlinDir, "TunnelDisconnectNotification.kt").readText()
+        val subscriptionSource = File(kotlinDir, "SubscriptionNotification.kt").readText()
+
+        assertTrue(disconnectSource.contains("fun refreshActiveNotifications(context: Context)"))
+        assertTrue(disconnectSource.contains("setSilent(true).setOnlyAlertOnce(true)"))
+        assertTrue(subscriptionSource.contains("fun refreshActiveNotifications(context: Context)"))
+        assertTrue(subscriptionSource.contains("setSilent(true).setOnlyAlertOnce(true)"))
+    }
 }

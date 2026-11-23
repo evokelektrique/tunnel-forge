@@ -16,6 +16,24 @@ internal object SubscriptionNotification {
     private const val RESULT_CHANNEL_ID = "tunnel_forge_subscription_results"
     private const val PROGRESS_NOTIFICATION_ID = 7201
     private const val RESULT_NOTIFICATION_BASE_ID = 7300
+    private val stateLock = Any()
+    private var lastProgress: ProgressSnapshot? = null
+    private val lastResults = linkedMapOf<Int, ResultSnapshot>()
+
+    private data class ProgressSnapshot(
+        val subscriptionName: String,
+        val stage: String,
+        val processed: Int,
+        val total: Int,
+    )
+
+    private data class ResultSnapshot(
+        val subscriptionId: String,
+        val subscriptionName: String,
+        val importedCount: Int,
+        val updatedCount: Int,
+        val removedCount: Int,
+    )
 
     fun showProgress(
         context: Context,
@@ -24,6 +42,15 @@ internal object SubscriptionNotification {
         processed: Int,
         total: Int,
     ) {
+        synchronized(stateLock) {
+            lastProgress =
+                ProgressSnapshot(
+                    subscriptionName = subscriptionName,
+                    stage = stage,
+                    processed = processed,
+                    total = total,
+                )
+        }
         val resContext = AppLocaleSupport.localizedContext(context)
         val nm = notificationManagerIfPermitted(resContext, isResult = false) ?: return
         val label = subscriptionName.trim().ifEmpty { resContext.getString(R.string.app_name) }
@@ -64,6 +91,9 @@ internal object SubscriptionNotification {
     }
 
     fun cancelProgress(context: Context) {
+        synchronized(stateLock) {
+            lastProgress = null
+        }
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         nm.cancel(PROGRESS_NOTIFICATION_ID)
     }
@@ -79,17 +109,73 @@ internal object SubscriptionNotification {
         if (importedCount <= 0 && updatedCount <= 0 && removedCount <= 0) {
             return
         }
+        val snapshot =
+            ResultSnapshot(
+                subscriptionId = subscriptionId,
+                subscriptionName = subscriptionName,
+                importedCount = importedCount,
+                updatedCount = updatedCount,
+                removedCount = removedCount,
+            )
+        val notificationId = resultNotificationId(subscriptionId)
+        synchronized(stateLock) {
+            lastResults[notificationId] = snapshot
+        }
+        postResult(context, snapshot, silent = false)
+    }
+
+    fun refreshActiveNotifications(context: Context) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        val resContext = AppLocaleSupport.localizedContext(context)
+        if (nm.getNotificationChannel(PROGRESS_CHANNEL_ID) != null) {
+            createChannelsIfNeeded(resContext, nm, isResult = false)
+        }
+        if (nm.getNotificationChannel(RESULT_CHANNEL_ID) != null) {
+            createChannelsIfNeeded(resContext, nm, isResult = true)
+        }
+        val activeIds = runCatching { nm.activeNotifications.map { it.id }.toSet() }.getOrElse { emptySet() }
+        val progressToRefresh: ProgressSnapshot?
+        val resultsToRefresh: List<ResultSnapshot>
+        synchronized(stateLock) {
+            progressToRefresh =
+                lastProgress?.takeIf { PROGRESS_NOTIFICATION_ID in activeIds }
+                    ?: run {
+                        lastProgress = null
+                        null
+                    }
+            lastResults.keys.retainAll(activeIds)
+            resultsToRefresh = lastResults.values.toList()
+        }
+        progressToRefresh?.let {
+            showProgress(
+                context = context,
+                subscriptionName = it.subscriptionName,
+                stage = it.stage,
+                processed = it.processed,
+                total = it.total,
+            )
+        }
+        for (snapshot in resultsToRefresh) {
+            postResult(context, snapshot, silent = true)
+        }
+    }
+
+    private fun postResult(
+        context: Context,
+        snapshot: ResultSnapshot,
+        silent: Boolean,
+    ) {
         val resContext = AppLocaleSupport.localizedContext(context)
         val nm = notificationManagerIfPermitted(resContext, isResult = true) ?: return
-        val notificationId = resultNotificationId(subscriptionId)
-        val label = subscriptionName.trim().ifEmpty { resContext.getString(R.string.app_name) }
+        val notificationId = resultNotificationId(snapshot.subscriptionId)
+        val label = snapshot.subscriptionName.trim().ifEmpty { resContext.getString(R.string.app_name) }
         val title = resContext.getString(R.string.subscription_notification_updated_title, label)
         val body =
             resContext.getString(
                 R.string.subscription_notification_summary,
-                importedCount,
-                updatedCount,
-                removedCount,
+                snapshot.importedCount,
+                snapshot.updatedCount,
+                snapshot.removedCount,
             )
 
         val builder =
@@ -100,6 +186,9 @@ internal object SubscriptionNotification {
                 .setSmallIcon(R.drawable.ic_qs_tunnel)
                 .setAutoCancel(true)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
+        if (silent) {
+            builder.setSilent(true).setOnlyAlertOnce(true)
+        }
         launchPendingIntent(context, notificationId)?.let(builder::setContentIntent)
 
         try {

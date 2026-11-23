@@ -3,6 +3,7 @@ package io.github.evokelektrique.tunnelforge
 import android.app.LocaleManager
 import android.content.Context
 import android.content.res.Configuration
+import android.content.res.Resources
 import android.os.Build
 import androidx.core.content.edit
 import android.os.LocaleList
@@ -43,21 +44,35 @@ internal object AppLocaleSupport {
             }
         }
         QuickSettingsTileController.requestUpdate(context)
+        refreshActiveNotifications(context)
+    }
+
+    fun refreshActiveNotifications(context: Context) {
+        val appContext = context.applicationContext
+        TunnelVpnService.refreshNotificationLanguage(appContext)
+        ProxyTunnelService.refreshNotificationLanguage(appContext)
+        TunnelDisconnectNotification.refreshActiveNotifications(appContext)
+        SubscriptionNotification.refreshActiveNotifications(appContext)
     }
 
     fun localizedContext(context: Context): Context {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            return context
-        }
         val tag =
             context.applicationContext
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(KEY_LOCALE_TAG, null)
                 ?.let(::normalizeLanguageTag)
-                ?: return context
-        val config = Configuration(context.resources.configuration)
-        config.setLocales(LocaleList.forLanguageTags(tag))
-        return context.createConfigurationContext(config)
+        if (tag != null) {
+            val config = Configuration(context.resources.configuration)
+            config.setLocales(LocaleList.forLanguageTags(tag))
+            return context.createConfigurationContext(config)
+        }
+        val systemLocales = Resources.getSystem().configuration.locales
+        if (!systemLocales.isEmpty) {
+            val config = Configuration(context.resources.configuration)
+            config.setLocales(systemLocales)
+            return context.createConfigurationContext(config)
+        }
+        return context
     }
 
     fun englishContext(context: Context): Context {
