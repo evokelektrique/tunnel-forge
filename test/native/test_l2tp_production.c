@@ -23,6 +23,12 @@ void esp_decrypt_last_fail_snprint(char *buf, size_t len) {
   if (len)
     buf[0] = 0;
 }
+#ifdef _WIN32
+void tunnel_log(const char *fmt, ...) { (void)fmt; }
+void esp_keys_reset_cache(esp_keys_t *k) { (void)k; }
+void esp_reset_drop_counters(void) {}
+void esp_keys_cleanup(esp_keys_t *k) { (void)k; }
+#endif
 int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t n, uint8_t *out, size_t *len) {
   (void)k;
   (void)in;

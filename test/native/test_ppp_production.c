@@ -40,6 +40,61 @@ void tunnel_engine_log(int p, const char *tag, const char *fmt, ...) {
   (void)tag;
   (void)fmt;
 }
+#ifdef _WIN32
+int esp_try_decrypt(esp_keys_t *k, const uint8_t *in, size_t in_len, uint8_t *out, size_t *out_len) {
+  (void)k;
+  (void)in;
+  (void)in_len;
+  (void)out;
+  (void)out_len;
+  return -1;
+}
+void esp_decrypt_last_fail_snprint(char *buf, size_t buflen) {
+  if (buflen)
+    buf[0] = 0;
+}
+int l2tp_dispatch_incoming(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                           l2tp_session_t *s, const uint8_t *data, size_t len, packet_endpoint_t *endpoint,
+                           ppp_session_t *ppp) {
+  (void)esp_fd;
+  (void)esp;
+  (void)peer;
+  (void)peer_len;
+  (void)s;
+  (void)data;
+  (void)len;
+  (void)endpoint;
+  (void)ppp;
+  return -1;
+}
+int l2tp_data_extract_ppp(const uint8_t *plain, size_t plain_len, const l2tp_session_t *s, const uint8_t **ppp_out,
+                          size_t *ppp_len_out, int diag) {
+  (void)plain;
+  (void)plain_len;
+  (void)s;
+  (void)ppp_out;
+  (void)ppp_len_out;
+  (void)diag;
+  return -1;
+}
+int l2tp_send_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *s,
+                  const uint8_t *ppp, size_t ppp_len) {
+  (void)esp_fd;
+  (void)esp;
+  (void)peer;
+  (void)peer_len;
+  (void)s;
+  (void)ppp;
+  (void)ppp_len;
+  return -1;
+}
+int packet_endpoint_write(packet_endpoint_t *endpoint, const uint8_t *buf, size_t len) {
+  (void)endpoint;
+  (void)buf;
+  (void)len;
+  return -1;
+}
+#endif
 static int fake_send(void *ctx, const uint8_t *in, size_t n) {
   (void)ctx;
   if (test_mode >= 2) {

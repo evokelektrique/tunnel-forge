@@ -6,7 +6,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <io.h>
+#include <windows.h>
 #else
 #include <poll.h>
 #endif
@@ -107,9 +111,14 @@ static int proxy_queue_signal(proxy_packet_queue_ctx_t *ctx) {
 
 static void proxy_queue_consume_signal(proxy_packet_queue_ctx_t *ctx) {
 #ifdef _WIN32
-  uint8_t b;
-  ssize_t n = read(ctx->notify_pipe[0], &b, sizeof(b));
-  (void)n;
+  HANDLE h = (HANDLE)_get_osfhandle(ctx->notify_pipe[0]);
+  uint8_t drain[64];
+  DWORD avail = 0;
+  while (h != INVALID_HANDLE_VALUE && PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL) && avail > 0) {
+    DWORD chunk = avail < sizeof(drain) ? avail : (DWORD)sizeof(drain);
+    if (read(ctx->notify_pipe[0], drain, (unsigned int)chunk) <= 0)
+      break;
+  }
 #else
   uint8_t drain[64];
   while (read(ctx->notify_pipe[0], drain, sizeof(drain)) > 0) {
@@ -484,7 +493,16 @@ int packet_endpoint_run_audit_check(int item_id, char *err_buf, size_t err_cap) 
     snprintf(err_buf, err_cap, "packet_endpoint_read failed");
     return -1;
   }
-#ifndef _WIN32
+#ifdef _WIN32
+  HANDLE pipe_h = (HANDLE)_get_osfhandle(packet_endpoint_poll_fd(&ep));
+  DWORD avail = 0;
+  if (pipe_h == INVALID_HANDLE_VALUE || !PeekNamedPipe(pipe_h, NULL, 0, NULL, &avail, NULL) || avail != 0) {
+    packet_endpoint_destroy_proxy_queue(&ctx);
+    snprintf(err_buf, err_cap, "notify_pipe still readable after draining both packets (avail=%lu)",
+             (unsigned long)avail);
+    return -1;
+  }
+#else
   struct pollfd pfd = {.fd = packet_endpoint_poll_fd(&ep), .events = POLLIN};
   int pr = poll(&pfd, 1, 0);
   if (pr != 0) {

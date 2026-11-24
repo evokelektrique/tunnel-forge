@@ -1,7 +1,13 @@
 #include "packet_endpoint.h"
 
 #include <errno.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <io.h>
+#include <windows.h>
+#else
 #include <poll.h>
 #endif
 #include <pthread.h>
@@ -191,8 +197,14 @@ static int test_notify_pipe_multi_enqueue_drains_all(void) {
     return 7;
   }
   if (ctx.outbound_count != 0u || ctx.outbound_bytes != 0u) return 8;
-#ifndef _WIN32
   if (packet_endpoint_read(&endpoint, out, sizeof(out)) != -1 || errno != EAGAIN) return 9;
+#ifdef _WIN32
+  HANDLE pipe_h = (HANDLE)_get_osfhandle(packet_endpoint_poll_fd(&endpoint));
+  DWORD avail = 0;
+  if (pipe_h == INVALID_HANDLE_VALUE || !PeekNamedPipe(pipe_h, NULL, 0, NULL, &avail, NULL) || avail != 0) {
+    return 10;
+  }
+#else
   struct pollfd pfd = {.fd = packet_endpoint_poll_fd(&endpoint), .events = POLLIN, .revents = 0};
   if (poll(&pfd, 1, 0) != 0) return 10;
 #endif

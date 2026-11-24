@@ -152,6 +152,8 @@ cd android
 ./gradlew :app:formatAndroidNativeC
 ./gradlew :app:lintDebug
 ./gradlew :app:testDebugUnitTest
+./gradlew :app:testAndroidGo
+./gradlew :app:testReleaseSigning
 ./gradlew :app:testNativeC
 ./gradlew :app:checkNativeC
 cd ..
@@ -169,6 +171,8 @@ cd android
 .\gradlew.bat :app:formatAndroidNativeC
 .\gradlew.bat :app:lintDebug
 .\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:testAndroidGo
+.\gradlew.bat :app:testReleaseSigning
 .\gradlew.bat :app:testNativeC
 .\gradlew.bat :app:checkNativeC
 cd ..
@@ -195,7 +199,7 @@ CI also checks release signing with a disposable keystore.
 - For Dart, run `flutter test --coverage`.
 - For Kotlin, run `./gradlew -PtunnelForgeCoverage :app:createDebugUnitTestCoverageReport` from `android/`. With an emulator running, use `:app:createDebugAndroidTestCoverageReport` for device coverage. Pass `-Pandroid.testInstrumentationRunnerArguments.nativeCoverage=true` to collect the native profile too.
 - For Go, run `go test ./... -cover` from `android/gvisor/`.
-- For native C on Linux, configure `test/native` with `-DTUNNEL_FORGE_NATIVE_PROTOCOL_TESTS=ON` to include the production IKE, ESP, L2TP, PPP, and MPPE tests. Gradle's `:app:testNativeC` runs the portable subset.
+- For native C, `./gradlew :app:testNativeC` (or `.\gradlew.bat :app:testNativeC` on Windows) runs the full 17-test host suite (including the production IKE, ESP, L2TP, PPP, and MPPE tests) on Linux, macOS, and Windows.
 
 ## Security & Privacy
 

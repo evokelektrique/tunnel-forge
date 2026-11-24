@@ -252,34 +252,7 @@ jobs:
 
       - name: Check release signing with a disposable keystore
         working-directory: android
-        run: |
-          export TUNNEL_FORGE_ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/signing-test.p12"
-          trap 'rm -f "$RUNNER_TEMP/signing-test.p12" ../build/app/keystore-from-base64.jks' EXIT
-          export TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD=test-password
-          export TUNNEL_FORGE_ANDROID_KEY_ALIAS=ci-test
-          export TUNNEL_FORGE_ANDROID_KEY_PASSWORD=test-password
-          keytool -genkeypair -storetype PKCS12 -keyalg RSA -keysize 2048 -validity 1 \
-            -keystore "$TUNNEL_FORGE_ANDROID_KEYSTORE_PATH" -alias "$TUNNEL_FORGE_ANDROID_KEY_ALIAS" \
-            -storepass "$TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD" -dname 'CN=Tunnel Forge CI'
-          ./gradlew --console=plain :app:validateSigningRelease
-
-          TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64="$(base64 -w0 "$TUNNEL_FORGE_ANDROID_KEYSTORE_PATH")"
-          export TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64
-          unset TUNNEL_FORGE_ANDROID_KEYSTORE_PATH
-          ./gradlew --console=plain :app:validateSigningRelease
-          test "$(stat -c '%a' ../build/app/keystore-from-base64.jks)" = 600
-
-          if TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64=invalid-base64! ./gradlew --console=plain :app:validateSigningRelease > "$RUNNER_TEMP/signing-test.log" 2>&1; then
-            echo "Invalid base64 keystore was accepted"
-            exit 1
-          fi
-          grep -F 'TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64 must contain a base64-encoded keystore.' "$RUNNER_TEMP/signing-test.log"
-
-          if TUNNEL_FORGE_ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/signing-test.p12" ./gradlew --console=plain :app:validateSigningRelease > "$RUNNER_TEMP/signing-test.log" 2>&1; then
-            echo "Conflicting keystore sources were accepted"
-            exit 1
-          fi
-          grep -F 'Set only one of TUNNEL_FORGE_ANDROID_KEYSTORE_PATH or TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64.' "$RUNNER_TEMP/signing-test.log"
+        run: ./gradlew --no-daemon --console=plain :app:testReleaseSigning
 
       - name: Enable KVM
         run: |

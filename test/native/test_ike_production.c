@@ -1,5 +1,18 @@
 #include "../../android/app/src/main/cpp/ikev1.c"
 #include <assert.h>
+#ifdef _WIN32
+int tunnel_should_stop(void) { return 0; }
+int util_protect_fd(int fd) {
+  (void)fd;
+  return 0;
+}
+void tunnel_log(const char *fmt, ...) { (void)fmt; }
+void tunnel_engine_log(int prio, const char *tag, const char *fmt, ...) {
+  (void)prio;
+  (void)tag;
+  (void)fmt;
+}
+#endif
 int main(void) {
   uint8_t sa[256];
   size_t n = build_p1_sa(sa, sizeof(sa));
