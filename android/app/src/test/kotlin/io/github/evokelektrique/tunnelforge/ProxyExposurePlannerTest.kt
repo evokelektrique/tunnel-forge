@@ -28,6 +28,7 @@ class ProxyExposurePlannerTest {
 
         assertFalse(exposure.lanActive)
         assertEquals("127.0.0.1", exposure.displayAddress)
+        assertEquals(listOf("127.0.0.1"), exposure.displayAddresses())
         assertEquals("HTTP 127.0.0.1:8080, SOCKS5 127.0.0.1:1080", exposure.endpointSummary())
     }
 
@@ -59,6 +60,11 @@ class ProxyExposurePlannerTest {
 
         assertTrue(exposure.lanActive)
         assertEquals("192.168.43.1", exposure.displayAddress)
+        assertEquals(listOf("127.0.0.1", "192.168.43.1"), exposure.displayAddresses())
+        assertEquals(
+            "HTTP 127.0.0.1:8080, 192.168.43.1:8080; SOCKS5 127.0.0.1:1080, 192.168.43.1:1080",
+            exposure.endpointSummary(),
+        )
     }
 
     @Test
@@ -82,6 +88,7 @@ class ProxyExposurePlannerTest {
 
         assertFalse(exposure.lanActive)
         assertEquals("127.0.0.1", exposure.displayAddress)
+        assertEquals(listOf("127.0.0.1"), exposure.displayAddresses())
         assertEquals(ProxyExposurePlanner.LAN_UNAVAILABLE_WARNING, exposure.warning)
     }
 

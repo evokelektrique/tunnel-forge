@@ -138,7 +138,7 @@
   "proxyPortLimitsNote": "Android restricts ports 1–1023 (system privileged) and reserves critical ports such as 1701 (L2TP), 4500 (IPsec), 5037 (ADB), 5353 (mDNS), and 5554–5555 (Emulator/ADB). Allowed range: 1024–65535.",
   "proxyPortsInvalidRange": "Local proxy ports must be 1024–65535 and not reserved on Android.",
   "proxyEndpoints": "Proxy endpoints",
-  "lanClientsCanUse": "LAN clients on the same Wi-Fi or hotspot can use this address.",
+  "lanClientsCanUse": "This device can use 127.0.0.1; LAN clients on the same Wi-Fi or hotspot can use the private LAN IP.",
   "lanSharingEnabled": "LAN sharing is enabled for this session.",
   "connectToDetectLan": "Connect to detect the current LAN IP for other devices.",
   "lanDisabled": "LAN access is disabled.",

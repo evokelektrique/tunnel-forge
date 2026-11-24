@@ -35,6 +35,16 @@ class ProxyServerRuntimeTest {
 
     @Test
     fun endpointSummaryReflectsLanBinding() {
+        val exposure =
+            ProxyExposureInfo(
+                active = true,
+                bindAddress = "192.168.1.24",
+                displayAddress = "192.168.1.24",
+                httpPort = 8080,
+                socksPort = 1080,
+                lanRequested = true,
+                lanActive = true,
+            )
         val runtime =
             ProxyServerRuntime(
                 config =
@@ -44,21 +54,19 @@ class ProxyServerRuntimeTest {
                         socksEnabled = true,
                         socksPort = 1080,
                         allowLanConnections = true,
-                        exposure =
-                            ProxyExposureInfo(
-                                active = true,
-                                bindAddress = "192.168.1.24",
-                                displayAddress = "192.168.1.24",
-                                httpPort = 8080,
-                                socksPort = 1080,
-                                lanRequested = true,
-                                lanActive = true,
-                            ),
+                        exposure = exposure,
                     ),
                 logger = {},
             )
 
-        assertEquals("HTTP 192.168.1.24:8080, SOCKS5 192.168.1.24:1080", runtime.endpointSummary())
+        assertEquals(
+            "HTTP 127.0.0.1:8080, 192.168.1.24:8080; SOCKS5 127.0.0.1:1080, 192.168.1.24:1080",
+            runtime.endpointSummary(),
+        )
+        assertEquals(
+            "HTTP 127.0.0.1:8080, 192.168.1.24:8080",
+            exposure.endpointSummary(httpEnabled = true, socksEnabled = false),
+        )
     }
 
     @Test

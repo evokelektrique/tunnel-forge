@@ -514,10 +514,18 @@ void main() {
       scrollable: settingsScrollView(),
     );
 
-    expect(find.textContaining('HTTP: 192.168.1.24:18080'), findsOneWidget);
-    expect(find.textContaining('SOCKS5: 192.168.1.24:11080'), findsOneWidget);
     expect(
-      find.textContaining('LAN clients on the same Wi-Fi or hotspot'),
+      find.textContaining('HTTP: 127.0.0.1:18080, 192.168.1.24:18080'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('SOCKS5: 127.0.0.1:11080, 192.168.1.24:11080'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+        'This device can use 127.0.0.1; LAN clients on the same Wi-Fi or hotspot can use the private LAN IP.',
+      ),
       findsOneWidget,
     );
   });
@@ -548,7 +556,11 @@ void main() {
     );
 
     expect(
-      find.textContaining('no shareable local IPv4 is currently available'),
+      find.text(
+        'HTTP: 127.0.0.1:8080\n'
+        'SOCKS5: 127.0.0.1:1080\n'
+        'LAN sharing is enabled, but no shareable local IPv4 is currently available.',
+      ),
       findsOneWidget,
     );
   });

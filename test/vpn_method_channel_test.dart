@@ -39,6 +39,43 @@ void main() {
     });
   });
 
+  group('ProxyExposure', () {
+    test('displayAddresses prepends loopback only when LAN IP is active', () {
+      const lanActive = ProxyExposure(
+        active: true,
+        bindAddress: '192.168.1.24',
+        displayAddress: '192.168.1.24',
+        httpPort: 8080,
+        socksPort: 1080,
+        lanRequested: true,
+        lanActive: true,
+      );
+      expect(lanActive.displayAddresses, ['127.0.0.1', '192.168.1.24']);
+
+      const lanInactive = ProxyExposure(
+        active: true,
+        bindAddress: '127.0.0.1',
+        displayAddress: '127.0.0.1',
+        httpPort: 8080,
+        socksPort: 1080,
+        lanRequested: false,
+        lanActive: false,
+      );
+      expect(lanInactive.displayAddresses, ['127.0.0.1']);
+
+      const lanActiveLoopback = ProxyExposure(
+        active: true,
+        bindAddress: '127.0.0.1',
+        displayAddress: '127.0.0.1',
+        httpPort: 8080,
+        socksPort: 1080,
+        lanRequested: true,
+        lanActive: true,
+      );
+      expect(lanActiveLoopback.displayAddresses, ['127.0.0.1']);
+    });
+  });
+
   group('VpnClient', () {
     late List<MethodCall> calls;
 

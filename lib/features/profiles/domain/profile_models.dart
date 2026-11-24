@@ -416,6 +416,8 @@ class ProxyExposure {
     this.warning,
   });
 
+  static const String loopbackAddress = '127.0.0.1';
+
   final bool active;
   final String bindAddress;
   final String displayAddress;
@@ -424,6 +426,13 @@ class ProxyExposure {
   final bool lanRequested;
   final bool lanActive;
   final String? warning;
+
+  List<String> get displayAddresses {
+    if (lanActive && displayAddress != loopbackAddress) {
+      return [loopbackAddress, displayAddress];
+    }
+    return [displayAddress];
+  }
 
   bool get hasWarning => warning != null && warning!.trim().isNotEmpty;
 
