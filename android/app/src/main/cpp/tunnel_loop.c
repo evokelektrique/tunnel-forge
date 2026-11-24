@@ -546,8 +546,8 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
   }
 
   memset(&g_state.ppp, 0, sizeof(g_state.ppp));
-  int ppp_rc = ppp_negotiate(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer, g_state.ike.peer_len,
-                             &g_state.l2tp, user, password, tun_mtu, ppp_auth, &g_state.ppp);
+  int ppp_rc = ppp_negotiate(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer,
+                             g_state.ike.peer_len, &g_state.l2tp, user, password, tun_mtu, ppp_auth, &g_state.ppp);
   if (ppp_rc != 0) {
     if (tunnel_should_stop()) {
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "tunnel negotiate canceled during PPP");

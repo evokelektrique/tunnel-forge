@@ -41,8 +41,7 @@ static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "nativeNegotiate: null string");
     goto cleanup;
   }
-  out = (jint)tunnel_negotiate(server, user, password, psk, (int)tun_mtu, (int)protocol, (int)ppp_auth,
-                               (int)mppe_mode);
+  out = (jint)tunnel_negotiate(server, user, password, psk, (int)tun_mtu, (int)protocol, (int)ppp_auth, (int)mppe_mode);
   if (out == (jint)TUNNEL_EXIT_OK && jout_client_ipv4 != NULL) {
     jsize alen = (*env)->GetArrayLength(env, jout_client_ipv4);
     if (alen >= 4) {
