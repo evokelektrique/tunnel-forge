@@ -139,7 +139,7 @@ static const uint8_t k_vid_rfc3947[IKE_VID_RFC3947_LEN] = {0x4a, 0x13, 0x1c, 0x8
 static int resolve_udp(const char *host, uint16_t port, struct sockaddr_storage *out, socklen_t *olen) {
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
+  hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_DGRAM;
   hints.ai_protocol = IPPROTO_UDP;
   struct addrinfo *res = NULL;
@@ -157,6 +157,34 @@ static int resolve_udp(const char *host, uint16_t port, struct sockaddr_storage 
   return 0;
 }
 
+/* Disable kernel DF / PMTU rejection on IPv4 UDP sockets so large ESP-over-UDP packets fragment instead of raising
+ * EMSGSIZE. */
+static void ike_disable_ipv4_pmtud(int fd) {
+#if defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
+  int val = IP_PMTUDISC_DONT;
+  if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &val, (socklen_t)sizeof(val)) != 0) {
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE: setsockopt(IP_MTU_DISCOVER=DONT) errno=%d", errno);
+  }
+#else
+  (void)fd;
+#endif
+}
+
+/* Best-effort local UDP port bind (e.g. RFC 3947 port 4500 on NAT-T fallback); falls back to ephemeral on failure. */
+static void ike_try_bind_local_port(int fd, uint16_t port) {
+  struct sockaddr_in local;
+  memset(&local, 0, sizeof(local));
+  local.sin_family = AF_INET;
+  local.sin_addr.s_addr = htonl(INADDR_ANY);
+  local.sin_port = htons(port);
+  if (bind(fd, (struct sockaddr *)&local, (socklen_t)sizeof(local)) != 0) {
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: bind local port %u skipped errno=%d (using ephemeral)",
+                      (unsigned)port, errno);
+  } else {
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: bound local port %u", (unsigned)port);
+  }
+}
+
 static int cleartext_l2tp(const char *server, ike_session_t *ike, esp_keys_t *esp) {
   memset(ike, 0, sizeof(*ike));
   memset(esp, 0, sizeof(*esp));
@@ -169,6 +197,9 @@ static int cleartext_l2tp(const char *server, ike_session_t *ike, esp_keys_t *es
   if (fd < 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "cleartext_l2tp: socket errno=%d", errno);
     return -1;
+  }
+  if (ike->peer.ss_family == AF_INET) {
+    ike_disable_ipv4_pmtud(fd);
   }
   if (util_protect_fd(fd) != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "cleartext_l2tp: protect(fd=%d) failed", fd);
@@ -1482,6 +1513,9 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: socket(500) errno=%d", errno);
     goto fail_early;
   }
+  if (peer500.ss_family == AF_INET) {
+    ike_disable_ipv4_pmtud(fd);
+  }
   if (util_protect_fd(fd) != 0)
     goto fail_fd;
   if (connect(fd, (struct sockaddr *)&peer500, l500) != 0) {
@@ -1592,9 +1626,15 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       mbedtls_dhm_free(&dhm);
       goto fail_early;
     }
+    if (peer_active.ss_family == AF_INET) {
+      ike_disable_ipv4_pmtud(fd);
+    }
     if (util_protect_fd(fd) != 0) {
       mbedtls_dhm_free(&dhm);
       goto fail_fd;
+    }
+    if (peer_active.ss_family == AF_INET) {
+      ike_try_bind_local_port(fd, NAT_T_PORT);
     }
     if (connect(fd, (struct sockaddr *)&peer_active, peer_active_len) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(4500 MM1 fallback) errno=%d", errno);
@@ -1622,7 +1662,9 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
         ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 8000, p1_prefix);
   }
   if (inlen < 28) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM msg2: no valid reply");
+    tunnel_engine_log(
+        ANDROID_LOG_ERROR, LOG_TAG,
+        "IKE MM msg2: no valid reply on UDP 500 or UDP 4500 (check router/firewall/IPsec passthrough/MAP-E)");
     mbedtls_dhm_free(&dhm);
     goto fail_fd;
   }

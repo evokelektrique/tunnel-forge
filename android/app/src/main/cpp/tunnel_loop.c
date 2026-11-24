@@ -758,12 +758,16 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
       socklen_t so_len = sizeof(so_err);
       if (getsockopt(g_state.ike.esp_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) != 0)
         so_err = errno;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "esp socket error revents=0x%x so_error=%d", fds[1].revents,
-                        so_err);
-      exit_code = TUNNEL_EXIT_NETWORK_LOST;
-      close_reason = "esp socket error";
-      send_teardown = 0;
-      break;
+      if (tunnel_is_fatal_esp_poll_event((fds[1].revents & (POLLHUP | POLLNVAL)) != 0, so_err)) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "esp socket error revents=0x%x so_error=%d", fds[1].revents,
+                          so_err);
+        exit_code = TUNNEL_EXIT_NETWORK_LOST;
+        close_reason = "esp socket error";
+        send_teardown = 0;
+        break;
+      }
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp socket transient error revents=0x%x so_error=%d; continuing",
+                        fds[1].revents, so_err);
     }
 
     if (is_pptp && pr > 0 && (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) && !(fds[1].revents & POLLIN)) {

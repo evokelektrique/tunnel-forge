@@ -37,6 +37,7 @@ typedef ptrdiff_t ssize_t;
 
 int tf_win32_socket(int domain, int type, int protocol);
 int tf_win32_socketpair(int domain, int type, int protocol, int sv[2]);
+int tf_win32_bind(int fd, const struct sockaddr *addr, socklen_t addrlen);
 int tf_win32_connect(int fd, const struct sockaddr *addr, socklen_t addrlen);
 int tf_win32_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen);
 ssize_t tf_win32_send(int fd, const void *buf, size_t len, int flags);
@@ -49,6 +50,7 @@ int tf_win32_close(int fd);
 #ifndef TF_WIN32_COMPAT_IMPL
 #define socket tf_win32_socket
 #define socketpair tf_win32_socketpair
+#define bind tf_win32_bind
 #define connect tf_win32_connect
 #define getsockname tf_win32_getsockname
 #define send tf_win32_send

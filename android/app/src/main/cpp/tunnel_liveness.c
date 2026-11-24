@@ -98,3 +98,9 @@ int tunnel_is_fatal_socket_errno(int err) {
     return 0;
   }
 }
+
+int tunnel_is_fatal_esp_poll_event(int is_hup_or_nval, int so_err) {
+  if (is_hup_or_nval)
+    return 1;
+  return tunnel_is_fatal_socket_errno(so_err);
+}

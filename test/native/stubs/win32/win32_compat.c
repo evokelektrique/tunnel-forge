@@ -50,6 +50,8 @@ static int tf_win32_map_wsa_error(int wsa_err) {
     return ECONNREFUSED;
   case WSAENOTCONN:
     return ENOTCONN;
+  case WSAEADDRINUSE:
+    return EADDRINUSE;
   case WSAEACCES:
     return EACCES;
   case WSAEINVAL:
@@ -151,8 +153,7 @@ int tf_win32_socketpair(int domain, int type, int protocol, int sv[2]) {
   int len0 = (int)sizeof(addr0);
   int len1 = (int)sizeof(addr1);
   if (getsockname(s0, (struct sockaddr *)&addr0, &len0) != 0 ||
-      getsockname(s1, (struct sockaddr *)&addr1, &len1) != 0 ||
-      connect(s0, (struct sockaddr *)&addr1, len1) != 0 ||
+      getsockname(s1, (struct sockaddr *)&addr1, &len1) != 0 || connect(s0, (struct sockaddr *)&addr1, len1) != 0 ||
       connect(s1, (struct sockaddr *)&addr0, len0) != 0) {
     int err = tf_win32_map_wsa_error(WSAGetLastError());
     closesocket(s0);
@@ -174,6 +175,19 @@ int tf_win32_socketpair(int domain, int type, int protocol, int sv[2]) {
   }
   sv[0] = fd0;
   sv[1] = fd1;
+  return 0;
+}
+
+int tf_win32_bind(int fd, const struct sockaddr *addr, socklen_t addrlen) {
+  SOCKET s = tf_win32_lookup_socket(fd);
+  if (s == INVALID_SOCKET) {
+    errno = EBADF;
+    return -1;
+  }
+  if (bind(s, addr, (int)addrlen) != 0) {
+    errno = tf_win32_map_wsa_error(WSAGetLastError());
+    return -1;
+  }
   return 0;
 }
 

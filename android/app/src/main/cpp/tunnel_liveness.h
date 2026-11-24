@@ -36,4 +36,7 @@ tunnel_liveness_action_t tunnel_liveness_check(tunnel_liveness_t *state, int64_t
 /** @return 1 if errno [err] indicates dead socket, lost route, or down interface. */
 int tunnel_is_fatal_socket_errno(int err);
 
+/** @return 1 if ESP poll error/hangup event should tear down the tunnel. */
+int tunnel_is_fatal_esp_poll_event(int is_hup_or_nval, int so_err);
+
 #endif

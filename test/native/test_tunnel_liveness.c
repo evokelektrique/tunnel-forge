@@ -83,6 +83,36 @@ static int test_fatal_socket_errno_classification(void) {
     return 7;
   if (tunnel_is_fatal_socket_errno(EINTR))
     return 8;
+#ifdef EMSGSIZE
+  if (tunnel_is_fatal_socket_errno(EMSGSIZE))
+    return 9;
+#endif
+  return 0;
+}
+
+static int test_fatal_esp_poll_event_classification(void) {
+  if (tunnel_is_fatal_esp_poll_event(0, 0))
+    return 1;
+  if (tunnel_is_fatal_esp_poll_event(0, EAGAIN))
+    return 2;
+#ifdef EMSGSIZE
+  if (tunnel_is_fatal_esp_poll_event(0, EMSGSIZE))
+    return 3;
+#endif
+#ifdef ENETUNREACH
+  if (!tunnel_is_fatal_esp_poll_event(0, ENETUNREACH))
+    return 4;
+#endif
+#ifdef ECONNREFUSED
+  if (!tunnel_is_fatal_esp_poll_event(0, ECONNREFUSED))
+    return 5;
+#endif
+  if (!tunnel_is_fatal_esp_poll_event(1, 0))
+    return 6;
+#ifdef EMSGSIZE
+  if (!tunnel_is_fatal_esp_poll_event(1, EMSGSIZE))
+    return 7;
+#endif
   return 0;
 }
 
@@ -105,6 +135,11 @@ int main(void) {
   rc = test_fatal_socket_errno_classification();
   if (rc != 0) {
     fprintf(stderr, "test_fatal_socket_errno_classification failed: %d\n", rc);
+    return 1;
+  }
+  rc = test_fatal_esp_poll_event_classification();
+  if (rc != 0) {
+    fprintf(stderr, "test_fatal_esp_poll_event_classification failed: %d\n", rc);
     return 1;
   }
   puts("test_tunnel_liveness: ok");

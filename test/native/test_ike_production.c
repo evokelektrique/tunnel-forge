@@ -70,5 +70,29 @@ int main(void) {
 
   std_mm2[48] = 0x99;
   assert(extract_mm2_p1_selection(std_mm2, sizeof(std_mm2), sa2, sizeof(sa2), &sa2_len, &p1_aes, &dh_group) == -1);
+
+  int fd1 = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  assert(fd1 >= 0);
+  ike_disable_ipv4_pmtud(fd1);
+  ike_try_bind_local_port(fd1, 0);
+
+  struct sockaddr_storage lss;
+  socklen_t lsl = sizeof(lss);
+  assert(getsockname(fd1, (struct sockaddr *)&lss, &lsl) == 0);
+  assert(lss.ss_family == AF_INET);
+  uint16_t bound_port = ntohs(((struct sockaddr_in *)&lss)->sin_port);
+  assert(bound_port != 0);
+
+  int fd2 = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  assert(fd2 >= 0);
+  ike_try_bind_local_port(fd2, bound_port);
+  close(fd2);
+  close(fd1);
+
+  struct sockaddr_storage resolved;
+  socklen_t resolved_len = sizeof(resolved);
+  assert(resolve_udp("127.0.0.1", IKE_PORT, &resolved, &resolved_len) == 0);
+  assert(resolved.ss_family == AF_INET);
+  assert(ntohs(((struct sockaddr_in *)&resolved)->sin_port) == IKE_PORT);
   return 0;
 }
