@@ -11,6 +11,7 @@ import 'package:tunnel_forge/core/logging/log_entry.dart';
 import 'package:tunnel_forge/features/tunnel/data/vpn_contract.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
 import 'package:tunnel_forge/features/tunnel/domain/tunnel_failure.dart';
+import 'package:tunnel_forge/l10n/app_localizations.dart';
 
 void main() {
   final failureLogs = _FakeLogsRepository();
@@ -900,6 +901,43 @@ void main() {
       expect(bloc.state.awaitingTunnel, isFalse);
       expect(bloc.state.busy, isFalse);
     },
+  );
+
+  blocTest<TunnelBloc, TunnelState>(
+    'inclusive split tunneling with no apps emits error toast without TunnelFailure',
+    build: () => TunnelBloc(_FakeTunnelRepository(), _FakeLogsRepository()),
+    act: (bloc) {
+      bloc.add(
+        const TunnelConnectRequested(
+          TunnelConnectRequest(
+            activeProfileId: null,
+            profileName: null,
+            server: 'vpn.example',
+            user: '',
+            password: '',
+            psk: '',
+            dnsAutomatic: true,
+            dnsServers: [],
+            mtu: Profile.defaultVpnMtu,
+            connectionMode: ConnectionMode.vpnTunnel,
+            splitTunnelSettings: SplitTunnelSettings(
+              enabled: true,
+              mode: SplitTunnelMode.inclusive,
+            ),
+            proxySettings: ProxySettings(),
+          ),
+        ),
+      );
+    },
+    expect: () => [
+      TunnelState(
+        message: HomeMessage(
+          id: 1,
+          text: AppL10n.current.selectAppsForInclusiveSplitTunnel,
+          error: true,
+        ),
+      ),
+    ],
   );
 }
 

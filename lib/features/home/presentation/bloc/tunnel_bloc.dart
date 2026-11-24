@@ -717,11 +717,16 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           source: LogSource.kotlin,
           tag: 'TunnelState',
         );
+        final failedText = update.detail.isEmpty
+            ? t.couldNotEstablishTunnel
+            : update.detail;
         _toast(
           emit,
-          update.detail.isEmpty ? t.couldNotEstablishTunnel : update.detail,
+          failedText,
           error: true,
-          failure: update.failure,
+          failure:
+              update.failure ??
+              TunnelFailure.fromMap(null, detail: redactLogMessage(failedText)),
         );
         break;
       case VpnTunnelState.stopped:
@@ -910,13 +915,19 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
             source: LogSource.kotlin,
             tag: 'TunnelState',
           );
+          final failedText = lastTerminal.detail.isEmpty
+              ? AppL10n.current.couldNotEstablishTunnel
+              : lastTerminal.detail;
           _toast(
             emit,
-            lastTerminal.detail.isEmpty
-                ? AppL10n.current.couldNotEstablishTunnel
-                : lastTerminal.detail,
+            failedText,
             error: true,
-            failure: lastTerminal.failure,
+            failure:
+                lastTerminal.failure ??
+                TunnelFailure.fromMap(
+                  null,
+                  detail: redactLogMessage(failedText),
+                ),
           );
         } else if (lastTerminal.state == VpnTunnelState.stopped) {
           _logInfo(
@@ -1042,9 +1053,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
     bool error = false,
     TunnelFailure? failure,
   }) {
-    final reportedFailure = error
-        ? failure ?? TunnelFailure.fromMap(null, detail: redactLogMessage(text))
-        : null;
+    final reportedFailure = error ? failure : null;
     if (reportedFailure != null) {
       _logError(reportedFailure.summary, tag: 'TunnelFailure');
     }
