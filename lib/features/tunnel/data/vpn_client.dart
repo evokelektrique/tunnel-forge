@@ -276,11 +276,11 @@ class VpnClient {
     required String psk,
     required bool dnsAutomatic,
     required List<DnsServerConfig> dnsServers,
-    required int mtu,
+    required int? mtu,
     required SplitTunnelSettings splitTunnelSettings,
     required ProxySettings proxySettings,
   }) {
-    final mtuClamped = Profile.normalizeMtu(mtu);
+    final mtuClamped = Profile.normalizeOptionalMtu(mtu);
     // Flutter keeps DNS slot ordering explicit so Android can preserve DNS 1
     // as primary and DNS 2 as fallback without reparsing free-form text.
     final normalizedDnsServers = dnsServers
@@ -307,7 +307,7 @@ class VpnClient {
       VpnContract.argPsk: protocol.isPptp ? '' : psk,
       VpnContract.argDnsAutomatic: dnsAutomatic,
       VpnContract.argDnsServers: normalizedDnsServers,
-      VpnContract.argMtu: mtuClamped,
+      VpnContract.argMtu: ?mtuClamped,
       VpnContract.argConnectionMode: connectionMode.jsonValue,
       VpnContract.argSplitTunnelEnabled: splitTunnelSettings.enabled,
       VpnContract.argSplitTunnelMode: splitTunnelSettings.mode.jsonValue,
@@ -345,7 +345,7 @@ class VpnClient {
     String psk = '',
     bool dnsAutomatic = true,
     List<DnsServerConfig> dnsServers = const [],
-    int mtu = Profile.defaultVpnMtu,
+    int? mtu,
     SplitTunnelSettings splitTunnelSettings = const SplitTunnelSettings(),
     ProxySettings proxySettings = const ProxySettings(),
   }) {

@@ -370,7 +370,8 @@
   "automaticDnsHelp": "Receive DNS configuration automatically from the VPN server during PPP negotiation.",
   "dnsServers": "DNS servers",
   "dnsHelp": "DNS 1 is primary. DNS 2 is fallback.",
-  "mtuHelper": "Range {min}-{max}. Use {defaultValue} unless you need a smaller MTU.",
+  "mtuHint": "Optional",
+  "mtuHelper": "Leave empty to negotiate MTU automatically. Range {min}-{max}.",
   "@mtuHelper": {
     "placeholders": {
       "min": {
@@ -378,13 +379,9 @@
       },
       "max": {
         "type": "int"
-      },
-      "defaultValue": {
-        "type": "int"
       }
     }
   },
-  "mtuRequired": "Enter an MTU value",
   "mtuWholeNumber": "MTU must be a whole number",
   "mtuOutOfRange": "MTU must be between {min} and {max}",
   "@mtuOutOfRange": {

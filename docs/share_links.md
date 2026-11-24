@@ -24,7 +24,7 @@ The grammar is `tf://<server>[?query]`.
 | `password` | VPN password. |
 | `psk` | L2TP/IPsec pre-shared key. PPTP ignores this value. |
 | `dns` | Repeatable manual DNS server. At most two unique values are kept. A bare host uses UDP. `tcp://`, `tls://`, and `https://` select DNS transports. No `dns` means automatic DNS. |
-| `mtu` | Integer MTU. Default is `1450`. Values are clamped to `576` through `1450`. |
+| `mtu` | Optional integer MTU. When omitted, MTU is negotiated automatically via PPP LCP. Values are clamped to `576` through `1450`. |
 
 For HTTPS DNS, use `https://host/path` to preserve a DoH endpoint path. Query values are decoded once before validation.
 

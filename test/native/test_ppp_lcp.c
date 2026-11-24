@@ -118,6 +118,27 @@ static int test_small_caps_reject_truncated_lcp_frames(void) {
   return 0;
 }
 
+static int test_lcp_mru_and_option_helpers(void) {
+  const uint8_t lcp_with_mru_and_auth[] = {
+      0x01, 0x01, 0x00, 0x0d,
+      0x01, 0x04, 0x05, 0x78, /* MRU 1400 */
+      0x03, 0x05, 0xc2, 0x23, 0x81,
+  };
+  uint16_t mru = 0;
+  if (ppp_lcp_parse_mru(lcp_with_mru_and_auth, sizeof(lcp_with_mru_and_auth), &mru) != 0) return 1;
+  if (mru != 1400u) return 2;
+  if (!ppp_lcp_has_option(lcp_with_mru_and_auth, sizeof(lcp_with_mru_and_auth), 3u)) return 3;
+  if (ppp_lcp_has_option(lcp_with_mru_and_auth, sizeof(lcp_with_mru_and_auth), 2u)) return 4;
+
+  const uint8_t lcp_no_mru[] = {0x03, 0x01, 0x00, 0x08, 0x03, 0x04, 0xc0, 0x23};
+  if (ppp_lcp_parse_mru(lcp_no_mru, sizeof(lcp_no_mru), &mru) != -1) return 5;
+  if (!ppp_lcp_has_option(lcp_no_mru, sizeof(lcp_no_mru), 3u)) return 6;
+
+  const uint8_t lcp_bad_mru_len[] = {0x01, 0x01, 0x00, 0x09, 0x01, 0x05, 0x05, 0x78, 0x00};
+  if (ppp_lcp_parse_mru(lcp_bad_mru_len, sizeof(lcp_bad_mru_len), &mru) != -1) return 7;
+  return 0;
+}
+
 int main(void) {
   int rc = test_selected_mru_is_preserved();
   if (rc != 0) {
@@ -137,6 +158,11 @@ int main(void) {
   rc = test_small_caps_reject_truncated_lcp_frames();
   if (rc != 0) {
     fprintf(stderr, "test_small_caps_reject_truncated_lcp_frames failed: %d\n", rc);
+    return 1;
+  }
+  rc = test_lcp_mru_and_option_helpers();
+  if (rc != 0) {
+    fprintf(stderr, "test_lcp_mru_and_option_helpers failed: %d\n", rc);
     return 1;
   }
   puts("test_ppp_lcp: ok");

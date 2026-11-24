@@ -610,7 +610,7 @@ class Profile {
     this.dns1Protocol = DnsProtocol.dnsOverUdp,
     this.dns2Host = '',
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
-    this.mtu = defaultVpnMtu,
+    this.mtu,
     this.favorite = false,
     this.subscriptionId,
   });
@@ -618,7 +618,7 @@ class Profile {
   /// Maximum number of profiles a user can mark as favorites.
   static const int maxFavorites = 5;
 
-  /// TUN interface MTU (bytes). Shared default for new profiles and quick-connect.
+  /// Default MTU ceiling (bytes) used by native PPP LCP negotiation when profile MTU is unset.
   static const int defaultVpnMtu = 1450;
 
   static const int minVpnMtu = 576;
@@ -646,8 +646,8 @@ class Profile {
   final String dns2Host;
   final DnsProtocol dns2Protocol;
 
-  /// Android VpnService [Builder.setMtu]; clamped [minVpnMtu]–[maxVpnMtu].
-  final int mtu;
+  /// Optional Android VpnService [Builder.setMtu]; null negotiates MTU via PPP LCP, else clamped [minVpnMtu]–[maxVpnMtu].
+  final int? mtu;
   final bool favorite;
 
   /// Null for local profiles; otherwise the owning [Subscription.id].
@@ -706,10 +706,15 @@ class Profile {
 
   static int normalizeMtu(int value) => value.clamp(minVpnMtu, maxVpnMtu);
 
-  /// Parses editor / free-form input; invalid or empty [text] returns [fallback].
-  static int mtuFromText(String text, {int fallback = defaultVpnMtu}) {
-    final v = int.tryParse(text.trim());
-    if (v == null) return fallback;
+  static int? normalizeOptionalMtu(int? value) =>
+      value == null ? null : normalizeMtu(value);
+
+  /// Parses editor / free-form input; invalid or empty [text] returns `null`.
+  static int? mtuFromText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+    final v = int.tryParse(trimmed);
+    if (v == null) return null;
     return normalizeMtu(v);
   }
 
@@ -878,7 +883,7 @@ class Profile {
     'dns1Protocol': dns1Protocol.jsonValue,
     'dns2Host': normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
     'dns2Protocol': dns2Protocol.jsonValue,
-    'mtu': mtu,
+    if (mtu != null) 'mtu': normalizeMtu(mtu!),
     'favorite': favorite,
     if (subscriptionId != null && subscriptionId!.isNotEmpty)
       'subscriptionId': subscriptionId,
@@ -908,7 +913,7 @@ class Profile {
       return null;
     }
     if (id.isEmpty || server.isEmpty) return null;
-    int mtu = defaultVpnMtu;
+    int? mtu;
     final mtuRaw = m['mtu'];
     final parsedDns1Protocol = DnsProtocol.fromJson(dns1Protocol);
     final parsedDns2Protocol = DnsProtocol.fromJson(dns2Protocol);
@@ -917,7 +922,7 @@ class Profile {
     } else if (mtuRaw is num) {
       mtu = normalizeMtu(mtuRaw.toInt());
     } else if (mtuRaw is String) {
-      mtu = mtuFromText(mtuRaw, fallback: defaultVpnMtu);
+      mtu = mtuFromText(mtuRaw);
     }
     final favorite = m['favorite'] is bool ? m['favorite'] as bool : false;
     final protocol = TunnelProtocol.fromJson(m['protocol']);

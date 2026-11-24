@@ -59,7 +59,8 @@ object VpnBridge {
     }
 
     /**
-     * On success, fills [outClientIpv4] with four octets 0–255 (PPP IPCP local IPv4) when non-null and length ≥ 4.
+     * On success, fills [outClientIpv4] with four octets 0–255 (PPP IPCP local IPv4) when non-null and length ≥ 4,
+     * and [outNegotiatedMtu] index 0 with the negotiated link MTU when non-null and length ≥ 1.
      */
     @JvmStatic
     external fun nativeNegotiate(
@@ -74,6 +75,7 @@ object VpnBridge {
         outClientIpv4: IntArray?,
         outPrimaryDnsIpv4: IntArray?,
         outSecondaryDnsIpv4: IntArray?,
+        outNegotiatedMtu: IntArray?,
     ): Int
 
     @JvmStatic

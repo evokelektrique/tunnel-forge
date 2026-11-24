@@ -139,7 +139,7 @@ void main() {
           VpnContract.argDnsServerProtocol: DnsProtocol.dnsOverUdp.jsonValue,
         },
       ]);
-      expect(args[VpnContract.argMtu], Profile.defaultVpnMtu);
+      expect(args.containsKey(VpnContract.argMtu), isFalse);
       expect(args[VpnContract.argPppAuth], VpnContract.pppAuthAuto);
       expect(args[VpnContract.argMppe], VpnContract.mppeAuto);
       expect(
@@ -173,6 +173,11 @@ void main() {
         ProxySettings.defaultSocksPort,
       );
       expect(args[VpnContract.argProxyAllowLan], isFalse);
+      calls.clear();
+
+      await client.connect(server: '10.0.0.1', mtu: 1400);
+      final explicitArgs = calls.single.arguments as Map;
+      expect(explicitArgs[VpnContract.argMtu], 1400);
     });
 
     test('connect map includes split-tunnel settings', () async {

@@ -32,7 +32,7 @@ typedef struct {
   int have_ip;
   int have_primary_dns;
   int have_secondary_dns;
-  /** Inner IPv4 link MTU chosen by the app; also advertised as our PPP MRU. */
+  /** Effective inner IPv4 link MTU after PPP LCP MRU negotiation. */
   uint16_t link_mtu;
   /** TCP MSS clamp derived from [link_mtu] for outbound IPv4 SYN packets. */
   uint16_t tcp_mss;

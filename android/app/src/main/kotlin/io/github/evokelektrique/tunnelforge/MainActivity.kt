@@ -321,7 +321,7 @@ class MainActivity : FlutterActivity() {
                     }
                     AppLog.d(
                         TAG,
-                        "vpn_call connect start attempt=$attemptId protocol=${config.protocol} server=${config.server} userPresent=${config.user.isNotEmpty()} pskPresent=${config.psk.isNotEmpty()} dnsMode=${if (config.dnsAutomatic) "automatic" else "manual"} dns=${config.dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${config.mtu} mode=${config.connectionMode} splitTunnelEnabled=${config.splitTunnelEnabled} splitTunnelMode=${config.splitTunnelMode} inclusiveApps=${config.inclusivePackages.size} exclusiveApps=${config.exclusivePackages.size} http=${config.proxyHttpPort} socks=${config.proxySocksPort} lan=${config.proxyAllowLan}",
+                        "vpn_call connect start attempt=$attemptId protocol=${config.protocol} server=${config.server} userPresent=${config.user.isNotEmpty()} pskPresent=${config.psk.isNotEmpty()} dnsMode=${if (config.dnsAutomatic) "automatic" else "manual"} dns=${config.dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${config.mtu?.toString() ?: "auto"} mode=${config.connectionMode} splitTunnelEnabled=${config.splitTunnelEnabled} splitTunnelMode=${config.splitTunnelMode} inclusiveApps=${config.inclusivePackages.size} exclusiveApps=${config.exclusivePackages.size} http=${config.proxyHttpPort} socks=${config.proxySocksPort} lan=${config.proxyAllowLan}",
                     )
                     TunnelServiceLauncher.prepareForStart(config.connectionMode)
                     val intent = TunnelServiceLauncher.buildStartIntent(this, config, attemptId)

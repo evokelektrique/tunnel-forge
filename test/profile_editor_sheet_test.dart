@@ -2,9 +2,13 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:tunnel_forge/features/home/data/home_repositories_impl.dart';
+import 'package:tunnel_forge/features/profile_form/presentation/bloc/profile_form_bloc.dart';
 import 'package:tunnel_forge/features/profiles/presentation/profile_editor_sheet.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
+import 'package:tunnel_forge/l10n/app_localizations.dart';
 
 class _FailOnceWriteSecretStore extends MemorySecretStore {
   bool failWrite = true;
@@ -42,20 +46,41 @@ void main() {
   Future<void> pumpHost(
     WidgetTester tester, {
     required ProfileStore store,
-    required String profileId,
+    String? profileId,
+    Locale? locale,
   }) async {
+    AppL10n.syncLocale(locale ?? const Locale('en'));
     await tester.pumpWidget(
       MaterialApp(
+        locale: locale,
+        localizationsDelegates: AppL10n.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Builder(
           builder: (context) => Scaffold(
             body: Center(
               child: FilledButton(
                 onPressed: () {
-                  ProfileEditorSheet.show(
-                    context,
-                    profileId: profileId,
-                    store: store,
-                  );
+                  if (profileId != null) {
+                    ProfileEditorSheet.show(
+                      context,
+                      profileId: profileId,
+                      store: store,
+                    );
+                  } else {
+                    showModalBottomSheet<bool>(
+                      context: context,
+                      isScrollControlled: true,
+                      builder: (ctx) => BlocProvider(
+                        create: (_) =>
+                            ProfileFormBloc(ProfilesRepositoryImpl(store))
+                              ..add(const ProfileFormStarted(null)),
+                        child: ProfileEditorView(
+                          onClose: () => Navigator.of(ctx).pop(false),
+                          onSaved: (_) => Navigator.of(ctx).pop(true),
+                        ),
+                      ),
+                    );
+                  }
                 },
                 child: const Text('Open'),
               ),
@@ -124,30 +149,44 @@ void main() {
     expect(dnsDropdownSize.height, dnsFieldSize.height);
   });
 
-  testWidgets('shows clearer mtu hint and helper copy', (tester) async {
+  testWidgets('shows clearer mtu hint and helper copy and saves empty as auto', (
+    tester,
+  ) async {
     final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-mtu',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: true,
-      dns1Host: '',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '',
-      dns2Protocol: DnsProtocol.dnsOverUdp,
+    await pumpHost(tester, store: store);
+
+    final mtuField = tester.widget<TextField>(
+      find.byKey(const Key('mtu_field')),
     );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    final mtuField = tester.widgetList<TextField>(find.byType(TextField)).last;
+    expect(mtuField.controller?.text, isEmpty);
     expect(mtuField.decoration?.labelText, 'MTU');
-    expect(mtuField.decoration?.hintText, '${Profile.defaultVpnMtu}');
+    expect(mtuField.decoration?.hintText, 'Optional');
     expect(mtuField.decoration?.helperMaxLines, 2);
     expect(
       mtuField.decoration?.helperText,
-      'Range ${Profile.minVpnMtu}-${Profile.maxVpnMtu}. Use ${Profile.defaultVpnMtu} unless you need a smaller MTU.',
+      'Leave empty to negotiate MTU automatically. Range ${Profile.minVpnMtu}-${Profile.maxVpnMtu}.',
+    );
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final saved = await store.loadProfiles();
+    expect(saved, hasLength(1));
+    expect(saved.single.mtu, isNull);
+  });
+
+  testWidgets('shows localized Persian mtu hint and helper copy', (
+    tester,
+  ) async {
+    final store = await buildStore();
+    await pumpHost(tester, store: store, locale: const Locale('fa'));
+
+    final mtuField = tester.widget<TextField>(
+      find.byKey(const Key('mtu_field')),
+    );
+    expect(mtuField.decoration?.hintText, 'اختیاری');
+    expect(
+      mtuField.decoration?.helperText,
+      'برای مذاکره خودکار MTU خالی بگذارید. بازه ${Profile.minVpnMtu} تا ${Profile.maxVpnMtu}.',
     );
   });
 
@@ -207,10 +246,12 @@ void main() {
     expect(find.byTooltip('Hide IPsec PSK'), findsOneWidget);
   });
 
-  testWidgets('shows inline error when mtu is invalid', (tester) async {
+  testWidgets('clearing mtu removes inline error and saves as auto', (
+    tester,
+  ) async {
     final store = await buildStore();
     const profile = Profile(
-      id: 'profile-invalid-mtu',
+      id: 'profile-clear-mtu',
       displayName: 'Office',
       server: 'vpn.example.com',
       user: 'alice',
@@ -219,15 +260,37 @@ void main() {
       dns1Protocol: DnsProtocol.dnsOverUdp,
       dns2Host: '',
       dns2Protocol: DnsProtocol.dnsOverUdp,
+      mtu: 1400,
     );
     await store.upsertProfile(profile, password: 'pw', psk: '');
 
     await pumpHost(tester, store: store, profileId: profile.id);
 
+    await tester.enterText(
+      find.byKey(const Key('mtu_field')),
+      '${Profile.maxVpnMtu + 1}',
+    );
+    await tester.pump();
+    expect(
+      find.text(
+        'MTU must be between ${Profile.minVpnMtu} and ${Profile.maxVpnMtu}',
+      ),
+      findsOneWidget,
+    );
+
     await tester.enterText(find.byKey(const Key('mtu_field')), '');
     await tester.pump();
 
-    expect(find.text('Enter an MTU value'), findsOneWidget);
+    expect(
+      find.text(
+        'MTU must be between ${Profile.minVpnMtu} and ${Profile.maxVpnMtu}',
+      ),
+      findsNothing,
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final saved = await store.loadProfiles();
+    expect(saved.single.mtu, isNull);
   });
 
   testWidgets('shows inline error when mtu is out of range', (tester) async {

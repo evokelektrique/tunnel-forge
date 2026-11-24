@@ -419,7 +419,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
                 ? 'off (cleartext L2TP if server allows)'
                 : 'on');
       _logDebug(
-        'Profile: protocol=${request.protocol.jsonValue} pppAuth=${request.pppAuth.jsonValue} mppe=${request.mppeMode.jsonValue} server=$host user=${request.user.isEmpty ? '(empty)' : request.user} dns=$dnsLog mtu=${request.mtu} '
+        'Profile: protocol=${request.protocol.jsonValue} pppAuth=${request.pppAuth.jsonValue} mppe=${request.mppeMode.jsonValue} server=$host user=${request.user.isEmpty ? '(empty)' : request.user} dns=$dnsLog mtu=${request.mtu?.toString() ?? 'auto'} '
         'psk=$pskSummary '
         'mode=${request.connectionMode.jsonValue} splitTunnelEnabled=${splitTunnelSettings.enabled} splitTunnelMode=${splitTunnelSettings.mode.jsonValue} '
         'inclusiveApps=${splitTunnelSettings.inclusivePackages.length} exclusiveApps=${splitTunnelSettings.exclusivePackages.length} '

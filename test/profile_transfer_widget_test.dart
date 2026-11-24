@@ -749,7 +749,7 @@ void main() {
       expect(imported.server, 'vpn.example.com');
       expect(imported.user, isEmpty);
       expect(imported.dnsAutomatic, isTrue);
-      expect(imported.mtu, Profile.defaultVpnMtu);
+      expect(imported.mtu, isNull);
       final secretsRow = await store.loadProfileWithSecrets(imported.id);
       expect(secretsRow!.password, isEmpty);
       expect(secretsRow.psk, isEmpty);

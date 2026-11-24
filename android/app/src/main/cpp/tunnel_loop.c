@@ -365,11 +365,21 @@ static int set_nonblock(int fd) {
 }
 
 static int tunnel_sanitize_mtu(int tun_mtu) {
+  if (tun_mtu <= 0)
+    return 0;
   if (tun_mtu < 576)
     return 576;
   if (tun_mtu > 1500)
     return 1500;
   return tun_mtu;
+}
+
+static void tunnel_format_mtu_label(int tun_mtu, char *buf, size_t cap) {
+  if (tun_mtu <= 0) {
+    snprintf(buf, cap, "auto");
+  } else {
+    snprintf(buf, cap, "%d", tun_mtu);
+  }
 }
 
 static _Thread_local int worker_failure[3];
@@ -470,7 +480,8 @@ static int tunnel_negotiate_pptp(const char *server, const char *user, const cha
 
   (void)pptp_flush_gre_ack(&g_state.pptp);
   g_state.ready = 1;
-  tunnel_log("tunnel negotiate ok (PPTP+GRE+PPP mppe=%d)", g_state.ppp.mppe.enabled ? 1 : 0);
+  tunnel_log("tunnel negotiate ok (PPTP+GRE+PPP mppe=%d negotiated_mtu=%d)", g_state.ppp.mppe.enabled ? 1 : 0,
+             tunnel_negotiated_mtu());
   return TUNNEL_EXIT_OK;
 }
 
@@ -493,8 +504,10 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
                       tunnel_ppp_auth_name(ppp_auth));
     return TUNNEL_EXIT_BAD_ARGS;
   }
-  tunnel_log("tunnel negotiate protocol=%s server=%s tun_mtu=%d ppp_auth=%s mppe=%s",
-             protocol == TUNNEL_PROTOCOL_PPTP ? "pptp" : "l2tp", server, tun_mtu, tunnel_ppp_auth_name(ppp_auth),
+  char mtu_label[16];
+  tunnel_format_mtu_label(tun_mtu, mtu_label, sizeof(mtu_label));
+  tunnel_log("tunnel negotiate protocol=%s server=%s tun_mtu=%s ppp_auth=%s mppe=%s",
+             protocol == TUNNEL_PROTOCOL_PPTP ? "pptp" : "l2tp", server, mtu_label, tunnel_ppp_auth_name(ppp_auth),
              tunnel_mppe_mode_name(mppe_mode));
 
   if (protocol == TUNNEL_PROTOCOL_PPTP) {
@@ -547,7 +560,7 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
   }
 
   g_state.ready = 1;
-  tunnel_log("tunnel negotiate ok (IKE+L2TP+PPP)");
+  tunnel_log("tunnel negotiate ok (IKE+L2TP+PPP negotiated_mtu=%d)", tunnel_negotiated_mtu());
   return TUNNEL_EXIT_OK;
 }
 
@@ -562,6 +575,12 @@ void tunnel_negotiated_dns_ipv4(uint8_t primary_out[4], uint8_t secondary_out[4]
     memcpy(primary_out, g_state.ppp.primary_dns, 4);
   if (secondary_out != NULL)
     memcpy(secondary_out, g_state.ppp.secondary_dns, 4);
+}
+
+int tunnel_negotiated_mtu(void) {
+  if (g_state.ppp.link_mtu < 576u || g_state.ppp.link_mtu > 1500u)
+    return 1450;
+  return (int)g_state.ppp.link_mtu;
 }
 
 /*
@@ -1005,8 +1024,10 @@ int tunnel_run_proxy_loop(void) {
 int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char *password, const char *psk,
                     int tun_mtu, int protocol, int ppp_auth, int mppe_mode) {
   atomic_store(&g_stop, 0);
-  tunnel_log("tunnel start protocol=%s server=%s tun_mtu=%d", protocol == TUNNEL_PROTOCOL_PPTP ? "pptp" : "l2tp",
-             server, tunnel_sanitize_mtu(tun_mtu));
+  char mtu_label[16];
+  tunnel_format_mtu_label(tunnel_sanitize_mtu(tun_mtu), mtu_label, sizeof(mtu_label));
+  tunnel_log("tunnel start protocol=%s server=%s tun_mtu=%s", protocol == TUNNEL_PROTOCOL_PPTP ? "pptp" : "l2tp",
+             server, mtu_label);
   int rc = tunnel_negotiate(server, user, password, psk, tun_mtu, protocol, ppp_auth, mppe_mode);
   if (rc != TUNNEL_EXIT_OK)
     return rc;

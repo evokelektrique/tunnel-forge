@@ -53,11 +53,11 @@ void main() {
         dns1Protocol: DnsProtocol.dnsOverUdp,
         dns2Host: '',
         dns2Protocol: DnsProtocol.dnsOverUdp,
-        mtu: Profile.defaultVpnMtu,
       );
 
       final uri = envelope.toTfUri();
       expect(uri, 'tf://vpn.example.com?protocol=l2tp');
+      expect(envelope.toJson().containsKey('mtu'), isFalse);
 
       final decoded = ProfileTransferEnvelope.fromTfUri(uri);
       expect(decoded.protocol, TunnelProtocol.l2tp);
@@ -69,8 +69,90 @@ void main() {
       expect(decoded.dnsAutomatic, isTrue);
       expect(decoded.dns1Host, isEmpty);
       expect(decoded.dns2Host, isEmpty);
-      expect(decoded.mtu, Profile.defaultVpnMtu);
+      expect(decoded.mtu, isNull);
     });
+
+    test(
+      'preserves explicit 1450 mtu in tf uri and .tfp json while omitting null mtu',
+      () {
+        const explicitDefault = ProfileTransferEnvelope(
+          displayName: 'Explicit',
+          server: 'vpn.example.com',
+          user: '',
+          password: '',
+          psk: '',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+          mtu: Profile.defaultVpnMtu,
+        );
+
+        final uri = explicitDefault.toTfUri();
+        expect(uri, contains('mtu=1450'));
+        expect(ProfileTransferEnvelope.fromTfUri(uri).mtu, 1450);
+        expect(explicitDefault.toJson()['mtu'], 1450);
+
+        final decodedNullMtu = ProfileTransferEnvelope.fromJsonMap({
+          'v': ProfileTransferEnvelope.currentVersion,
+          'protocol': 'l2tp',
+          'displayName': 'Auto',
+          'server': 'vpn.example.com',
+          'user': 'alice',
+          'password': 'pw',
+          'psk': 'psk',
+          'dnsAutomatic': true,
+          'dns1Host': '',
+          'dns1Protocol': 'dnsOverUdp',
+          'dns2Host': '',
+          'dns2Protocol': 'dnsOverUdp',
+        });
+        expect(decodedNullMtu.mtu, isNull);
+
+        final decodedExplicitNullMtu = ProfileTransferEnvelope.fromJsonMap({
+          'v': ProfileTransferEnvelope.currentVersion,
+          'protocol': 'l2tp',
+          'displayName': 'Auto',
+          'server': 'vpn.example.com',
+          'user': 'alice',
+          'password': 'pw',
+          'psk': 'psk',
+          'dnsAutomatic': true,
+          'dns1Host': '',
+          'dns1Protocol': 'dnsOverUdp',
+          'dns2Host': '',
+          'dns2Protocol': 'dnsOverUdp',
+          'mtu': null,
+        });
+        expect(decodedExplicitNullMtu.mtu, isNull);
+
+        expect(
+          () => ProfileTransferEnvelope.fromJsonMap({
+            'v': ProfileTransferEnvelope.currentVersion,
+            'protocol': 'l2tp',
+            'displayName': 'Bad MTU',
+            'server': 'vpn.example.com',
+            'user': 'alice',
+            'password': 'pw',
+            'psk': 'psk',
+            'dnsAutomatic': true,
+            'dns1Host': '',
+            'dns1Protocol': 'dnsOverUdp',
+            'dns2Host': '',
+            'dns2Protocol': 'dnsOverUdp',
+            'mtu': 'abc',
+          }),
+          throwsA(
+            isA<ProfileTransferFormatException>().having(
+              (e) => e.code,
+              'code',
+              ProfileTransferErrorCode.invalidIntField,
+            ),
+          ),
+        );
+      },
+    );
 
     test('emits readable plaintext tf uri with non-default fields', () {
       const envelope = ProfileTransferEnvelope(

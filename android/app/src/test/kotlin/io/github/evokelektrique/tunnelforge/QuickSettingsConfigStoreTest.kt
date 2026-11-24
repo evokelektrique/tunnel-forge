@@ -218,4 +218,65 @@ class QuickSettingsConfigStoreTest {
         store.save(null)
         assertNull(store.load())
     }
+
+    @Test
+    fun roundTripsNullMtuAsAuto() {
+        val backing = InMemoryKeyValueStore()
+        val store = QuickSettingsConfigStore(backing, XorTestCipher())
+        val input =
+            TunnelLaunchConfig(
+                profileId = "p-auto-mtu",
+                profileName = "Auto MTU",
+                server = "auto.example",
+                user = "alice",
+                password = "pw",
+                psk = "psk",
+                secretsMissing = false,
+                dnsAutomatic = true,
+                dnsServers = emptyList(),
+                mtu = null,
+                connectionMode = VpnContract.MODE_VPN_TUNNEL,
+                splitTunnelEnabled = false,
+                splitTunnelMode = VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE,
+                inclusivePackages = emptyList(),
+                exclusivePackages = emptyList(),
+                proxyHttpPort = ProxyTunnelService.DEFAULT_HTTP_PORT,
+                proxySocksPort = ProxyTunnelService.DEFAULT_SOCKS_PORT,
+                proxyAllowLan = false,
+            )
+
+        store.save(input)
+        assertEquals(TunnelVpnService.AUTO_TUN_MTU, backing.values["mtu"])
+        val loaded = store.load()
+        assertNotNull(loaded)
+        assertNull(loaded!!.mtu)
+        assertEquals(input, loaded)
+    }
+
+    @Test
+    fun launchConfigFromMapParsesOptionalMtu() {
+        val autoConfig = TunnelLaunchConfig.fromMap(mapOf(VpnContract.ARG_SERVER to "vpn.example"))
+        assertNotNull(autoConfig)
+        assertNull(autoConfig!!.mtu)
+
+        val zeroConfig =
+            TunnelLaunchConfig.fromMap(
+                mapOf(
+                    VpnContract.ARG_SERVER to "vpn.example",
+                    VpnContract.ARG_MTU to 0,
+                ),
+            )
+        assertNotNull(zeroConfig)
+        assertNull(zeroConfig!!.mtu)
+
+        val explicitConfig =
+            TunnelLaunchConfig.fromMap(
+                mapOf(
+                    VpnContract.ARG_SERVER to "vpn.example",
+                    VpnContract.ARG_MTU to 1400,
+                ),
+            )
+        assertNotNull(explicitConfig)
+        assertEquals(1400, explicitConfig!!.mtu)
+    }
 }

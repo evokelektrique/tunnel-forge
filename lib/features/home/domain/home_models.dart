@@ -99,7 +99,7 @@ class TunnelConnectRequest extends Equatable {
     this.mppeMode = MppeMode.auto,
     required this.dnsAutomatic,
     required this.dnsServers,
-    required this.mtu,
+    this.mtu,
     required this.connectionMode,
     required this.splitTunnelSettings,
     required this.proxySettings,
@@ -117,7 +117,7 @@ class TunnelConnectRequest extends Equatable {
   final MppeMode mppeMode;
   final bool dnsAutomatic;
   final List<DnsServerConfig> dnsServers;
-  final int mtu;
+  final int? mtu;
   final ConnectionMode connectionMode;
   final SplitTunnelSettings splitTunnelSettings;
   final ProxySettings proxySettings;
@@ -157,7 +157,7 @@ class QuickSettingsProfileConfig extends Equatable {
     required this.secretsMissing,
     required this.dnsAutomatic,
     required this.dnsServers,
-    required this.mtu,
+    this.mtu,
     required this.connectionMode,
     required this.splitTunnelSettings,
     required this.proxySettings,
@@ -175,7 +175,7 @@ class QuickSettingsProfileConfig extends Equatable {
   final bool secretsMissing;
   final bool dnsAutomatic;
   final List<DnsServerConfig> dnsServers;
-  final int mtu;
+  final int? mtu;
   final ConnectionMode connectionMode;
   final SplitTunnelSettings splitTunnelSettings;
   final ProxySettings proxySettings;

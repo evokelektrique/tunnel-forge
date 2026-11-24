@@ -104,7 +104,7 @@ class ProfileTransferEnvelope {
     required this.dns1Protocol,
     required this.dns2Host,
     required this.dns2Protocol,
-    required this.mtu,
+    this.mtu,
     this.protocol = TunnelProtocol.l2tp,
     this.pppAuth = PppAuthMethod.auto,
     this.mppeMode = MppeMode.auto,
@@ -141,7 +141,7 @@ class ProfileTransferEnvelope {
   final DnsProtocol dns1Protocol;
   final String dns2Host;
   final DnsProtocol dns2Protocol;
-  final int mtu;
+  final int? mtu;
 
   Profile toProfile(
     String id, {
@@ -167,7 +167,7 @@ class ProfileTransferEnvelope {
       dns1Protocol: dns1Protocol,
       dns2Host: Profile.normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
       dns2Protocol: dns2Protocol,
-      mtu: Profile.normalizeMtu(mtu),
+      mtu: Profile.normalizeOptionalMtu(mtu),
       favorite: favorite,
       subscriptionId: subscriptionId,
     );
@@ -189,7 +189,7 @@ class ProfileTransferEnvelope {
     'dns1Protocol': dns1Protocol.jsonValue,
     'dns2Host': Profile.normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
     'dns2Protocol': dns2Protocol.jsonValue,
-    'mtu': Profile.normalizeMtu(mtu),
+    if (mtu != null) 'mtu': Profile.normalizeMtu(mtu!),
   };
 
   String toFileJson() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -238,9 +238,8 @@ class ProfileTransferEnvelope {
         addParam('dns', _formatDnsUriValue(entry));
       }
     }
-    final normalizedMtu = Profile.normalizeMtu(mtu);
-    if (normalizedMtu != Profile.defaultVpnMtu) {
-      addParam('mtu', '$normalizedMtu');
+    if (mtu != null) {
+      addParam('mtu', '${Profile.normalizeMtu(mtu!)}');
     }
     final base = '$uriScheme://${server.trim()}';
     return params.isEmpty ? base : '$base?${params.join('&')}';
@@ -477,9 +476,9 @@ class ProfileTransferEnvelope {
       );
     }
 
-    final int mtu;
+    final int? mtu;
     if (rawMtu == null || rawMtu.trim().isEmpty) {
-      mtu = Profile.defaultVpnMtu;
+      mtu = null;
     } else {
       final parsedMtu = int.tryParse(rawMtu.trim());
       if (parsedMtu == null) {
@@ -774,7 +773,7 @@ class ProfileTransferEnvelope {
     final dns2Protocol = DnsProtocol.fromJson(
       _requireString(map, 'dns2Protocol'),
     );
-    final mtu = _requireInt(map, 'mtu');
+    final mtu = Profile.normalizeOptionalMtu(_optionalInt(map, 'mtu'));
     if (server.trim().isEmpty) {
       throw const ProfileTransferFormatException(
         'Profile transfer server is required',
@@ -881,8 +880,10 @@ class ProfileTransferEnvelope {
         .toLowerCase();
   }
 
-  static int _requireInt(Map<String, Object?> map, String key) {
+  static int? _optionalInt(Map<String, Object?> map, String key) {
     final value = map[key];
+    if (value == null) return null;
+    if (value is String && value.trim().isEmpty) return null;
     return switch (value) {
       int v => v,
       num v => v.toInt(),
@@ -894,8 +895,8 @@ class ProfileTransferEnvelope {
               field: key,
             )),
       _ => throw ProfileTransferFormatException(
-        'Missing integer field: $key',
-        code: ProfileTransferErrorCode.missingField,
+        'Invalid integer field: $key',
+        code: ProfileTransferErrorCode.invalidIntField,
         field: key,
       ),
     };

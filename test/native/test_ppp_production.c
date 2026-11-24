@@ -276,5 +276,163 @@ int main(void) {
     assert(ppp_ipcp_negotiate_transport(&t_off, &sess_off) == 0);
     assert(sess_off.mppe.enabled == 0);
   }
+
+  /* RFC 1661 LCP MRU negotiation (auto vs manual cap, peer CR MRU, Configure-Nak, Configure-Reject). */
+  {
+    assert(ppp_sanitize_link_mtu(0) == 1450u);
+    assert(ppp_sanitize_link_mtu(-1) == 1450u);
+    assert(ppp_sanitize_link_mtu(1380) == 1380u);
+    assert(ppp_sanitize_link_mtu(500) == 576u);
+    assert(ppp_sanitize_link_mtu(1600) == 1500u);
+
+    typedef struct {
+      const uint8_t *frames[8];
+      size_t lens[8];
+      size_t count;
+      size_t idx;
+      uint8_t tx[8][64];
+      size_t tx_lens[8];
+      size_t tx_count;
+    } mru_mock_t;
+
+    int mru_mock_send(void *ctx, const uint8_t *ppp, size_t len) {
+      mru_mock_t *m = (mru_mock_t *)ctx;
+      if (m->tx_count < 8u && len <= sizeof(m->tx[0])) {
+        memcpy(m->tx[m->tx_count], ppp, len);
+        m->tx_lens[m->tx_count] = len;
+      }
+      m->tx_count++;
+      return 0;
+    }
+    int mru_mock_recv(void *ctx, uint8_t *out, size_t cap, int timeout_ms) {
+      (void)timeout_ms;
+      mru_mock_t *m = (mru_mock_t *)ctx;
+      if (m->idx >= m->count || m->lens[m->idx] > cap)
+        return -1;
+      size_t flen = m->lens[m->idx];
+      memcpy(out, m->frames[m->idx], flen);
+      m->idx++;
+      return (int)flen;
+    }
+
+    static const uint8_t peer_cr_mru_1400[] = {
+        0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 12, 1, 4, 0x05, 0x78, 3, 4, 0xc0, 0x23};
+    static const uint8_t peer_ack_id1[] = {0xff, 0x03, 0xc0, 0x21, 2, 1, 0, 4};
+    static const uint8_t peer_ack_id2[] = {0xff, 0x03, 0xc0, 0x21, 2, 2, 0, 4};
+
+    /* 1. Auto mode (tun_mtu=0 -> cap 1450): peer advertises MRU 1400 -> link_mtu=1400, tcp_mss=1360. */
+    {
+      mru_mock_t mock = {.frames = {peer_cr_mru_1400, peer_ack_id1},
+                         .lens = {sizeof(peer_cr_mru_1400), sizeof(peer_ack_id1)},
+                         .count = 2};
+      ppp_transport_t t = {.ctx = &mock, .send_frame = mru_mock_send, .recv_frame = mru_mock_recv};
+      ppp_session_t sess;
+      memset(&sess, 0, sizeof(sess));
+      sess.link_mtu = ppp_sanitize_link_mtu(0);
+      ppp_auth_kind_t auth = PPP_AUTH_MSCHAPV2;
+      assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
+      assert(sess.link_mtu == 1400u);
+      assert(sess.tcp_mss == 1360u);
+    }
+
+    /* 2. Auto mode: peer sends MRU-only Configure-Nak 1280 -> re-sends CR with MRU 1280, auth untouched. */
+    {
+      static const uint8_t peer_cr_chap[] = {0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 9, 3, 5, 0xc2, 0x23, 0x05};
+      static const uint8_t nak_mru_1280[] = {0xff, 0x03, 0xc0, 0x21, 3, 1, 0, 8, 1, 4, 0x05, 0x00};
+      mru_mock_t mock = {.frames = {peer_cr_chap, nak_mru_1280, peer_ack_id2},
+                         .lens = {sizeof(peer_cr_chap), sizeof(nak_mru_1280), sizeof(peer_ack_id2)},
+                         .count = 3};
+      ppp_transport_t t = {.ctx = &mock, .send_frame = mru_mock_send, .recv_frame = mru_mock_recv};
+      ppp_session_t sess;
+      memset(&sess, 0, sizeof(sess));
+      sess.link_mtu = ppp_sanitize_link_mtu(0);
+      ppp_auth_kind_t auth = PPP_AUTH_MSCHAPV2;
+      assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
+      assert(auth == PPP_AUTH_CHAP_MD5);
+      assert(sess.link_mtu == 1280u);
+      assert(sess.tcp_mss == 1240u);
+      /* Last TX packet is our re-sent CR id=2 with MRU 1280. */
+      uint16_t resent_mru = 0;
+      assert(mock.tx_count >= 3u);
+      const uint8_t *last_tx = mock.tx[mock.tx_count - 1u];
+      size_t last_len = mock.tx_lens[mock.tx_count - 1u];
+      assert(last_len > 4u);
+      assert(ppp_lcp_parse_mru(last_tx + 4u, last_len - 4u, &resent_mru) == 0);
+      assert(resent_mru == 1280u);
+    }
+
+    /* 3. Auto mode: peer omits MRU (RFC 1661 default 1500) -> capped to 1450. */
+    {
+      static const uint8_t peer_cr_no_mru[] = {0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 8, 3, 4, 0xc0, 0x23};
+      mru_mock_t mock = {.frames = {peer_cr_no_mru, peer_ack_id1},
+                         .lens = {sizeof(peer_cr_no_mru), sizeof(peer_ack_id1)},
+                         .count = 2};
+      ppp_transport_t t = {.ctx = &mock, .send_frame = mru_mock_send, .recv_frame = mru_mock_recv};
+      ppp_session_t sess;
+      memset(&sess, 0, sizeof(sess));
+      sess.link_mtu = ppp_sanitize_link_mtu(0);
+      ppp_auth_kind_t auth = PPP_AUTH_MSCHAPV2;
+      assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
+      assert(sess.link_mtu == 1450u);
+    }
+
+    /* 4. Auto mode: peer sends Configure-Nak with MRU 1500 -> converges cleanly, link_mtu stays capped at 1450. */
+    {
+      static const uint8_t peer_cr_no_mru[] = {0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 8, 3, 4, 0xc0, 0x23};
+      static const uint8_t nak_mru_1500[] = {0xff, 0x03, 0xc0, 0x21, 3, 1, 0, 8, 1, 4, 0x05, 0xdc};
+      mru_mock_t mock = {.frames = {peer_cr_no_mru, nak_mru_1500, peer_ack_id2},
+                         .lens = {sizeof(peer_cr_no_mru), sizeof(nak_mru_1500), sizeof(peer_ack_id2)},
+                         .count = 3};
+      ppp_transport_t t = {.ctx = &mock, .send_frame = mru_mock_send, .recv_frame = mru_mock_recv};
+      ppp_session_t sess;
+      memset(&sess, 0, sizeof(sess));
+      sess.link_mtu = ppp_sanitize_link_mtu(0);
+      ppp_auth_kind_t auth = PPP_AUTH_MSCHAPV2;
+      assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
+      assert(sess.link_mtu == 1450u);
+    }
+
+    /* 5. Manual mode (1380): peer MRU 1450 -> 1380; peer MRU 1300 -> lowered to 1300. */
+    {
+      static const uint8_t peer_cr_mru_1450[] = {
+          0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 12, 1, 4, 0x05, 0xaa, 3, 4, 0xc0, 0x23};
+      mru_mock_t mock_hi = {.frames = {peer_cr_mru_1450, peer_ack_id1},
+                            .lens = {sizeof(peer_cr_mru_1450), sizeof(peer_ack_id1)},
+                            .count = 2};
+      ppp_transport_t t = {.ctx = &mock_hi, .send_frame = mru_mock_send, .recv_frame = mru_mock_recv};
+      ppp_session_t sess;
+      memset(&sess, 0, sizeof(sess));
+      sess.link_mtu = ppp_sanitize_link_mtu(1380);
+      ppp_auth_kind_t auth = PPP_AUTH_MSCHAPV2;
+      assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
+      assert(sess.link_mtu == 1380u);
+
+      static const uint8_t peer_cr_mru_1300[] = {
+          0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 12, 1, 4, 0x05, 0x14, 3, 4, 0xc0, 0x23};
+      mru_mock_t mock_lo = {.frames = {peer_cr_mru_1300, peer_ack_id1},
+                            .lens = {sizeof(peer_cr_mru_1300), sizeof(peer_ack_id1)},
+                            .count = 2};
+      t.ctx = &mock_lo;
+      memset(&sess, 0, sizeof(sess));
+      sess.link_mtu = ppp_sanitize_link_mtu(1380);
+      assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
+      assert(sess.link_mtu == 1300u);
+    }
+
+    /* 6. Peer Configure-Rejects MRU option -> falls back to min(1500, peer_mru, cap). */
+    {
+      static const uint8_t rej_mru[] = {0xff, 0x03, 0xc0, 0x21, 4, 1, 0, 8, 1, 4, 0x05, 0xaa};
+      mru_mock_t mock = {.frames = {peer_cr_mru_1400, rej_mru, peer_ack_id2},
+                         .lens = {sizeof(peer_cr_mru_1400), sizeof(rej_mru), sizeof(peer_ack_id2)},
+                         .count = 3};
+      ppp_transport_t t = {.ctx = &mock, .send_frame = mru_mock_send, .recv_frame = mru_mock_recv};
+      ppp_session_t sess;
+      memset(&sess, 0, sizeof(sess));
+      sess.link_mtu = ppp_sanitize_link_mtu(0);
+      ppp_auth_kind_t auth = PPP_AUTH_MSCHAPV2;
+      assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
+      assert(sess.link_mtu == 1400u);
+    }
+  }
   return 0;
 }

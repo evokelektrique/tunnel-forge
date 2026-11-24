@@ -56,7 +56,8 @@ void main() {
       expect(p.displayName, 'Office');
       expect(p.server, 'vpn.company.net');
       expect(p.protocol, TunnelProtocol.l2tp);
-      expect(p.mtu, Profile.defaultVpnMtu);
+      expect(p.mtu, isNull);
+      expect(p.toJson().containsKey('mtu'), isFalse);
       expect(p.toJson().containsKey('routingMode'), isFalse);
     });
 
@@ -113,6 +114,22 @@ void main() {
       });
       expect(lo, isNotNull);
       expect(lo!.mtu, Profile.minVpnMtu);
+
+      final explicitDefault = Profile.tryFromJson({
+        'id': 'm3',
+        'displayName': 'M',
+        'server': 's',
+        'user': 'u',
+        'dnsAutomatic': true,
+        'dns1Host': '',
+        'dns1Protocol': 'dnsOverUdp',
+        'dns2Host': '',
+        'dns2Protocol': 'dnsOverUdp',
+        'mtu': Profile.defaultVpnMtu,
+      });
+      expect(explicitDefault, isNotNull);
+      expect(explicitDefault!.mtu, Profile.defaultVpnMtu);
+      expect(explicitDefault.toJson()['mtu'], Profile.defaultVpnMtu);
     });
 
     test('ignores legacy routing keys in stored json', () {

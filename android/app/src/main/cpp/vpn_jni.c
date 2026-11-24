@@ -30,7 +30,7 @@ int pptp_root_run_audit_check(int item_id, char *err_buf, size_t err_cap);
 
 static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring juser, jstring jpassword, jstring jpsk,
                              jint tun_mtu, jint protocol, jint ppp_auth, jint mppe_mode, jintArray jout_client_ipv4,
-                             jintArray jout_primary_dns_ipv4, jintArray jout_secondary_dns_ipv4) {
+                             jintArray jout_primary_dns_ipv4, jintArray jout_secondary_dns_ipv4, jintArray jout_mtu) {
   (void)clazz;
   jint out = (jint)TUNNEL_EXIT_BAD_ARGS;
   const char *server = (*env)->GetStringUTFChars(env, jserver, NULL);
@@ -74,6 +74,10 @@ static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring
       tmp[2] = (jint)secondary_dns[2];
       tmp[3] = (jint)secondary_dns[3];
       (*env)->SetIntArrayRegion(env, jout_secondary_dns_ipv4, 0, 4, tmp);
+    }
+    if (jout_mtu != NULL && (*env)->GetArrayLength(env, jout_mtu) >= 1) {
+      jint negotiated_mtu = (jint)tunnel_negotiated_mtu();
+      (*env)->SetIntArrayRegion(env, jout_mtu, 0, 1, &negotiated_mtu);
     }
   }
 
@@ -413,7 +417,7 @@ static jstring native_run_audit_check(JNIEnv *env, jclass clazz, jint item_id) {
 static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
       {"nativeFailure", "()[I", (void *)native_failure},
-      {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIII[I[I[I)I",
+      {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIII[I[I[I[I)I",
        (void *)native_negotiate},
       {"nativeSetSocketProtectionEnabled", "(Z)V", (void *)native_set_socket_protection_enabled},
       {"nativeSetPptpRuntimeConfig", "(Ljava/lang/String;Ljava/lang/String;)V", (void *)native_set_pptp_runtime_config},

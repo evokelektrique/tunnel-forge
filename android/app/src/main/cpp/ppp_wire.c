@@ -97,6 +97,47 @@ void ppp_lcp_apply_conf_reject(const uint8_t *lcp, size_t lcp_len, int *include_
   }
 }
 
+int ppp_lcp_parse_mru(const uint8_t *lcp, size_t lcp_len, uint16_t *mru_out) {
+  if (lcp == NULL || lcp_len < 8u)
+    return -1;
+  const uint8_t *opts = lcp + 4u;
+  size_t rem = lcp_len - 4u;
+  size_t i = 0;
+  while (i + 2u <= rem) {
+    uint8_t t = opts[i];
+    uint8_t ol = opts[i + 1u];
+    if (ol < 2u || i + (size_t)ol > rem)
+      break;
+    if (t == 1u) {
+      if (ol != 4u)
+        return -1;
+      if (mru_out != NULL)
+        *mru_out = util_read_be16(opts + i + 2u);
+      return 0;
+    }
+    i += (size_t)ol;
+  }
+  return -1;
+}
+
+int ppp_lcp_has_option(const uint8_t *lcp, size_t lcp_len, uint8_t option_type) {
+  if (lcp == NULL || lcp_len < 6u)
+    return 0;
+  const uint8_t *opts = lcp + 4u;
+  size_t rem = lcp_len - 4u;
+  size_t i = 0;
+  while (i + 2u <= rem) {
+    uint8_t t = opts[i];
+    uint8_t ol = opts[i + 1u];
+    if (ol < 2u || i + (size_t)ol > rem)
+      break;
+    if (t == option_type)
+      return 1;
+    i += (size_t)ol;
+  }
+  return 0;
+}
+
 int ppp_ipcp_opts_first_ipv4_option(const uint8_t *ipcp, uint16_t ipcplen, uint8_t option_type, uint8_t ip_out[4]) {
   if (ipcplen < 4u)
     return -1;

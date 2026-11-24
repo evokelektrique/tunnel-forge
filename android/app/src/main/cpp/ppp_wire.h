@@ -29,6 +29,10 @@ int ppp_lcp_build_cr(uint8_t *out, size_t cap, uint8_t id, ppp_auth_kind_t auth,
 void ppp_lcp_apply_conf_reject(const uint8_t *lcp, size_t lcp_len, int *include_accm, int *include_auth,
                                int *removed_accm, int *removed_auth, int *include_mru);
 
+int ppp_lcp_parse_mru(const uint8_t *lcp, size_t lcp_len, uint16_t *mru_out);
+
+int ppp_lcp_has_option(const uint8_t *lcp, size_t lcp_len, uint8_t option_type);
+
 int ppp_ipcp_opts_first_ipv4_option(const uint8_t *ipcp, uint16_t ipcplen, uint8_t option_type, uint8_t ip_out[4]);
 
 int ppp_ipcp_build_cr(uint8_t *out, size_t cap, uint8_t id, const uint8_t ip[4], int include_address_control,

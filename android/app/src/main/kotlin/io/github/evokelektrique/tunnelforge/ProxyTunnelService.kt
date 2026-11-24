@@ -154,11 +154,13 @@ class ProxyTunnelService : Service() {
                 val proxyAuthEnabled = intent.getBooleanExtra(EXTRA_PROXY_AUTH_ENABLED, false)
                 val proxyAuthUsername = intent.getStringExtra(EXTRA_PROXY_AUTH_USERNAME).orEmpty()
                 val proxyAuthPassword = intent.getStringExtra(EXTRA_PROXY_AUTH_PASSWORD).orEmpty()
-                val proxyMtu = sanitizeMtu(intent.getIntExtra(EXTRA_MTU, DEFAULT_LINK_MTU))
+                val requestedMtu = TunnelVpnService.sanitizeOptionalMtu(
+                    intent.getIntExtra(EXTRA_MTU, TunnelVpnService.AUTO_TUN_MTU),
+                )
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$proxyMtu http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"}",
                 )
                 if (server.isNullOrBlank()) {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Invalid proxy arguments from the app.", attemptId)
@@ -208,7 +210,7 @@ class ProxyTunnelService : Service() {
                             dnsServers = dnsServers,
                             profileName = profileName,
                             proxyConfig = proxyConfig,
-                            proxyMtu = proxyMtu,
+                            requestedMtu = requestedMtu,
                         )
                     },
                     "proxy-negotiation",
@@ -337,7 +339,7 @@ class ProxyTunnelService : Service() {
         dnsServers: List<DnsServerConfig>,
         profileName: String,
         proxyConfig: ProxyRuntimeConfig,
-        proxyMtu: Int,
+        requestedMtu: Int?,
     ) {
         val label = profileName.ifEmpty { server }
         val currentWorker = Thread.currentThread()
@@ -445,7 +447,7 @@ class ProxyTunnelService : Service() {
                         dnsAutomatic = dnsAutomatic,
                         dnsServers = dnsServers,
                         proxyConfig = proxyConfig,
-                        proxyMtu = proxyMtu,
+                        requestedMtu = requestedMtu,
                         hasEverConnected = hasEverConnected,
                         monitor = monitor,
                         onReady = {
@@ -573,7 +575,7 @@ class ProxyTunnelService : Service() {
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         proxyConfig: ProxyRuntimeConfig,
-        proxyMtu: Int,
+        requestedMtu: Int?,
         hasEverConnected: Boolean,
         monitor: ActiveNetworkMonitor,
         onReady: () -> Unit,
@@ -599,19 +601,21 @@ class ProxyTunnelService : Service() {
             val negotiatedClientIp = IntArray(4)
             val negotiatedPrimaryDns = IntArray(4)
             val negotiatedSecondaryDns = IntArray(4)
+            val negotiatedMtu = IntArray(1)
             val negResult =
                 VpnBridge.nativeNegotiate(
                     server,
                     user,
                     password,
                     psk,
-                    proxyMtu,
+                    requestedMtu ?: TunnelVpnService.AUTO_TUN_MTU,
                     VpnBridge.protocolCode(protocol),
                     VpnBridge.pppAuthCode(pppAuth),
                     VpnBridge.mppeModeCode(mppe),
                     negotiatedClientIp,
                     negotiatedPrimaryDns,
                     negotiatedSecondaryDns,
+                    negotiatedMtu,
                 )
             VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeNegotiate finished with exit code=$negResult")
             if (stopRequested) {
@@ -654,10 +658,12 @@ class ProxyTunnelService : Service() {
                 return ProxyAttemptOutcome(ProxyAttemptOutcomeKind.FATAL_FAILURE, msg)
             }
 
+            val effectiveMtu =
+                TunnelVpnService.sanitizeMtu(negotiatedMtu[0].takeIf { it > 0 } ?: (requestedMtu ?: DEFAULT_LINK_MTU))
             VpnTunnelEvents.emitEngineLog(
                 Log.DEBUG,
                 TAG,
-                "${prefixAttempt(attemptId)}Negotiated tunnel clientIpv4=${negotiatedClientIp.joinToString(".")}; awaiting native packet bridge",
+                "${prefixAttempt(attemptId)}Negotiated tunnel clientIpv4=${negotiatedClientIp.joinToString(".")} negotiatedMtu=$effectiveMtu; awaiting native packet bridge",
             )
             if (!hasEverConnected) {
                 currentTunnelState = VpnContract.TUNNEL_CONNECTING
@@ -710,7 +716,7 @@ class ProxyTunnelService : Service() {
                 }
             }
 
-            val gvisorStartResult = VpnBridge.nativeGvisorStart(negotiatedClientIp, proxyMtu)
+            val gvisorStartResult = VpnBridge.nativeGvisorStart(negotiatedClientIp, effectiveMtu)
             if (gvisorStartResult != 0) {
                 return ProxyAttemptOutcome(
                     ProxyAttemptOutcomeKind.FATAL_FAILURE,
@@ -1324,7 +1330,6 @@ class ProxyTunnelService : Service() {
         private const val NOTIFICATION_ID = 7111
 
         internal fun sanitizePort(value: Int, fallback: Int): Int = ProxyPortAllocator.sanitizePort(value, fallback)
-        private fun sanitizeMtu(value: Int): Int = TunnelVpnService.sanitizeMtu(value)
 
         private fun prefixAttempt(attemptId: String): String = if (attemptId.isEmpty()) "" else "attempt=$attemptId "
 

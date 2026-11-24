@@ -544,6 +544,30 @@ static int lcp_build_nak_for_disallowed_auth(const uint8_t *frame, size_t prefix
 /* Set once LCP is negotiated: late peer Configure-Requests (retransmits that crossed our Ack) are acked
  * inside recv_ppp() so the server does not time out LCP while we wait for CHAP/IPCP. */
 
+#define PPP_DEFAULT_LINK_MTU 1450u
+
+static uint16_t ppp_clamp_mtu(uint16_t mtu) {
+  if (mtu < 576u)
+    return 576u;
+  if (mtu > 1500u)
+    return 1500u;
+  return mtu;
+}
+
+static uint16_t ppp_sanitize_link_mtu(int tun_mtu) {
+  if (tun_mtu <= 0)
+    return PPP_DEFAULT_LINK_MTU;
+  if (tun_mtu < 576)
+    return 576u;
+  if (tun_mtu > 1500)
+    return 1500u;
+  return (uint16_t)tun_mtu;
+}
+
+static uint16_t ppp_tcp_mss_for_link_mtu(uint16_t link_mtu) {
+  return link_mtu > 40u ? (uint16_t)(link_mtu - 40u) : 536u;
+}
+
 /**
  * Negotiate LCP open state for the PPP link on the current L2TP session.
  *
@@ -571,7 +595,10 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
   int required_auth = ppp_effective_required_auth(transport);
   ppp_auth_kind_t auth = required_auth >= 0 ? (ppp_auth_kind_t)required_auth : PPP_AUTH_MSCHAPV2;
   uint8_t pkt[64];
-  uint16_t cr_mru = (ppp != NULL && ppp->link_mtu >= 576u) ? ppp->link_mtu : 1500u;
+  uint16_t mtu_cap =
+      (ppp != NULL && ppp->link_mtu >= 576u && ppp->link_mtu <= 1500u) ? ppp->link_mtu : PPP_DEFAULT_LINK_MTU;
+  uint16_t cr_mru = mtu_cap;
+  uint16_t peer_mru = 1500u;
   int lcp_out_include_ac = 1;
   int lcp_peer_framing_seen = 0;
   int lcp_mru_in_cr = 1;
@@ -717,6 +744,12 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
       ackbuf[prefix + 2u] = 2;
       if (ppp_transport_send(transport, ackbuf, total_ack) < 0)
         return -1;
+      uint16_t parsed_peer_mru = 0u;
+      if (ppp_lcp_parse_mru(p + 2u, (size_t)lcp_len, &parsed_peer_mru) == 0) {
+        peer_mru = ppp_clamp_mtu(parsed_peer_mru);
+      } else {
+        peer_mru = 1500u;
+      }
       peer_cr_acked = 1;
       /* Peer re-sending its CR while ours is not acked yet means it has not seen ours: (re)send it, otherwise
        * both sides wait forever. Once ours is acked, resending would restart negotiation on the server. */
@@ -766,12 +799,24 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
       continue;
     }
     if (code == 3 && rid == id) {
-      /* Configure-Nak: adopt suggested auth family and resend with next id. */
+      /* Configure-Nak: adopt suggested MRU and/or auth family and resend with next id. */
       uint16_t lcp_len = util_read_be16(p + 4);
-      if (lcp_len >= 4 && 2u + (size_t)lcp_len <= len)
-        lcp_auth_in_cr = 0; /* auth is decided by the server's CR, never by ours */
-      if (required_auth < 0) {
-        if (lcp_len >= 4 && 2u + (size_t)lcp_len <= len) {
+      int has_mru_nak = 0;
+      int has_auth_nak = 0;
+      if (lcp_len >= 4u && 2u + (size_t)lcp_len <= len) {
+        uint16_t nak_mru = 0u;
+        if (ppp_lcp_parse_mru(p + 2u, (size_t)lcp_len, &nak_mru) == 0) {
+          cr_mru = ppp_clamp_mtu(nak_mru);
+          has_mru_nak = 1;
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp lcp: Configure-Nak suggested mru=%u (adopted=%u)",
+                            (unsigned)nak_mru, (unsigned)cr_mru);
+        }
+        has_auth_nak = ppp_lcp_has_option(p + 2u, (size_t)lcp_len, 3u);
+        if (has_auth_nak)
+          lcp_auth_in_cr = 0; /* auth is decided by the server's CR, never by ours */
+      }
+      if (required_auth < 0 && (!has_mru_nak || has_auth_nak)) {
+        if (lcp_len >= 4u && 2u + (size_t)lcp_len <= len) {
           if (lcp_nak_wants_pap(p + 6, (size_t)lcp_len - 4u)) {
             auth = PPP_AUTH_PAP;
           } else {
@@ -787,8 +832,8 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
                               lcp_mru_in_cr);
       if (plen < 0)
         return -1;
-      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: received NAK, resend Configure-Request id=%u auth=%s",
-                        (unsigned)id, ppp_auth_name(auth));
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: received NAK, resend Configure-Request id=%u auth=%s mru=%u",
+                        (unsigned)id, ppp_auth_name(auth), (unsigned)cr_mru);
       if (ppp_transport_send(transport, pkt, (size_t)plen) < 0)
         return -1;
     }
@@ -804,9 +849,20 @@ static int ppp_lcp_negotiate_transport(ppp_transport_t *transport, ppp_auth_kind
   }
   if (required_auth >= 0 && !peer_saw_auth)
     auth = (ppp_auth_kind_t)required_auth;
-  tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: acked final auth=%s acfc=%d pfc=%d mru=%u",
+  uint16_t our_mru = lcp_mru_in_cr ? cr_mru : 1500u;
+  uint16_t effective_mtu = our_mru < peer_mru ? our_mru : peer_mru;
+  if (effective_mtu > mtu_cap)
+    effective_mtu = mtu_cap;
+  effective_mtu = ppp_clamp_mtu(effective_mtu);
+  if (ppp != NULL) {
+    ppp->link_mtu = effective_mtu;
+    ppp->tcp_mss = ppp_tcp_mss_for_link_mtu(effective_mtu);
+  }
+  tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                    "ppp lcp: acked final auth=%s acfc=%d pfc=%d our_mru=%u peer_mru=%u link_mtu=%u tcp_mss=%u",
                     ppp_auth_name(auth), ppp != NULL ? ppp->lcp_acfc : -1, ppp != NULL ? ppp->lcp_pfc : -1,
-                    (unsigned)cr_mru);
+                    (unsigned)our_mru, (unsigned)peer_mru, (unsigned)effective_mtu,
+                    (unsigned)ppp_tcp_mss_for_link_mtu(effective_mtu));
   *auth_out = auth;
   transport->lcp_opened = 1;
   return 0;
@@ -1817,18 +1873,6 @@ static int ppp_ipcp_negotiate_transport(ppp_transport_t *transport, ppp_session_
     return -1;
   }
   return 0;
-}
-
-static uint16_t ppp_sanitize_link_mtu(int tun_mtu) {
-  if (tun_mtu < 576)
-    return 576u;
-  if (tun_mtu > 1500)
-    return 1500u;
-  return (uint16_t)tun_mtu;
-}
-
-static uint16_t ppp_tcp_mss_for_link_mtu(uint16_t link_mtu) {
-  return link_mtu > 40u ? (uint16_t)(link_mtu - 40u) : 536u;
 }
 
 /**

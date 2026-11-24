@@ -291,7 +291,7 @@ class TunnelVpnService : VpnService() {
                     }
                 val dnsAutomatic = intent.getBooleanExtra(EXTRA_DNS_AUTOMATIC, true)
                 val dnsServers = manualDnsServersFromIntent(intent)
-                val tunMtu = sanitizeMtu(intent.getIntExtra(EXTRA_MTU, DEFAULT_TUN_MTU))
+                val requestedMtu = sanitizeOptionalMtu(intent.getIntExtra(EXTRA_MTU, AUTO_TUN_MTU))
                 val profileName = intent.getStringExtra(EXTRA_PROFILE_NAME)?.trim().orEmpty()
                 val splitTunnelEnabled = intent.getBooleanExtra(EXTRA_SPLIT_TUNNEL_ENABLED, false)
                 val splitTunnelMode =
@@ -372,7 +372,7 @@ class TunnelVpnService : VpnService() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$tunMtu splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
                 )
                 // TUN establish() can block; do not hold up onStartCommand after startForeground.
                 val startupThread =
@@ -389,7 +389,7 @@ class TunnelVpnService : VpnService() {
                                 mppe,
                                 dnsAutomatic,
                                 dnsServers,
-                                tunMtu,
+                                requestedMtu,
                                 splitTunnelEnabled,
                                 splitTunnelMode,
                                 inclusivePackages,
@@ -657,7 +657,7 @@ class TunnelVpnService : VpnService() {
         mppe: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
-        tunMtu: Int,
+        requestedMtu: Int?,
         splitTunnelEnabled: Boolean,
         splitTunnelMode: String,
         inclusivePackages: ArrayList<String>?,
@@ -839,7 +839,7 @@ class TunnelVpnService : VpnService() {
                         mppe = mppe,
                         dnsAutomatic = dnsAutomatic,
                         dnsServers = dnsServers,
-                        tunMtu = tunMtu,
+                        requestedMtu = requestedMtu,
                         splitTunnelEnabled = splitTunnelEnabled,
                         splitTunnelMode = splitTunnelMode,
                         effectiveInclusivePkgs = effectiveInclusivePkgs,
@@ -955,7 +955,7 @@ class TunnelVpnService : VpnService() {
         mppe: String,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
-        tunMtu: Int,
+        requestedMtu: Int?,
         splitTunnelEnabled: Boolean,
         splitTunnelMode: String,
         effectiveInclusivePkgs: List<String>,
@@ -970,19 +970,21 @@ class TunnelVpnService : VpnService() {
         val negotiatedClientIp = IntArray(4)
         val negotiatedPrimaryDns = IntArray(4)
         val negotiatedSecondaryDns = IntArray(4)
+        val negotiatedMtu = IntArray(1)
         val negResult =
             VpnBridge.nativeNegotiate(
                 server,
                 user,
                 password,
                 psk,
-                tunMtu,
+                requestedMtu ?: AUTO_TUN_MTU,
                 VpnBridge.protocolCode(protocol),
                 VpnBridge.pppAuthCode(pppAuth),
                 VpnBridge.mppeModeCode(mppe),
                 negotiatedClientIp,
                 negotiatedPrimaryDns,
                 negotiatedSecondaryDns,
+                negotiatedMtu,
             )
         VpnTunnelEvents.emitEngineLog(Log.DEBUG, TAG, "${prefixAttempt(attemptId)}nativeNegotiate finished with exit code=$negResult")
         if (sessionStopRequested || !shouldHandleAttempt(attemptId, "post-negotiate")) {
@@ -1015,6 +1017,7 @@ class TunnelVpnService : VpnService() {
             return AttemptResult(AttemptResultKind.RECOVERABLE_DISCONNECT, detail, failure, exitCode = code)
         }
 
+        val effectiveMtu = sanitizeMtu(negotiatedMtu[0].takeIf { it > 0 } ?: (requestedMtu ?: DEFAULT_TUN_MTU))
         val tunIpv4 =
             "${negotiatedClientIp[0]}.${negotiatedClientIp[1]}.${negotiatedClientIp[2]}.${negotiatedClientIp[3]}"
         val useIpcpAddress =
@@ -1024,7 +1027,7 @@ class TunnelVpnService : VpnService() {
         VpnTunnelEvents.emitEngineLog(
             Log.DEBUG,
             TAG,
-            "${prefixAttempt(attemptId)}TUN addAddress=$addressForTun (IPCP=$tunIpv4 useIpcp=$useIpcpAddress)",
+            "${prefixAttempt(attemptId)}TUN addAddress=$addressForTun (IPCP=$tunIpv4 useIpcp=$useIpcpAddress) negotiatedMtu=$effectiveMtu",
         )
         val automaticDnsServers = DnsConfigSupport.negotiatedServers(negotiatedPrimaryDns, negotiatedSecondaryDns)
         val manualDnsServers =
@@ -1070,7 +1073,7 @@ class TunnelVpnService : VpnService() {
 
         val builder = Builder()
             .setSession(getString(R.string.vpn_session_name))
-            .setMtu(tunMtu)
+            .setMtu(effectiveMtu)
             .addAddress(addressForTun, 32)
             .addRoute("0.0.0.0", 0)
         for (dnsServer in tunDnsServersForBuilder(dnsAutomatic, automaticDnsServers)) {
@@ -1586,7 +1589,9 @@ class TunnelVpnService : VpnService() {
         private const val NOTIFICATION_ID = 7101
         private const val REQUEST_CODE_DISCONNECT = 7102
 
-        /** When [EXTRA_MTU] is absent or invalid. */
+        /** When [EXTRA_MTU] requests automatic LCP MTU negotiation. */
+        const val AUTO_TUN_MTU = 0
+        /** Fallback MTU when [EXTRA_MTU] is absent or invalid. */
         const val DEFAULT_TUN_MTU = 1450
         private const val MIN_TUN_MTU = 576
         private const val MAX_TUN_MTU = 1500
@@ -1598,6 +1603,8 @@ class TunnelVpnService : VpnService() {
         internal const val PPTP_GRE_HELPER_LIB_NAME = "libpptp_gre_helper.so"
 
         fun sanitizeMtu(value: Int): Int = value.coerceIn(MIN_TUN_MTU, MAX_TUN_MTU)
+
+        fun sanitizeOptionalMtu(value: Int?): Int? = value?.takeIf { it > 0 }?.let(::sanitizeMtu)
 
         private fun normalizedPackages(packages: List<String>?): List<String> =
             packages

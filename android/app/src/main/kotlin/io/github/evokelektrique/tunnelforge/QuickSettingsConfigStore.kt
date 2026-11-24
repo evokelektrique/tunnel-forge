@@ -181,7 +181,7 @@ internal class QuickSettingsConfigStore(
             putString(KEY_DNS1_PROTOCOL, dns1?.protocol?.wireValue.orEmpty())
             putString(KEY_DNS2_HOST, dns2?.host.orEmpty())
             putString(KEY_DNS2_PROTOCOL, dns2?.protocol?.wireValue.orEmpty())
-            putInt(KEY_MTU, config.mtu)
+            putInt(KEY_MTU, config.mtu ?: TunnelVpnService.AUTO_TUN_MTU)
             putString(KEY_PROTOCOL, config.protocol)
             putString(KEY_PPP_AUTH, config.pppAuth)
             putString(KEY_MPPE, config.mppe)
@@ -263,8 +263,8 @@ internal class QuickSettingsConfigStore(
             secretsMissing = secretsMissing,
             dnsAutomatic = store.getBoolean(KEY_DNS_AUTOMATIC, true),
             dnsServers = dnsServers,
-            mtu = TunnelVpnService.sanitizeMtu(
-                store.getInt(KEY_MTU, TunnelVpnService.DEFAULT_TUN_MTU),
+            mtu = TunnelVpnService.sanitizeOptionalMtu(
+                store.getInt(KEY_MTU, TunnelVpnService.AUTO_TUN_MTU),
             ),
             connectionMode = connectionMode,
             splitTunnelEnabled = store.getBoolean(KEY_SPLIT_TUNNEL_ENABLED, false),

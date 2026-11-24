@@ -357,11 +357,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     final safeBottom = MediaQuery.paddingOf(context).bottom;
     final dnsSectionColor = theme.colorScheme.surfaceContainerHigh;
     final t = AppL10n.of(context);
-    final mtuHelper = t.mtuHelper(
-      Profile.minVpnMtu,
-      Profile.maxVpnMtu,
-      Profile.defaultVpnMtu,
-    );
+    final mtuHelper = t.mtuHelper(Profile.minVpnMtu, Profile.maxVpnMtu);
 
     return BlocConsumer<ProfileFormBloc, ProfileFormState>(
       listenWhen: (previous, current) =>
@@ -601,7 +597,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                                 _deco(
                                   context,
                                   label: 'MTU',
-                                  hint: '${Profile.defaultVpnMtu}',
+                                  hint: t.mtuHint,
                                 ).copyWith(
                                   errorText: state.mtuErrorText,
                                   errorMaxLines: 2,

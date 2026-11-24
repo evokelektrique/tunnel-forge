@@ -11,7 +11,7 @@ internal data class TunnelLaunchConfig(
     val secretsMissing: Boolean,
     val dnsAutomatic: Boolean,
     val dnsServers: List<DnsServerConfig>,
-    val mtu: Int,
+    val mtu: Int?,
     val connectionMode: String,
     val splitTunnelEnabled: Boolean,
     val splitTunnelMode: String,
@@ -49,12 +49,12 @@ internal data class TunnelLaunchConfig(
             val dnsAutomatic = args[VpnContract.ARG_DNS_AUTOMATIC] as? Boolean ?: true
             val dnsServers = parseDnsServers(args[VpnContract.ARG_DNS_SERVERS])
             val mtuRaw = args[VpnContract.ARG_MTU]
-            val mtu = TunnelVpnService.sanitizeMtu(
+            val mtu = TunnelVpnService.sanitizeOptionalMtu(
                 when (mtuRaw) {
                     is Int -> mtuRaw
                     is Long -> mtuRaw.toInt()
                     is Number -> mtuRaw.toInt()
-                    else -> TunnelVpnService.DEFAULT_TUN_MTU
+                    else -> null
                 },
             )
             val connectionMode =
