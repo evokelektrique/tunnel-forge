@@ -425,25 +425,117 @@ jobs:
           printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${TUNNEL_FORGE_ANDROID_KEYSTORE_PATH}"
           chmod 600 "${TUNNEL_FORGE_ANDROID_KEYSTORE_PATH}"
 
-      - name: Build release APK
+      - name: Build release APKs
         if: github.event_name != 'pull_request' && inputs.pr_number == ''
         env:
           TUNNEL_FORGE_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
           TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           TUNNEL_FORGE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           TUNNEL_FORGE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: flutter build apk --release
+        run: |
+          rm -rf dist/ci-release-apks
+          mkdir -p dist/ci-release-apks
+          flutter build apk --release --split-per-abi
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+             build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+             build/app/outputs/flutter-apk/app-x86_64-release.apk \
+             dist/ci-release-apks/
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             dist/ci-release-apks/app-universal-release.apk
+
+      - name: Verify release APKs
+        if: github.event_name != 'pull_request' && inputs.pr_number == ''
+        run: |
+          android_sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          if [[ -z "${android_sdk_root}" ]]; then
+            echo "Android SDK root is not set" >&2
+            exit 1
+          fi
+
+          apksigner_path="$(
+            find "${android_sdk_root}/build-tools" \
+              -maxdepth 2 \
+              -type f \
+              -name apksigner \
+              -executable |
+              sort -V |
+              tail -n 1
+          )"
+
+          if [[ -z "${apksigner_path}" ]]; then
+            echo "apksigner not found under ${android_sdk_root}/build-tools" >&2
+            exit 1
+          fi
+
+          aapt2_path="$(
+            find "${android_sdk_root}/build-tools" \
+              -maxdepth 2 \
+              -type f \
+              -name aapt2 \
+              -executable |
+              sort -V |
+              tail -n 1
+          )"
+
+          if [[ -z "${aapt2_path}" ]]; then
+            echo "aapt2 not found under ${android_sdk_root}/build-tools" >&2
+            exit 1
+          fi
+
+          base_version_code="$(awk -F'[ +]+' '/^version:/ {print $3; exit}' pubspec.yaml | tr -d '\r')"
+          if [[ ! "${base_version_code}" =~ ^[0-9]+$ ]]; then
+            echo "Failed to parse numeric base versionCode from pubspec.yaml: '${base_version_code}'" >&2
+            exit 1
+          fi
+
+          echo "Using apksigner: ${apksigner_path}"
+          echo "Using aapt2: ${aapt2_path}"
+
+          declare -A expected_offsets=(
+            ["app-armeabi-v7a-release.apk"]=1
+            ["app-arm64-v8a-release.apk"]=2
+            ["app-x86_64-release.apk"]=3
+            ["app-universal-release.apk"]=4
+          )
+
+          for apk_name in \
+            app-armeabi-v7a-release.apk \
+            app-arm64-v8a-release.apk \
+            app-x86_64-release.apk \
+            app-universal-release.apk; do
+            apk_path="dist/ci-release-apks/${apk_name}"
+            expected_version_code="$((base_version_code * 10 + expected_offsets[${apk_name}]))"
+
+            "${apksigner_path}" verify --verbose "${apk_path}"
+
+            badging="$("${aapt2_path}" dump badging "${apk_path}")"
+            pkg_line="$(printf '%s\n' "${badging}" | grep -m1 '^package: ' || true)"
+            echo "${apk_name}: ${pkg_line}"
+
+            if ! printf '%s\n' "${pkg_line}" | grep -q "name='io.github.evokelektrique.tunnelforge'"; then
+              echo "Unexpected package name in ${apk_path}" >&2
+              exit 1
+            fi
+            if ! printf '%s\n' "${pkg_line}" | grep -q "versionCode='${expected_version_code}'"; then
+              echo "Expected versionCode '${expected_version_code}' in ${apk_path}" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload APK
         if: github.event_name != 'pull_request' && inputs.pr_number == ''
         uses: actions/upload-artifact@v7
         with:
           name: tunnel-forge-release-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          path: dist/ci-release-apks/*.apk
           if-no-files-found: error
 
       - name: Build reviewer APK
         if: github.event_name == 'pull_request' || inputs.pr_number != ''
+        env:
+          ORG_GRADLE_PROJECT_tunnelForgeDebugAppIdSuffix: .debug
         run: flutter build apk --debug
 
       - name: Verify reviewer APK
@@ -471,9 +563,45 @@ jobs:
             exit 1
           fi
 
+          aapt2_path="$(
+            find "${android_sdk_root}/build-tools" \
+              -maxdepth 2 \
+              -type f \
+              -name aapt2 \
+              -executable |
+              sort -V |
+              tail -n 1
+          )"
+
+          if [[ -z "${aapt2_path}" ]]; then
+            echo "aapt2 not found under ${android_sdk_root}/build-tools" >&2
+            exit 1
+          fi
+
           echo "Using apksigner: ${apksigner_path}"
           "${apksigner_path}" verify --verbose \
             build/app/outputs/flutter-apk/app-debug.apk
+
+          base_version_code="$(awk -F'[ +]+' '/^version:/ {print $3; exit}' pubspec.yaml | tr -d '\r')"
+          if [[ ! "${base_version_code}" =~ ^[0-9]+$ ]]; then
+            echo "Failed to parse numeric base versionCode from pubspec.yaml: '${base_version_code}'" >&2
+            exit 1
+          fi
+          expected_version_code="$((base_version_code * 10 + 4))"
+
+          echo "Using aapt2: ${aapt2_path}"
+          badging="$("${aapt2_path}" dump badging build/app/outputs/flutter-apk/app-debug.apk)"
+          pkg_line="$(printf '%s\n' "${badging}" | grep -m1 '^package: ' || true)"
+          echo "${pkg_line}"
+
+          if ! printf '%s\n' "${pkg_line}" | grep -q "name='io.github.evokelektrique.tunnelforge.debug'"; then
+            echo "Expected package name 'io.github.evokelektrique.tunnelforge.debug' in app-debug.apk" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "${pkg_line}" | grep -q "versionCode='${expected_version_code}'"; then
+            echo "Expected versionCode '${expected_version_code}' in app-debug.apk" >&2
+            exit 1
+          fi
 
       - name: Upload reviewer APK
         if: github.event_name == 'pull_request' || inputs.pr_number != ''

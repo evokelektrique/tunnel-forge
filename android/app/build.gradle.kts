@@ -311,9 +311,12 @@ configure<ApplicationExtension> {
             proguardFiles("proguard-rules.pro")
         }
         debug {
-            providers.gradleProperty("tunnelForgeDebugAppIdSuffix").orNull?.takeIf { it.isNotBlank() }?.let {
-                applicationIdSuffix = it
-            }
+            (providers.gradleProperty("tunnelForgeDebugAppIdSuffix").orNull
+                ?: providers.environmentVariable("ORG_GRADLE_PROJECT_tunnelForgeDebugAppIdSuffix").orNull)
+                ?.takeIf { it.isNotBlank() }
+                ?.let {
+                    applicationIdSuffix = it
+                }
             val collectCoverage = providers.gradleProperty("tunnelForgeCoverage").isPresent
             enableUnitTestCoverage = collectCoverage
             enableAndroidTestCoverage = collectCoverage
@@ -366,10 +369,11 @@ configure<ApplicationExtension> {
 
 androidComponents {
     val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86_64" to 3)
+    val universalAbiCode = 4
     onVariants { variant ->
         variant.outputs.forEach { output ->
             val abiName = output.filters.find { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
-            val abiVersionCode = abiCodes[abiName]
+            val abiVersionCode = if (abiName == null) universalAbiCode else abiCodes[abiName]
             if (abiVersionCode != null) {
                 output.versionCode.set(flutter.versionCode * 10 + abiVersionCode)
             }
