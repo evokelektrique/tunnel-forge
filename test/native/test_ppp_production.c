@@ -53,6 +53,37 @@ static int fake_send(void *ctx, const uint8_t *in, size_t n) {
   return (int)n;
 }
 
+typedef struct {
+  const uint8_t *frames[8];
+  size_t lens[8];
+  size_t count;
+  size_t idx;
+  uint8_t tx[8][64];
+  size_t tx_lens[8];
+  size_t tx_count;
+} mru_mock_t;
+
+static int mru_mock_send(void *ctx, const uint8_t *ppp, size_t len) {
+  mru_mock_t *m = (mru_mock_t *)ctx;
+  if (m->tx_count < 8u && len <= sizeof(m->tx[0])) {
+    memcpy(m->tx[m->tx_count], ppp, len);
+    m->tx_lens[m->tx_count] = len;
+  }
+  m->tx_count++;
+  return 0;
+}
+
+static int mru_mock_recv(void *ctx, uint8_t *out, size_t cap, int timeout_ms) {
+  (void)timeout_ms;
+  mru_mock_t *m = (mru_mock_t *)ctx;
+  if (m->idx >= m->count || m->lens[m->idx] > cap)
+    return -1;
+  size_t flen = m->lens[m->idx];
+  memcpy(out, m->frames[m->idx], flen);
+  m->idx++;
+  return (int)flen;
+}
+
 int main(void) {
   uint8_t packet[256];
   int mru = 1, accm = 1, auth = 0, removed_accm, removed_auth;
@@ -284,36 +315,6 @@ int main(void) {
     assert(ppp_sanitize_link_mtu(1380) == 1380u);
     assert(ppp_sanitize_link_mtu(500) == 576u);
     assert(ppp_sanitize_link_mtu(1600) == 1500u);
-
-    typedef struct {
-      const uint8_t *frames[8];
-      size_t lens[8];
-      size_t count;
-      size_t idx;
-      uint8_t tx[8][64];
-      size_t tx_lens[8];
-      size_t tx_count;
-    } mru_mock_t;
-
-    int mru_mock_send(void *ctx, const uint8_t *ppp, size_t len) {
-      mru_mock_t *m = (mru_mock_t *)ctx;
-      if (m->tx_count < 8u && len <= sizeof(m->tx[0])) {
-        memcpy(m->tx[m->tx_count], ppp, len);
-        m->tx_lens[m->tx_count] = len;
-      }
-      m->tx_count++;
-      return 0;
-    }
-    int mru_mock_recv(void *ctx, uint8_t *out, size_t cap, int timeout_ms) {
-      (void)timeout_ms;
-      mru_mock_t *m = (mru_mock_t *)ctx;
-      if (m->idx >= m->count || m->lens[m->idx] > cap)
-        return -1;
-      size_t flen = m->lens[m->idx];
-      memcpy(out, m->frames[m->idx], flen);
-      m->idx++;
-      return (int)flen;
-    }
 
     static const uint8_t peer_cr_mru_1400[] = {
         0xff, 0x03, 0xc0, 0x21, 1, 1, 0, 12, 1, 4, 0x05, 0x78, 3, 4, 0xc0, 0x23};
