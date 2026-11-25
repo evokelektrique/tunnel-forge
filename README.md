@@ -153,7 +153,6 @@ cd android
 ./gradlew :app:lintDebug
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:testAndroidGo
-./gradlew :app:testReleaseSigning
 ./gradlew :app:testNativeC
 ./gradlew :app:checkNativeC
 cd ..
@@ -172,7 +171,6 @@ cd android
 .\gradlew.bat :app:lintDebug
 .\gradlew.bat :app:testDebugUnitTest
 .\gradlew.bat :app:testAndroidGo
-.\gradlew.bat :app:testReleaseSigning
 .\gradlew.bat :app:testNativeC
 .\gradlew.bat :app:checkNativeC
 cd ..
@@ -192,14 +190,12 @@ Set exactly one of `TUNNEL_FORGE_ANDROID_KEYSTORE_PATH` or `TUNNEL_FORGE_ANDROID
 
 ### Coverage
 
-CI saves coverage artifacts for Dart, Kotlin, Go, and native C. Both the host tests and Android instrumentation contribute to native C coverage. The Go job requires 100% statement coverage.
-
-CI also checks release signing with a disposable keystore.
+CI saves coverage artifacts on pushes to `main` and `release/**` for Dart, Kotlin, Go, and host native C.
 
 - For Dart, run `flutter test --coverage`.
-- For Kotlin, run `./gradlew -PtunnelForgeCoverage :app:createDebugUnitTestCoverageReport` from `android/`. With an emulator running, use `:app:createDebugAndroidTestCoverageReport` for device coverage. Pass `-Pandroid.testInstrumentationRunnerArguments.nativeCoverage=true` to collect the native profile too.
-- For Go, run `go test ./... -cover` from `android/gvisor/`.
-- For native C, `./gradlew :app:testNativeC` (or `.\gradlew.bat :app:testNativeC` on Windows) runs the full 17-test host suite (including the production IKE, ESP, L2TP, PPP, and MPPE tests) on Linux, macOS, and Windows.
+- For Kotlin, run `./gradlew -PtunnelForgeCoverage :app:createDebugUnitTestCoverageReport` from `android/`.
+- For Go, run `go test -race ./... -cover` from `android/gvisor/` (or `./gradlew :app:testAndroidGo` from `android/`).
+- For native C, `./gradlew :app:testNativeC` (or `.\gradlew.bat :app:testNativeC` on Windows) runs the full 15-test host suite (including the production IKE, ESP, L2TP, PPP, and MPPE tests) on Linux, macOS, and Windows.
 
 ## Security & Privacy
 

@@ -30,8 +30,39 @@ defaults:
     shell: bash
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      actions: ${{ steps.filter.outputs.actions }}
+      go: ${{ steps.filter.outputs.go }}
+      kotlin: ${{ steps.filter.outputs.kotlin }}
+      native: ${{ steps.filter.outputs.native }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            actions:
+              - '.github/workflows/**'
+            go:
+              - 'android/gvisor/**'
+            kotlin:
+              - 'android/**/*.kt'
+              - 'android/**/*.kts'
+            native:
+              - 'android/app/src/main/cpp/**'
+
   analyze-actions:
     name: Analyze GitHub Actions
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.actions == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -67,6 +98,8 @@ jobs:
 
   analyze-android-go:
     name: Analyze Android Go
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -121,6 +154,8 @@ jobs:
 
   analyze-android-kotlin:
     name: Analyze Android Kotlin
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.kotlin == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -140,13 +175,6 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
-
-      - name: Prepare Android Go dependencies
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: android/gvisor/go.mod
-          cache: true
-          cache-dependency-path: android/gvisor/go.sum
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
@@ -176,10 +204,6 @@ jobs:
 
       - name: Install Flutter dependencies
         run: flutter pub get
-
-      - name: Download Android Go module dependencies
-        working-directory: android/gvisor
-        run: go mod download
 
       - name: Create Android local.properties
         working-directory: android
@@ -212,9 +236,7 @@ jobs:
             -Dorg.gradle.vfs.watch=false \
             clean \
             :app:compileDebugKotlin \
-            :app:compileDebugJavaWithJavac \
-            :app:compileDebugUnitTestKotlin \
-            :app:compileDebugAndroidTestKotlin
+            :app:compileDebugJavaWithJavac
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
@@ -223,6 +245,8 @@ jobs:
 
   analyze-android-native:
     name: Analyze Android C/C++
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -237,6 +261,10 @@ jobs:
           build-mode: manual
           dependency-caching: true
           queries: security-extended,security-and-quality
+          config: |
+            paths-ignore:
+              - 'build/**'
+              - '**/_deps/**'
 
       - name: Install native build tools
         id: install_native_tools

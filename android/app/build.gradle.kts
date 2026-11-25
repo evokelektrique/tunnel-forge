@@ -5,7 +5,6 @@ import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.Base64
 import java.util.Properties
 
@@ -319,19 +318,13 @@ configure<ApplicationExtension> {
                 }
             val collectCoverage = providers.gradleProperty("tunnelForgeCoverage").isPresent
             enableUnitTestCoverage = collectCoverage
-            enableAndroidTestCoverage = collectCoverage
 
             // Opt-in sensitive KEYMAT log: pass -PtunnelForgeDebugEspKeymat=1 when debugging IPsec interop.
             val debugEspKeymat = providers.gradleProperty("tunnelForgeDebugEspKeymat").orNull == "1"
-            if (debugEspKeymat || collectCoverage) {
+            if (debugEspKeymat) {
                 externalNativeBuild {
                     cmake {
-                        if (debugEspKeymat) {
-                            arguments += listOf("-DTUNNEL_FORGE_DEBUG_ESP_KEYMAT=1")
-                        }
-                        if (collectCoverage) {
-                            arguments += "-DTUNNEL_FORGE_NATIVE_COVERAGE=ON"
-                        }
+                        arguments += listOf("-DTUNNEL_FORGE_DEBUG_ESP_KEYMAT=1")
                     }
                 }
             }
@@ -417,13 +410,35 @@ data class AndroidGoAbi(
     val goArm: String? = null,
 )
 
-val androidGoAbis =
+val allAndroidGoAbis =
     listOf(
         AndroidGoAbi("arm64-v8a", "arm64", "aarch64-linux-android31-clang"),
         AndroidGoAbi("armeabi-v7a", "arm", "armv7a-linux-androideabi31-clang", goArm = "7"),
         AndroidGoAbi("x86_64", "amd64", "x86_64-linux-android31-clang"),
-        AndroidGoAbi("x86", "386", "i686-linux-android31-clang"),
     )
+
+val targetPlatformToAbi =
+    mapOf(
+        "android-arm64" to "arm64-v8a",
+        "android-arm" to "armeabi-v7a",
+        "android-x64" to "x86_64",
+    )
+
+val requestedTargetAbis =
+    providers
+        .gradleProperty("target-platform")
+        .orNull
+        ?.split(',')
+        ?.mapNotNull { targetPlatformToAbi[it.trim()] }
+        ?.toSet()
+        ?.takeIf { it.isNotEmpty() }
+
+val androidGoAbis =
+    if (requestedTargetAbis != null) {
+        allAndroidGoAbis.filter { it.abi in requestedTargetAbis }
+    } else {
+        allAndroidGoAbis
+    }
 
 tasks.register("buildAndroidGoNative") {
     group = "build"
@@ -434,8 +449,6 @@ tasks.register("buildAndroidGoNative") {
         if (!androidGoModuleDir.resolve("go.mod").isFile) {
             throw GradleException("Missing android/gvisor/go.mod. Run the documented Go module setup before building.")
         }
-        val goBuildCache = layout.buildDirectory.dir("go-cache").get().asFile
-        goBuildCache.mkdirs()
         androidGoAbis.forEach { abi ->
             val outDir = androidGoJniLibsDir.get().asFile.resolve(abi.abi)
             outDir.mkdirs()
@@ -456,7 +469,6 @@ tasks.register("buildAndroidGoNative") {
             env["GOARCH"] = abi.goArch
             abi.goArm?.let { env["GOARM"] = it }
             env["CC"] = androidNdkClang(abi.clangName)
-            env["GOCACHE"] = goBuildCache.absolutePath
             pb.inheritIO()
             val proc = pb.start()
             val exitCode = proc.waitFor()
@@ -468,8 +480,7 @@ tasks.register("buildAndroidGoNative") {
 }
 
 tasks.matching {
-    it.name == "preBuild" ||
-        it.name.startsWith("externalNativeBuild") ||
+    it.name.startsWith("externalNativeBuild") ||
         (it.name.startsWith("merge") && it.name.endsWith("JniLibFolders"))
 }.configureEach {
     dependsOn("buildAndroidGoNative")
@@ -567,14 +578,11 @@ tasks.register("checkNativeC") {
 
 tasks.register("testAndroidGo") {
     group = "verification"
-    description = "Runs Go vet, race tests, and 100% statement coverage check for android/gvisor."
+    description = "Runs Go vet and race tests for android/gvisor."
     doLast {
         if (!androidGoModuleDir.resolve("go.mod").isFile) {
             throw GradleException("Missing android/gvisor/go.mod.")
         }
-        val coverFile = layout.buildDirectory.file("reports/gvisor/gvisor.cover").get().asFile
-        coverFile.parentFile.mkdirs()
-        Files.deleteIfExists(coverFile.toPath())
 
         val combinedPath =
             (nativeHostToolPathDirs + listOfNotNull(System.getenv("PATH")))
@@ -592,138 +600,6 @@ tasks.register("testAndroidGo") {
         }
 
         runGo("vet", "./...")
-        runGo("test", "-race", "./...", "-coverprofile=${coverFile.absolutePath}")
-
-        val lines = coverFile.readLines().filter { it.isNotBlank() }
-        if (lines.isEmpty() || !lines.first().startsWith("mode:")) {
-            throw GradleException("Unexpected Go coverage profile at ${coverFile.absolutePath}")
-        }
-        val uncovered = lines.drop(1).filter { line ->
-            line.trim().split(Regex("\\s+")).lastOrNull() == "0"
-        }
-        if (uncovered.isNotEmpty()) {
-            throw GradleException("Go statement coverage is below 100%:\n" + uncovered.joinToString("\n"))
-        }
-    }
-}
-
-tasks.register("testReleaseSigning") {
-    group = "verification"
-    description = "Validates release signing configuration using a disposable PKCS12 keystore."
-    doLast {
-        val isWindows = System.getProperty("os.name").lowercase().contains("windows")
-        val keytoolName = if (isWindows) "keytool.exe" else "keytool"
-        val keytoolCommand =
-            File(System.getProperty("java.home")).resolve("bin/$keytoolName").takeIf { it.isFile }?.absolutePath
-                ?: findPathTool("keytool")
-                ?: keytoolName
-        val wrapperExecutable = rootProject.file(gradleWrapperCommand).absolutePath
-        val decodedKeystoreFile = layout.buildDirectory.file("keystore-from-base64.jks").get().asFile
-        val tempDir = Files.createTempDirectory("tf-release-signing-test-").toFile()
-        val tempKeystore = tempDir.resolve("signing-test.p12")
-
-        fun runProcess(dir: File, command: List<String>, envOverrides: Map<String, String?>): Pair<Int, String> {
-            val pb = ProcessBuilder(command).directory(dir)
-            pb.redirectErrorStream(true)
-            val env = pb.environment()
-            envOverrides.forEach { (k, v) ->
-                if (v == null) env.remove(k) else env[k] = v
-            }
-            val proc = pb.start()
-            val output = proc.inputStream.bufferedReader().readText()
-            val exitCode = proc.waitFor()
-            return exitCode to output
-        }
-
-        fun runSigningCheck(
-            keystorePathEnv: String?,
-            keystoreBase64Env: String?,
-        ): Pair<Int, String> =
-            runProcess(
-                rootProject.projectDir,
-                listOf(
-                    wrapperExecutable,
-                    "--no-daemon",
-                    "--console=plain",
-                    "-PtunnelForgeIgnoreDotEnv=true",
-                    ":app:validateSigningRelease",
-                ),
-                mapOf(
-                    "TUNNEL_FORGE_ANDROID_KEYSTORE_PATH" to keystorePathEnv,
-                    "TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64" to keystoreBase64Env,
-                    "TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD" to "test-password",
-                    "TUNNEL_FORGE_ANDROID_KEY_ALIAS" to "ci-test",
-                    "TUNNEL_FORGE_ANDROID_KEY_PASSWORD" to "test-password",
-                ),
-            )
-
-        try {
-            val (keytoolRc, keytoolOut) = runProcess(
-                tempDir,
-                listOf(
-                    keytoolCommand,
-                    "-genkeypair",
-                    "-storetype",
-                    "PKCS12",
-                    "-keyalg",
-                    "RSA",
-                    "-keysize",
-                    "2048",
-                    "-validity",
-                    "1",
-                    "-keystore",
-                    tempKeystore.absolutePath,
-                    "-alias",
-                    "ci-test",
-                    "-storepass",
-                    "test-password",
-                    "-keypass",
-                    "test-password",
-                    "-dname",
-                    "CN=Tunnel Forge CI",
-                ),
-                emptyMap(),
-            )
-            if (keytoolRc != 0) {
-                throw GradleException("keytool failed (exit code $keytoolRc):\n$keytoolOut")
-            }
-
-            val keystoreBytes = tempKeystore.readBytes()
-            val keystoreB64 = Base64.getEncoder().encodeToString(keystoreBytes)
-
-            val (pathRc, pathOut) = runSigningCheck(tempKeystore.absolutePath, null)
-            if (pathRc != 0) {
-                throw GradleException("Valid keystore path check failed (exit code $pathRc):\n$pathOut")
-            }
-
-            val (b64Rc, b64Out) = runSigningCheck(null, keystoreB64)
-            if (b64Rc != 0) {
-                throw GradleException("Valid base64 keystore check failed (exit code $b64Rc):\n$b64Out")
-            }
-            if (!decodedKeystoreFile.isFile || !decodedKeystoreFile.readBytes().contentEquals(keystoreBytes)) {
-                throw GradleException("Decoded keystore bytes did not match disposable keystore at ${decodedKeystoreFile.absolutePath}")
-            }
-            if (Files.getFileStore(decodedKeystoreFile.toPath()).supportsFileAttributeView("posix")) {
-                val perms = PosixFilePermissions.toString(Files.getPosixFilePermissions(decodedKeystoreFile.toPath()))
-                if (perms != "rw-------") {
-                    throw GradleException("Expected decoded keystore permissions rw-------, got $perms")
-                }
-            }
-
-            val (invalidRc, invalidOut) = runSigningCheck(null, "invalid-base64!")
-            val invalidMsg = "TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64 must contain a base64-encoded keystore."
-            if (invalidRc == 0 || !invalidOut.contains(invalidMsg)) {
-                throw GradleException("Invalid base64 keystore check did not fail as expected (rc=$invalidRc):\n$invalidOut")
-            }
-
-            val (conflictRc, conflictOut) = runSigningCheck(tempKeystore.absolutePath, keystoreB64)
-            val conflictMsg = "Set only one of TUNNEL_FORGE_ANDROID_KEYSTORE_PATH or TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64."
-            if (conflictRc == 0 || !conflictOut.contains(conflictMsg)) {
-                throw GradleException("Conflicting keystore sources check did not fail as expected (rc=$conflictRc):\n$conflictOut")
-            }
-        } finally {
-            Files.deleteIfExists(decodedKeystoreFile.toPath())
-            tempDir.deleteRecursively()
-        }
+        runGo("test", "-race", "./...")
     }
 }

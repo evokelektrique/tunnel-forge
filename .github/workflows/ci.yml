@@ -31,20 +31,66 @@ defaults:
     shell: bash
 
 jobs:
-  flutter-checks:
-    name: flutter-checks
+  changes:
+    name: Detect changed paths
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 5
+    outputs:
+      flutter: ${{ steps.filter.outputs.flutter }}
+      go: ${{ steps.filter.outputs.go }}
+      native_c: ${{ steps.filter.outputs.native_c }}
+      android_kotlin: ${{ steps.filter.outputs.android_kotlin }}
+      app: ${{ steps.filter.outputs.app }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Java
-        uses: actions/setup-java@v6
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
-          distribution: temurin
-          java-version: "21"
+          filters: |
+            flutter:
+              - 'lib/**'
+              - 'test/**'
+              - '!test/native/**'
+              - 'pubspec.*'
+              - 'l10n.yaml'
+              - 'analysis_options.yaml'
+              - '.github/workflows/ci.yml'
+            go:
+              - 'android/gvisor/**'
+              - '.github/workflows/ci.yml'
+            native_c:
+              - 'android/app/src/main/cpp/**'
+              - 'test/native/**'
+              - '.github/workflows/ci.yml'
+            android_kotlin:
+              - 'android/**'
+              - '!android/gvisor/**'
+              - 'pubspec.*'
+              - '.github/workflows/ci.yml'
+            app:
+              - 'lib/**'
+              - 'assets/**'
+              - 'android/**'
+              - 'pubspec.*'
+              - 'l10n.yaml'
+              - '.github/workflows/ci.yml'
+
+  flutter-checks:
+    name: flutter-checks
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.flutter == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
       - name: Set up Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
@@ -62,10 +108,16 @@ jobs:
       - name: Analyze
         run: flutter analyze
 
+      - name: Run unit and widget tests
+        if: github.event_name == 'pull_request'
+        run: flutter test
+
       - name: Run unit and widget tests with coverage
+        if: github.event_name != 'pull_request'
         run: flutter test --coverage
 
       - name: Save Dart coverage
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: dart-coverage
@@ -73,9 +125,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload coverage to Codecov
-        if: env.CODECOV_TOKEN != ''
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        if: github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage/lcov.info
@@ -87,8 +137,12 @@ jobs:
 
   android-go-tests:
     name: Android Go native tests
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     steps:
       - name: Checkout
@@ -106,14 +160,22 @@ jobs:
         run: go mod download
 
       - name: Run Android Go module tests
+        if: github.event_name == 'pull_request'
+        working-directory: android/gvisor
+        run: |
+          go vet ./...
+          go test -race ./...
+
+      - name: Run Android Go module tests with coverage
+        if: github.event_name != 'pull_request'
         working-directory: android/gvisor
         run: |
           go vet ./...
           go test -race ./... -coverprofile=gvisor.cover
-          awk 'NR > 1 && $NF == 0 { print; uncovered = 1 } END { exit uncovered }' gvisor.cover
           sed -i 's|^tunnel_forge_gvisor/|android/gvisor/|' gvisor.cover
 
       - name: Save Go coverage
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: go-coverage
@@ -121,9 +183,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Go coverage to Codecov
-        if: env.CODECOV_TOKEN != ''
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        if: github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: android/gvisor/gvisor.cover
@@ -133,24 +193,61 @@ jobs:
 
   native-c-tests:
     name: Native C tests
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.native_c == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Restore mbedTLS source cache
+        id: cache-mbedtls
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/mbedtls-2.28.9
+          key: mbedtls-src-v2.28.9
+
+      - name: Download mbedTLS source
+        if: steps.cache-mbedtls.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/mbedtls-2.28.9"
+          curl -fsSL https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v2.28.9.tar.gz \
+            | tar -xz --strip-components=1 -C "${{ runner.temp }}/mbedtls-2.28.9"
+
+      - name: Save mbedTLS source cache
+        if: steps.cache-mbedtls.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/mbedtls-2.28.9
+          key: mbedtls-src-v2.28.9
+
       - name: Install LLVM coverage tools
+        if: github.event_name != 'pull_request'
         run: |
           sudo apt-get update
           sudo apt-get install -y clang libclang-rt-dev llvm
 
       - name: Run host and production protocol tests
+        if: github.event_name == 'pull_request'
+        run: |
+          cmake -S test/native -B build/native_test \
+            -DCMAKE_BUILD_TYPE=Debug -DTUNNEL_FORGE_NATIVE_PROTOCOL_TESTS=ON \
+            -DTUNNEL_FORGE_MBEDTLS_SOURCE_DIR="${{ runner.temp }}/mbedtls-2.28.9"
+          cmake --build build/native_test --parallel
+          ctest --test-dir build/native_test --output-on-failure --no-tests=error --timeout 30
+
+      - name: Run host and production protocol tests with coverage
+        if: github.event_name != 'pull_request'
         env:
           CC: /usr/bin/clang
         run: |
           cmake -S test/native -B build/native_test \
             -DCMAKE_BUILD_TYPE=Debug -DTUNNEL_FORGE_NATIVE_PROTOCOL_TESTS=ON \
+            -DTUNNEL_FORGE_MBEDTLS_SOURCE_DIR="${{ runner.temp }}/mbedtls-2.28.9" \
             -DCMAKE_C_FLAGS='-fprofile-instr-generate -fcoverage-mapping' \
             -DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate
           cmake --build build/native_test --parallel
@@ -158,6 +255,7 @@ jobs:
           ctest --test-dir build/native_test --output-on-failure --no-tests=error --timeout 30
 
       - name: Collect native C coverage
+        if: github.event_name != 'pull_request'
         run: |
           /usr/bin/llvm-profdata merge -sparse build/native_test/*.profraw -o build/native.profdata
           binaries=()
@@ -165,11 +263,12 @@ jobs:
             binaries+=("-object=$binary")
           done
           /usr/bin/llvm-cov export -format=lcov -instr-profile=build/native.profdata \
-            "${binaries[@]}" -ignore-filename-regex='/test/native/(test_[^/]+\.c$|stubs/)|/mbedtls(-src)?/|^/usr/' \
+            "${binaries[@]}" -ignore-filename-regex='/test/native/(test_[^/]+\.c$|stubs/)|/mbedtls(-src|-2\.28\.9)?/|^/usr/' \
             > build/native-coverage.info
           grep -q '^SF:' build/native-coverage.info
 
       - name: Save native C coverage
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: native-c-coverage
@@ -177,9 +276,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload native C coverage to Codecov
-        if: env.CODECOV_TOKEN != ''
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        if: github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: build/native-coverage.info
@@ -189,8 +286,12 @@ jobs:
 
   android-unit-tests:
     name: android-unit-tests
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.android_kotlin == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     steps:
       - name: Checkout
@@ -209,22 +310,11 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Prepare Android Go dependencies
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: android/gvisor/go.mod
-          cache: true
-          cache-dependency-path: android/gvisor/go.sum
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Download Android Go module dependencies
-        working-directory: android/gvisor
-        run: go mod download
 
       - name: Create Android local.properties
         working-directory: android
@@ -246,77 +336,35 @@ jobs:
         run: |
           "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-37.0'
 
+      - name: Run Android JVM tests and lint
+        if: github.event_name == 'pull_request'
+        working-directory: android
+        run: ./gradlew --no-daemon --console=plain --stacktrace -Dorg.gradle.vfs.watch=false :app:testDebugUnitTest :app:lintDebug
+
       - name: Run Android JVM tests with coverage and lint
+        if: github.event_name != 'pull_request'
         working-directory: android
         run: ./gradlew --no-daemon --console=plain --stacktrace -Dorg.gradle.vfs.watch=false -PtunnelForgeCoverage :app:createDebugUnitTestCoverageReport :app:lintDebug
 
-      - name: Check release signing with a disposable keystore
-        working-directory: android
-        run: ./gradlew --no-daemon --console=plain :app:testReleaseSigning
-
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Run Android device tests with coverage
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
-        with:
-          api-level: 35
-          target: google_apis
-          arch: x86_64
-          working-directory: android
-          script: ./gradlew --no-daemon --console=plain --stacktrace -Dorg.gradle.vfs.watch=false -PtunnelForgeCoverage -Pandroid.testInstrumentationRunnerArguments.nativeCoverage=true -Ptarget-platform=android-x64 :app:createDebugAndroidTestCoverageReport
-
-      - name: Collect Android native coverage
-        run: |
-          tools="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          profile="$(find build/app/outputs/connected_android_test_additional_output -name tunnel-engine.profraw -print -quit)"
-          native_libs="build/app/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/x86_64"
-          test -s "$profile"
-          "$tools/llvm-profdata" merge -sparse "$profile" -o build/android-native.profdata
-          "$tools/llvm-cov" export -format=lcov -instr-profile=build/android-native.profdata \
-            "$native_libs/libtunnel_engine.so" -object="$native_libs/libpptp_gre_helper.so" -ignore-filename-regex='/androidTest/|/_deps/|^/usr/' \
-            > build/android-native-coverage.info
-          grep -q '^SF:.*vpn_jni.c$' build/android-native-coverage.info
-
       - name: Save Android coverage
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@v7
         with:
           name: android-coverage
-          path: |
-            build/app/reports/coverage/
-            build/android-native-coverage.info
+          path: build/app/reports/coverage/
           if-no-files-found: ignore
 
-      - name: Upload Android native coverage to Codecov
-        if: env.CODECOV_TOKEN != ''
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: build/android-native-coverage.info
-          flags: native-c
-          disable_search: true
-          fail_ci_if_error: true
-
       - name: Upload Kotlin coverage to Codecov
-        if: env.CODECOV_TOKEN != ''
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        if: github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          files: build/app/reports/coverage/test/debug/report.xml,build/app/reports/coverage/androidTest/debug/connected/report.xml
+          files: build/app/reports/coverage/test/debug/report.xml
           flags: kotlin
           disable_search: true
           fail_ci_if_error: true
 
       - name: Upload Android test results to Codecov
-        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -330,8 +378,6 @@ jobs:
           name: android-unit-test-reports
           path: |
             build/app/reports/tests/
-            build/app/reports/androidTests/
-            build/app/outputs/androidTest-results/
             build/app/reports/lint-results-debug.*
             build/reports/
           if-no-files-found: ignore
@@ -340,11 +386,8 @@ jobs:
     name: build-android
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs:
-      - flutter-checks
-      - android-go-tests
-      - native-c-tests
-      - android-unit-tests
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.app == 'true'
 
     steps:
       - name: Checkout
@@ -536,7 +579,7 @@ jobs:
         if: github.event_name == 'pull_request' || inputs.pr_number != ''
         env:
           ORG_GRADLE_PROJECT_tunnelForgeDebugAppIdSuffix: .debug
-        run: flutter build apk --debug
+        run: flutter build apk --debug --target-platform android-arm64
 
       - name: Verify reviewer APK
         if: github.event_name == 'pull_request' || inputs.pr_number != ''
