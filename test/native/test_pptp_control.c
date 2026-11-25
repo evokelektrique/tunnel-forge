@@ -4,6 +4,63 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef TF_TEST_PPTP_ROOT
+#include "../../android/app/src/main/cpp/pptp_root.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <time.h>
+#include <unistd.h>
+
+void tunnel_engine_log(int priority, const char *tag, const char *format, ...) {
+  (void)priority;
+  (void)tag;
+  (void)format;
+}
+
+int tunnel_should_stop(void) { return 0; }
+
+static int64_t test_monotonic_ms(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0;
+  return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+}
+
+static void test_pptp_root_pipe_bounds(void) {
+  signal(SIGPIPE, SIG_IGN);
+
+  int fds[2] = {-1, -1};
+  assert(pipe(fds) == 0);
+  int flags = fcntl(fds[1], F_GETFL, 0);
+  assert(flags >= 0 && fcntl(fds[1], F_SETFL, flags | O_NONBLOCK) == 0);
+  uint8_t fill[4096];
+  memset(fill, 0x55, sizeof(fill));
+  while (write(fds[1], fill, sizeof(fill)) > 0) {
+  }
+  pptp_root_t r;
+  pptp_root_init(&r);
+  r.to_helper_fd = fds[1];
+  uint8_t gre[64] = {0x30, 0x01};
+  int64_t t0 = test_monotonic_ms();
+  int send_rc = pptp_root_send_gre(&r, gre, sizeof(gre));
+  int send_err = errno;
+  int64_t elapsed = test_monotonic_ms() - t0;
+  close(fds[0]);
+  close(fds[1]);
+  assert(send_rc == -1 && send_err == ENOBUFS && elapsed <= 200);
+
+  assert(pipe(fds) == 0);
+  close(fds[0]);
+  pptp_root_init(&r);
+  r.to_helper_fd = fds[1];
+  errno = 0;
+  send_rc = pptp_root_send_gre(&r, gre, sizeof(gre));
+  send_err = errno;
+  close(fds[1]);
+  assert(send_rc == -1 && send_err == EPIPE);
+}
+#endif
 
 static void assert_valid_header(const uint8_t *buf, int built_len, uint16_t want_type) {
   assert(built_len >= 12);
@@ -91,6 +148,10 @@ int main(void) {
   assert(pptp_is_safe_helper_path("/data/app/bad;cmd/libpptp_gre_helper.so") == 0);
   assert(pptp_is_safe_helper_path("/data/app/bad space/libpptp_gre_helper.so") == 0);
   assert(pptp_is_safe_helper_path("/data/app/$(id)/libpptp_gre_helper.so") == 0);
+
+#ifdef TF_TEST_PPTP_ROOT
+  test_pptp_root_pipe_bounds();
+#endif
 
   puts("test_pptp_control: ok");
   return 0;

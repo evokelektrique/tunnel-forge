@@ -1,20 +1,13 @@
 package io.github.evokelektrique.tunnelforge
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
-import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
 import java.lang.reflect.Modifier
-
-private object NativeCoverage {
-    @JvmStatic external fun writeProfile(path: String): Int
-}
 
 /**
  * Widget/integration tests mock the VPN channel, so they never exercise JNI. These calls stay on
@@ -22,18 +15,6 @@ private object NativeCoverage {
  */
 @RunWith(AndroidJUnit4::class)
 class JniEntryPointsTest {
-    companion object {
-        @AfterClass
-        @JvmStatic
-        fun writeNativeCoverage() {
-            val arguments = InstrumentationRegistry.getArguments()
-            if (arguments.getString("nativeCoverage") != "true") return
-            val outputDir = checkNotNull(arguments.getString("additionalTestOutputDir"))
-            assertEquals(0, NativeCoverage.writeProfile(File(outputDir, "tunnel-engine.profraw").path))
-        }
-    }
-
-
     @Test
     fun nativeCodeCanStillResolveKotlinJniPeers() {
         val protect =

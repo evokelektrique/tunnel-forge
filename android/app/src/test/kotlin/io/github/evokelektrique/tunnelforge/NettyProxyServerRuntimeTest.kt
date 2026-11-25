@@ -6,6 +6,7 @@ import java.io.BufferedOutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -679,4 +680,143 @@ class NettyProxyServerRuntimeTest {
 
     private fun findFreePort(): Int =
         ServerSocket(0).use { it.localPort }
+
+    @Test
+    fun proxyRejectsMalformedFramingAndEnforcesHttpAndSocksAuth() {
+        val probeHttpPort = findFreePort()
+        val framingRuntime =
+            ProxyServerRuntime(
+                config = ProxyRuntimeConfig(httpEnabled = true, httpPort = probeHttpPort, socksEnabled = false, socksPort = 0),
+                transport = StubProxyTransport(),
+            )
+        framingRuntime.start()
+        try {
+            val badRequests =
+                listOf(
+                    "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n",
+                    buildString {
+                        append("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n")
+                        for (i in 1..130) append("X-Test-$i: value\r\n")
+                        append("\r\n")
+                    },
+                    "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nX-Bare: foo\rbar\r\n\r\n",
+                    "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nContent-Length: -1\r\n\r\n",
+                )
+            for (req in badRequests) {
+                Socket("127.0.0.1", probeHttpPort).use { client ->
+                    client.soTimeout = 3000
+                    client.getOutputStream().write(req.toByteArray(StandardCharsets.US_ASCII))
+                    client.getOutputStream().flush()
+                    val resp = client.getInputStream().bufferedReader().readLine() ?: ""
+                    assertTrue("Expected 400 Bad Request, got: $resp", resp.startsWith("HTTP/1.1 400"))
+                }
+            }
+        } finally {
+            framingRuntime.stop()
+        }
+
+        val authUser = "alice"
+        val authPass = "s3cr3t!"
+        val goodBasic = Base64.getEncoder().encodeToString("$authUser:$authPass".toByteArray(StandardCharsets.UTF_8))
+        val badBasic = Base64.getEncoder().encodeToString("$authUser:wrong".toByteArray(StandardCharsets.UTF_8))
+        val runtimes: List<() -> Triple<LocalProxyRuntime, Int, Int>> =
+            listOf(
+                {
+                    val hp = findFreePort()
+                    val sp = findFreePort()
+                    Triple(
+                        ProxyServerRuntime(
+                            config =
+                                ProxyRuntimeConfig(
+                                    httpEnabled = true,
+                                    httpPort = hp,
+                                    socksEnabled = true,
+                                    socksPort = sp,
+                                    authEnabled = true,
+                                    authUsername = authUser,
+                                    authPassword = authPass,
+                                ),
+                            transport = StubProxyTransport(),
+                        ),
+                        hp,
+                        sp,
+                    )
+                },
+                {
+                    val hp = findFreePort()
+                    val sp = findFreePort()
+                    Triple(
+                        NettyProxyServerRuntime(
+                            config =
+                                ProxyRuntimeConfig(
+                                    httpEnabled = true,
+                                    httpPort = hp,
+                                    socksEnabled = true,
+                                    socksPort = sp,
+                                    authEnabled = true,
+                                    authUsername = authUser,
+                                    authPassword = authPass,
+                                ),
+                            transport = StubProxyTransport(),
+                        ),
+                        hp,
+                        sp,
+                    )
+                },
+            )
+        for (factory in runtimes) {
+            val (rt, hp, sp) = factory()
+            rt.start()
+            try {
+                for ((hdr, expectPass) in listOf("" to false, "Proxy-Authorization: Basic $badBasic\r\n" to false, "Proxy-Authorization: Basic $goodBasic\r\n" to true)) {
+                    Socket("127.0.0.1", hp).use { client ->
+                        client.soTimeout = 3000
+                        client.getOutputStream().write(
+                            "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n$hdr\r\n".toByteArray(StandardCharsets.US_ASCII),
+                        )
+                        client.getOutputStream().flush()
+                        val resp = client.getInputStream().bufferedReader().readLine() ?: ""
+                        if (expectPass) {
+                            assertTrue("Expected 200 or 503, got: $resp", resp.startsWith("HTTP/1.1 200") || resp.startsWith("HTTP/1.1 503"))
+                        } else {
+                            assertTrue("Expected 407, got: $resp", resp.startsWith("HTTP/1.1 407"))
+                        }
+                    }
+                }
+                Socket("127.0.0.1", sp).use { client ->
+                    client.soTimeout = 3000
+                    client.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x00))
+                    client.getOutputStream().flush()
+                    val reply = ByteArray(2)
+                    assertEquals(2, client.getInputStream().read(reply))
+                    assertEquals(0xff, reply[1].toInt() and 0xff)
+                }
+                for (pass in listOf("wrong", authPass)) {
+                    Socket("127.0.0.1", sp).use { client ->
+                        client.soTimeout = 3000
+                        val out = client.getOutputStream()
+                        val inp = client.getInputStream()
+                        out.write(byteArrayOf(0x05, 0x01, 0x02))
+                        out.flush()
+                        val methodReply = ByteArray(2)
+                        assertEquals(2, inp.read(methodReply))
+                        assertEquals(0x02, methodReply[1].toInt() and 0xff)
+                        val u = authUser.toByteArray(StandardCharsets.UTF_8)
+                        val p = pass.toByteArray(StandardCharsets.UTF_8)
+                        out.write(byteArrayOf(0x01, u.size.toByte()) + u + byteArrayOf(p.size.toByte()) + p)
+                        out.flush()
+                        val authReply = ByteArray(2)
+                        assertEquals(2, inp.read(authReply))
+                        if (pass == authPass) {
+                            assertEquals(0x00, authReply[1].toInt() and 0xff)
+                        } else {
+                            assertTrue((authReply[1].toInt() and 0xff) != 0)
+                        }
+                    }
+                }
+            } finally {
+                rt.stop()
+            }
+        }
+    }
 }

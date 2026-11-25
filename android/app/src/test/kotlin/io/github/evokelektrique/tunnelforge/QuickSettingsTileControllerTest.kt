@@ -2,6 +2,8 @@ package io.github.evokelektrique.tunnelforge
 
 import android.service.quicksettings.Tile
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QuickSettingsTileControllerTest {
@@ -84,5 +86,15 @@ class QuickSettingsTileControllerTest {
         assertEquals(Tile.STATE_ACTIVE, reconnecting.state)
         assertEquals("vpn.example", reconnecting.subtitle)
         assertEquals("Reconnecting... · vpn.example", reconnecting.stateDescription)
+    }
+
+    @Test
+    fun connectLaunchTokenIsSingleUse() {
+        val token = QuickSettingsTileController.issueConnectLaunchToken()
+        assertTrue(token.isNotBlank())
+        assertFalse(QuickSettingsTileController.consumeConnectLaunchToken(null))
+        assertFalse(QuickSettingsTileController.consumeConnectLaunchToken("bogus-token"))
+        assertTrue(QuickSettingsTileController.consumeConnectLaunchToken(token))
+        assertFalse(QuickSettingsTileController.consumeConnectLaunchToken(token))
     }
 }

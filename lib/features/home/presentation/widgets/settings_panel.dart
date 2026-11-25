@@ -250,7 +250,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
     final activeProxyExposure = widget.proxyExposure?.active == true
         ? widget.proxyExposure
         : null;
-    final proxyDisplayHost = activeProxyExposure?.displayAddress ?? '127.0.0.1';
+    final proxyDisplayHosts =
+        activeProxyExposure?.displayAddresses ??
+        const [ProxyExposure.loopbackAddress];
     final proxyHttpPort =
         activeProxyExposure?.httpPort ?? widget.proxySettings.httpPort;
     final proxySocksPort =
@@ -279,7 +281,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
           isInclusive: isInclusive,
           activePackagesEmpty: activePackagesEmpty,
           splitTunnelSubtitle: splitTunnelSubtitle,
-          proxyDisplayHost: proxyDisplayHost,
+          proxyDisplayHosts: proxyDisplayHosts,
           proxyHttpPort: proxyHttpPort,
           proxySocksPort: proxySocksPort,
           proxyEndpointStatus: proxyEndpointStatus,
@@ -415,7 +417,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     required bool isInclusive,
     required bool activePackagesEmpty,
     required String splitTunnelSubtitle,
-    required String proxyDisplayHost,
+    required List<String> proxyDisplayHosts,
     required int proxyHttpPort,
     required int proxySocksPort,
     required String proxyEndpointStatus,
@@ -655,8 +657,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
             const SizedBox(height: 8),
             _cardText(
               [
-                'HTTP: $proxyDisplayHost:$proxyHttpPort',
-                'SOCKS5: $proxyDisplayHost:$proxySocksPort',
+                'HTTP: ${proxyDisplayHosts.map((host) => '$host:$proxyHttpPort').join(', ')}',
+                'SOCKS5: ${proxyDisplayHosts.map((host) => '$host:$proxySocksPort').join(', ')}',
                 proxyEndpointStatus,
               ].join('\n'),
             ),

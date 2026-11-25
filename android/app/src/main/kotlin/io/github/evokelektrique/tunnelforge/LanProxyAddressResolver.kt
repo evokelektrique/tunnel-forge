@@ -17,11 +17,26 @@ data class ProxyExposureInfo(
     val lanActive: Boolean,
     val warning: String? = null,
 ) {
+    fun displayAddresses(): List<String> {
+        val addresses = linkedSetOf<String>()
+        if (lanActive && displayAddress != LOOPBACK) {
+            addresses += LOOPBACK
+        }
+        addresses += displayAddress
+        return addresses.toList()
+    }
+
     fun endpointSummary(httpEnabled: Boolean = true, socksEnabled: Boolean = true): String {
+        val hosts = displayAddresses()
         val endpoints = mutableListOf<String>()
-        if (httpEnabled) endpoints.add("HTTP $displayAddress:$httpPort")
-        if (socksEnabled) endpoints.add("SOCKS5 $displayAddress:$socksPort")
-        return endpoints.joinToString(", ")
+        if (httpEnabled) {
+            endpoints.add("HTTP ${hosts.joinToString(", ") { "$it:$httpPort" }}")
+        }
+        if (socksEnabled) {
+            endpoints.add("SOCKS5 ${hosts.joinToString(", ") { "$it:$socksPort" }}")
+        }
+        val separator = if (hosts.size > 1) "; " else ", "
+        return endpoints.joinToString(separator)
     }
 
     fun listenerBindAddresses(): List<String> {

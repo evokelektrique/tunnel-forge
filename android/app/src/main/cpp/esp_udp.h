@@ -75,8 +75,6 @@ void esp_keys_reset_cache(esp_keys_t *k);
 /** Free cached mbedTLS contexts and zeroize all ESP keys in @p k. */
 void esp_keys_cleanup(esp_keys_t *k);
 
-int esp_run_audit_check(int item_id, char *err_buf, size_t err_cap);
-
 /**
  * Decrypt/validate inbound ESP (or pass-through when enc_key_len == 0).
  * @param out_len in: capacity of @p out; out: plaintext length on success.

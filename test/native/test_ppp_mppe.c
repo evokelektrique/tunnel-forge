@@ -146,7 +146,27 @@ static void test_stateful_rekey_and_reset_recovery(void) {
   ppp_mppe_zero(&server);
 }
 
+static void test_mschapv2_parse_failure(void) {
+  const uint8_t failure[] = "E=691 R=1 C=0123456789ABCDEF0123456789ABCDEF V=3 M=Authentication failed";
+  ppp_mschapv2_failure_info_t info;
+  assert(ppp_mschapv2_parse_failure(failure, sizeof(failure) - 1u, &info) == 0);
+  assert(info.has_error_code && info.error_code == 691);
+  assert(info.has_retry && info.retry == 1);
+  assert(info.has_version && info.version == 3);
+  assert(info.has_message && strcmp(info.message, "Authentication failed") == 0);
+
+  const uint8_t partial[] = "E=648 R=0";
+  assert(ppp_mschapv2_parse_failure(partial, sizeof(partial) - 1u, &info) == 0);
+  assert(info.has_error_code && info.error_code == 648);
+  assert(info.has_retry && info.retry == 0);
+  assert(!info.has_version && !info.has_message);
+
+  const uint8_t invalid[] = "not an mschap failure";
+  assert(ppp_mschapv2_parse_failure(invalid, sizeof(invalid) - 1u, &info) != 0);
+}
+
 int main(void) {
+  test_mschapv2_parse_failure();
   test_key_derivation_and_symmetry();
   test_stateless_roundtrip_and_drop_recovery();
   test_stateful_rekey_and_reset_recovery();

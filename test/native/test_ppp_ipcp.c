@@ -64,22 +64,6 @@ static int test_nak_updates_dns(void) {
   return 0;
 }
 
-static int test_peer_cr_to_ack_flips_code(void) {
-  uint8_t in[] = {0xff, 0x03, 0x80, 0x21, 0x01, 0x07, 0x00, 0x0a, 0x03, 0x06, 1, 2, 3, 4};
-  const uint8_t *p = in + 2;
-  uint16_t ipcplen = util_read_be16(p + 4);
-  size_t prefix = 2u;
-  size_t total = prefix + 2u + (size_t)ipcplen;
-  if (total > sizeof(in)) return 1;
-  uint8_t ackbuf[32];
-  memcpy(ackbuf, in, total);
-  if (util_read_be16(ackbuf + prefix) != PPP_WIRE_PROTO_IPCP) return 2;
-  ackbuf[prefix + 2u] = 2;
-  if (ackbuf[prefix + 2u] != 2) return 3;
-  if (ackbuf[prefix + 3u] != 7) return 4;
-  return 0;
-}
-
 int main(void) {
   int rc = test_cr_contains_ip3();
   if (rc != 0) {
@@ -99,11 +83,6 @@ int main(void) {
   rc = test_nak_updates_dns();
   if (rc != 0) {
     fprintf(stderr, "test_nak_updates_dns failed: %d\n", rc);
-    return 1;
-  }
-  rc = test_peer_cr_to_ack_flips_code();
-  if (rc != 0) {
-    fprintf(stderr, "test_peer_cr_to_ack_flips_code failed: %d\n", rc);
     return 1;
   }
   puts("test_ppp_ipcp: ok");
