@@ -15,10 +15,23 @@ if(TUNNEL_FORGE_MBEDTLS_SOURCE_DIR)
   add_subdirectory("${TUNNEL_FORGE_MBEDTLS_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/mbedtls" EXCLUDE_FROM_ALL)
   set(mbedtls_SOURCE_DIR "${TUNNEL_FORGE_MBEDTLS_SOURCE_DIR}")
 else()
-  FetchContent_Declare(
-    mbedtls
-    URL https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v2.28.9.tar.gz
-  )
-  FetchContent_MakeAvailable(mbedtls)
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
+    FetchContent_Declare(
+      mbedtls
+      URL https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v2.28.9.tar.gz
+      EXCLUDE_FROM_ALL
+    )
+    FetchContent_MakeAvailable(mbedtls)
+  else()
+    FetchContent_Declare(
+      mbedtls
+      URL https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v2.28.9.tar.gz
+    )
+    FetchContent_GetProperties(mbedtls)
+    if(NOT mbedtls_POPULATED)
+      FetchContent_Populate(mbedtls)
+      add_subdirectory("${mbedtls_SOURCE_DIR}" "${mbedtls_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    endif()
+  endif()
 endif()
 target_compile_definitions(mbedcrypto PRIVATE MBEDTLS_MD4_C)

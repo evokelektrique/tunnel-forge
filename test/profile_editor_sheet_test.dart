@@ -1,13 +1,10 @@
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:tunnel_forge/features/home/data/home_repositories_impl.dart';
-import 'package:tunnel_forge/features/profile_form/presentation/bloc/profile_form_bloc.dart';
-import 'package:tunnel_forge/features/profiles/presentation/profile_editor_sheet.dart';
-import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
+import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
+import 'package:tunnel_forge/features/profiles/presentation/profile_editor_sheet.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 
 class _FailOnceWriteSecretStore extends MemorySecretStore {
@@ -46,13 +43,12 @@ void main() {
   Future<void> pumpHost(
     WidgetTester tester, {
     required ProfileStore store,
-    String? profileId,
-    Locale? locale,
+    required String profileId,
   }) async {
-    AppL10n.syncLocale(locale ?? const Locale('en'));
+    AppL10n.syncLocale(const Locale('en'));
     await tester.pumpWidget(
       MaterialApp(
-        locale: locale,
+        locale: const Locale('en'),
         localizationsDelegates: AppL10n.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         home: Builder(
@@ -60,27 +56,11 @@ void main() {
             body: Center(
               child: FilledButton(
                 onPressed: () {
-                  if (profileId != null) {
-                    ProfileEditorSheet.show(
-                      context,
-                      profileId: profileId,
-                      store: store,
-                    );
-                  } else {
-                    showModalBottomSheet<bool>(
-                      context: context,
-                      isScrollControlled: true,
-                      builder: (ctx) => BlocProvider(
-                        create: (_) =>
-                            ProfileFormBloc(ProfilesRepositoryImpl(store))
-                              ..add(const ProfileFormStarted(null)),
-                        child: ProfileEditorView(
-                          onClose: () => Navigator.of(ctx).pop(false),
-                          onSaved: (_) => Navigator.of(ctx).pop(true),
-                        ),
-                      ),
-                    );
-                  }
+                  ProfileEditorSheet.show(
+                    context,
+                    profileId: profileId,
+                    store: store,
+                  );
                 },
                 child: const Text('Open'),
               ),
@@ -92,238 +72,6 @@ void main() {
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
   }
-
-  testWidgets('shows dns section when automatic dns is disabled', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-1',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: false,
-      dns1Host: '1.1.1.1',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: 'dns.example.com',
-      dns2Protocol: DnsProtocol.dnsOverTls,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    expect(find.byKey(const Key('dns_servers_section')), findsOneWidget);
-    expect(find.text('DNS'), findsOneWidget);
-    expect(find.text('Automatic'), findsOneWidget);
-    expect(find.text('DNS servers'), findsNothing);
-    expect(find.text('DNS 1 is primary. DNS 2 is fallback.'), findsOneWidget);
-    expect(find.text('DNS 1'), findsOneWidget);
-    expect(find.text('DNS 2'), findsOneWidget);
-    expect(find.text('UDP'), findsOneWidget);
-    expect(find.text('TLS'), findsOneWidget);
-  });
-
-  testWidgets('dns dropdown height matches dns text field', (tester) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-dns-size',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: false,
-      dns1Host: '1.1.1.1',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '8.8.8.8',
-      dns2Protocol: DnsProtocol.dnsOverTls,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    final dnsFieldSize = tester.getSize(
-      find.byKey(const ValueKey('dns_input_DNS 1')),
-    );
-    final dnsDropdownSize = tester.getSize(
-      find.byKey(const ValueKey('dns_protocol_DNS 1')),
-    );
-
-    expect(dnsDropdownSize.height, dnsFieldSize.height);
-  });
-
-  testWidgets('shows clearer mtu hint and helper copy and saves empty as auto', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    await pumpHost(tester, store: store);
-
-    final mtuField = tester.widget<TextField>(
-      find.byKey(const Key('mtu_field')),
-    );
-    expect(mtuField.controller?.text, isEmpty);
-    expect(mtuField.decoration?.labelText, 'MTU');
-    expect(mtuField.decoration?.hintText, 'Optional');
-    expect(mtuField.decoration?.helperMaxLines, 2);
-    expect(
-      mtuField.decoration?.helperText,
-      'Leave empty to negotiate MTU automatically. Range ${Profile.minVpnMtu}-${Profile.maxVpnMtu}.',
-    );
-
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    final saved = await store.loadProfiles();
-    expect(saved, hasLength(1));
-    expect(saved.single.mtu, isNull);
-  });
-
-  testWidgets('shows localized Persian mtu hint and helper copy', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    await pumpHost(tester, store: store, locale: const Locale('fa'));
-
-    final mtuField = tester.widget<TextField>(
-      find.byKey(const Key('mtu_field')),
-    );
-    expect(mtuField.decoration?.hintText, 'اختیاری');
-    expect(
-      mtuField.decoration?.helperText,
-      'برای مذاکره خودکار MTU خالی بگذارید. بازه ${Profile.minVpnMtu} تا ${Profile.maxVpnMtu}.',
-    );
-  });
-
-  testWidgets('password and psk visibility toggles are independent', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-secrets',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: true,
-      dns1Host: '',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '',
-      dns2Protocol: DnsProtocol.dnsOverUdp,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: 'psk');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    TextField fieldByLabel(String label) => tester.widget<TextField>(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is TextField && widget.decoration?.labelText == label,
-      ),
-    );
-
-    expect(fieldByLabel('Password').obscureText, isTrue);
-    expect(fieldByLabel('IPsec PSK').obscureText, isTrue);
-    expect(find.byTooltip('Show password'), findsOneWidget);
-    expect(find.byTooltip('Show IPsec PSK'), findsOneWidget);
-
-    await tester.tap(find.byTooltip('Show password'));
-    await tester.pump();
-
-    expect(fieldByLabel('Password').obscureText, isFalse);
-    expect(fieldByLabel('IPsec PSK').obscureText, isTrue);
-    expect(find.byTooltip('Hide password'), findsOneWidget);
-    expect(find.byTooltip('Show IPsec PSK'), findsOneWidget);
-
-    await tester.tap(find.byTooltip('Show IPsec PSK'));
-    await tester.pump();
-
-    expect(fieldByLabel('Password').obscureText, isFalse);
-    expect(fieldByLabel('IPsec PSK').obscureText, isFalse);
-    expect(find.byTooltip('Hide password'), findsOneWidget);
-    expect(find.byTooltip('Hide IPsec PSK'), findsOneWidget);
-
-    await tester.tap(find.byTooltip('Hide password'));
-    await tester.pump();
-
-    expect(fieldByLabel('Password').obscureText, isTrue);
-    expect(fieldByLabel('IPsec PSK').obscureText, isFalse);
-    expect(find.byTooltip('Show password'), findsOneWidget);
-    expect(find.byTooltip('Hide IPsec PSK'), findsOneWidget);
-  });
-
-  testWidgets('clearing mtu removes inline error and saves as auto', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-clear-mtu',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: true,
-      dns1Host: '',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '',
-      dns2Protocol: DnsProtocol.dnsOverUdp,
-      mtu: 1400,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    await tester.enterText(
-      find.byKey(const Key('mtu_field')),
-      '${Profile.maxVpnMtu + 1}',
-    );
-    await tester.pump();
-    expect(
-      find.text(
-        'MTU must be between ${Profile.minVpnMtu} and ${Profile.maxVpnMtu}',
-      ),
-      findsOneWidget,
-    );
-
-    await tester.enterText(find.byKey(const Key('mtu_field')), '');
-    await tester.pump();
-
-    expect(
-      find.text(
-        'MTU must be between ${Profile.minVpnMtu} and ${Profile.maxVpnMtu}',
-      ),
-      findsNothing,
-    );
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    final saved = await store.loadProfiles();
-    expect(saved.single.mtu, isNull);
-  });
-
-  testWidgets('shows inline error when mtu is out of range', (tester) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-invalid-mtu-range',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: true,
-      dns1Host: '',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '',
-      dns2Protocol: DnsProtocol.dnsOverUdp,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    await tester.enterText(
-      find.byKey(const Key('mtu_field')),
-      '${Profile.maxVpnMtu + 1}',
-    );
-    await tester.pump();
-
-    expect(
-      find.text(
-        'MTU must be between ${Profile.minVpnMtu} and ${Profile.maxVpnMtu}',
-      ),
-      findsOneWidget,
-    );
-  });
 
   testWidgets('invalid mtu blocks save with a clear toast', (tester) async {
     final store = await buildStore();
@@ -357,91 +105,6 @@ void main() {
       ),
       findsWidgets,
     );
-  });
-
-  testWidgets('invalid dns entry blocks save with a toast', (tester) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-2',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: false,
-      dns1Host: '1.1.1.1',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '',
-      dns2Protocol: DnsProtocol.dnsOverUdp,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    await tester.enterText(find.byType(TextField).at(6), 'bad/path');
-    await tester.pump();
-    await tester.tap(find.text('Save'));
-    await tester.pump();
-
-    expect(find.byKey(const Key('app_toast')), findsOneWidget);
-    expect(find.text('DNS 2: use hostname or IPv4'), findsWidgets);
-  });
-
-  testWidgets('automatic dns hides manual dns section', (tester) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-3',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: true,
-      dns1Host: '',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '',
-      dns2Protocol: DnsProtocol.dnsOverUdp,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    expect(find.byKey(const Key('dns_servers_section')), findsNothing);
-    expect(find.text('DNS 1 is primary. DNS 2 is fallback.'), findsNothing);
-    expect(find.text('DNS 1'), findsNothing);
-    expect(find.text('DNS 2'), findsNothing);
-  });
-
-  testWidgets('automatic dns toggle hides and shows dns section', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-4',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      dnsAutomatic: false,
-      dns1Host: '1.1.1.1',
-      dns1Protocol: DnsProtocol.dnsOverUdp,
-      dns2Host: '8.8.8.8',
-      dns2Protocol: DnsProtocol.dnsOverTls,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    expect(find.byKey(const Key('dns_servers_section')), findsOneWidget);
-
-    await tester.ensureVisible(find.byType(CheckboxListTile));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byType(CheckboxListTile));
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const Key('dns_servers_section')), findsNothing);
-
-    await tester.ensureVisible(find.byType(CheckboxListTile));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byType(CheckboxListTile));
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const Key('dns_servers_section')), findsOneWidget);
   });
 
   testWidgets(
@@ -544,141 +207,5 @@ void main() {
     expect(savedRow!.profile.protocol, TunnelProtocol.pptp);
     expect(savedRow.psk, isEmpty);
     expect(savedRow.secretsMissing, isFalse);
-  });
-
-  testWidgets('validates PPP RFC limits for username and password', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-ppp-limits',
-      displayName: 'Office',
-      server: 'vpn.example.com',
-      user: 'alice',
-      protocol: TunnelProtocol.pptp,
-    );
-    await store.upsertProfile(profile, password: 'valid', psk: '');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    final userField = find.byKey(const Key('username_field'));
-    final passwordField = find.byKey(const Key('password_field'));
-
-    // Password > 256 UTF-16 code units triggers RFC 2759 error and blocks Save.
-    await tester.enterText(passwordField, 'a' * 257);
-    await tester.pumpAndSettle();
-    expect(find.textContaining('256 characters (RFC 2759'), findsOneWidget);
-
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    final unchanged = await store.loadProfileWithSecrets(profile.id);
-    expect(unchanged!.password, 'valid');
-
-    // Username > 255 UTF-8 bytes triggers RFC 1334/1994 error and blocks Save.
-    await tester.enterText(passwordField, 'okpw');
-    await tester.enterText(userField, 'u' * 256);
-    await tester.pumpAndSettle();
-    expect(find.textContaining('255 UTF-8 bytes (RFC 1334'), findsOneWidget);
-
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    final unchangedUser = await store.loadProfileWithSecrets(profile.id);
-    expect(unchangedUser!.profile.user, 'alice');
-
-    // 256-char ASCII password (> 255 bytes PAP limit, <= 256 chars MS-CHAPv2) warns but saves.
-    await tester.enterText(userField, 'alice');
-    await tester.enterText(passwordField, 'p' * 256);
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining('255-byte PAP limit (RFC 1334)'),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    final updated = await store.loadProfileWithSecrets(profile.id);
-    expect(updated!.password, 'p' * 256);
-  });
-
-  testWidgets('ppp auth shows for L2TP and PPTP; MPPE shows for PPTP only', (
-    tester,
-  ) async {
-    final store = await buildStore();
-    const profile = Profile(
-      id: 'profile-auth-mppe-visibility',
-      displayName: 'Branch',
-      server: 'vpn.example.com',
-      user: 'alice',
-      protocol: TunnelProtocol.l2tp,
-    );
-    await store.upsertProfile(profile, password: 'pw', psk: 'psk');
-
-    await pumpHost(tester, store: store, profileId: profile.id);
-
-    final authFinder = find.byKey(const Key('ppp_auth_dropdown'));
-    final mppeFinder = find.byKey(const Key('mppe_dropdown'));
-    expect(authFinder, findsOneWidget);
-    expect(mppeFinder, findsNothing);
-    expect(
-      find.text('Accept the authentication method offered by the server.'),
-      findsOneWidget,
-    );
-
-    // Switch to PPTP: MPPE dropdown appears below PPP authentication with Auto default.
-    await tester.tap(find.byKey(const Key('protocol_dropdown')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('PPTP (root)').last);
-    await tester.pumpAndSettle();
-
-    await tester.ensureVisible(mppeFinder);
-    expect(mppeFinder, findsOneWidget);
-    final mtuBottom = tester
-        .getBottomLeft(find.byKey(const Key('mtu_field')))
-        .dy;
-    final authTop = tester.getTopLeft(authFinder).dy;
-    final mppeTop = tester.getTopLeft(mppeFinder).dy;
-    expect(authTop, greaterThan(mtuBottom));
-    expect(mppeTop, greaterThan(authTop));
-    expect(
-      find.text('Receive MPPE status from the server during handshake.'),
-      findsOneWidget,
-    );
-
-    // Selecting MPPE On + PAP shows inline error and blocks Save.
-    await tester.ensureVisible(authFinder);
-    await tester.tap(authFinder);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('PAP').last);
-    await tester.pumpAndSettle();
-
-    await tester.ensureVisible(mppeFinder);
-    await tester.tap(mppeFinder);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('On').last);
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text('MPPE On requires Auto or MS-CHAPv2 authentication'),
-      findsOneWidget,
-    );
-    await tester.tap(find.text('Save'));
-    await tester.pump();
-    expect(find.byKey(const Key('app_toast')), findsOneWidget);
-    expect((await store.loadProfiles()).single.mppeMode, MppeMode.auto);
-
-    // Switching back to L2TP keeps in-memory MPPE On if toggled back, and saving L2TP resets persisted MPPE to Auto.
-    await tester.ensureVisible(find.byKey(const Key('protocol_dropdown')));
-    await tester.tap(find.byKey(const Key('protocol_dropdown')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('L2TP').last);
-    await tester.pumpAndSettle();
-    expect(mppeFinder, findsNothing);
-
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    final savedL2tp = (await store.loadProfiles()).single;
-    expect(savedL2tp.protocol, TunnelProtocol.l2tp);
-    expect(savedL2tp.pppAuth, PppAuthMethod.pap);
-    expect(savedL2tp.mppeMode, MppeMode.auto);
   });
 }

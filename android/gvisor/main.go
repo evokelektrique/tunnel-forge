@@ -83,9 +83,7 @@ type gvisorState struct {
 	completedOpenDiags  map[int]string
 	completedOpenOrder  []int
 	nextID              int
-	nextOpenAttemptID   int
 	running             bool
-	lastOpenDiagnostics string
 
 	outboundPackets atomic.Uint64
 	inboundPackets  atomic.Uint64
@@ -169,9 +167,7 @@ func startStackLocked(s *stack.Stack, linkEP *channel.Endpoint, address tcpip.Ad
 	state.completedOpenDiags = make(map[int]string)
 	state.completedOpenOrder = nil
 	state.nextID = 1
-	state.nextOpenAttemptID = 1
 	state.running = true
-	state.lastOpenDiagnostics = ""
 	state.outboundPackets.Store(0)
 	state.inboundPackets.Store(0)
 	state.openAttempts.Store(0)
@@ -288,14 +284,6 @@ func tf_gvisor_read_outbound(out unsafe.Pointer, maxLen C.int, timeoutMs C.int) 
 	copy(unsafe.Slice((*byte)(out), int(maxLen)), data)
 	state.outboundPackets.Add(1)
 	return C.int(len(data))
-}
-
-//export tf_gvisor_tcp_open
-func tf_gvisor_tcp_open(remoteIPv4 unsafe.Pointer, port C.int, timeoutMs C.int) C.int {
-	state.mu.Lock()
-	openID := takeNextID(&state.nextOpenAttemptID)
-	state.mu.Unlock()
-	return tf_gvisor_tcp_open_cancelable(C.int(openID), remoteIPv4, port, timeoutMs)
 }
 
 //export tf_gvisor_tcp_open_cancelable
@@ -475,7 +463,6 @@ func storeCompletedOpenDiagLocked(openID int, summary string) {
 		state.completedOpenOrder = state.completedOpenOrder[1:]
 		delete(state.completedOpenDiags, oldest)
 	}
-	state.lastOpenDiagnostics = summary
 }
 
 func removeOpenMappingsLocked(attempt int, diag *tcpOpenDiag) {
@@ -634,23 +621,6 @@ func tf_gvisor_stats(out unsafe.Pointer, count C.int) C.int {
 		return 17
 	}
 	return 16
-}
-
-//export tf_gvisor_last_open_diagnostics
-func tf_gvisor_last_open_diagnostics(out unsafe.Pointer, count C.int) C.int {
-	if out == nil || count <= 0 {
-		return -1
-	}
-	state.mu.Lock()
-	diag := state.lastOpenDiagnostics
-	state.mu.Unlock()
-	buf := unsafe.Slice((*byte)(out), int(count))
-	n := copy(buf, []byte(diag))
-	if n >= len(buf) {
-		n = len(buf) - 1
-	}
-	buf[n] = 0
-	return C.int(n)
 }
 
 //export tf_gvisor_open_diagnostics

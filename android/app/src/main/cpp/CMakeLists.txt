@@ -53,15 +53,6 @@ set_target_properties(
     SUFFIX ".so"
 )
 
-option(TUNNEL_FORGE_NATIVE_COVERAGE "Measure native code exercised by Android instrumentation tests" OFF)
-if(TUNNEL_FORGE_NATIVE_COVERAGE)
-  target_sources(tunnel_engine PRIVATE ../../androidTest/cpp/native_coverage.c)
-  foreach(target tunnel_engine pptp_gre_helper)
-    target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
-    target_link_options(${target} PRIVATE -fprofile-instr-generate)
-  endforeach()
-endif()
-
 if(TUNNEL_FORGE_CLANG_TIDY)
   set_property(TARGET tunnel_engine PROPERTY C_CLANG_TIDY "${TUNNEL_FORGE_CLANG_TIDY_COMMAND}")
   set_property(TARGET pptp_gre_helper PROPERTY C_CLANG_TIDY "${TUNNEL_FORGE_CLANG_TIDY_COMMAND}")
@@ -75,7 +66,7 @@ target_include_directories(
 
 target_link_libraries(
   tunnel_engine
-  PRIVATE mbedtls mbedx509 mbedcrypto log dl
+  PRIVATE mbedcrypto log dl
 )
 
 # Inner L2TP-in-UDP checksum: RFC 768 allows 0 = unused. Some kernels drop wrong computed checksums after ESP decap.

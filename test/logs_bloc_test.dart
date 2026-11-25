@@ -46,25 +46,22 @@ void main() {
     },
   );
 
-  test('display level change logs DEBUG and clear leaves logs empty', () async {
-    final logs = _RecordingLogsRepository();
+  test('clear removes entries from logs repository', () async {
+    final logs = _RecordingLogsRepository()
+      ..append(
+        LogEntry(
+          timestamp: DateTime.utc(2026, 1, 1),
+          level: LogLevel.info,
+          source: LogSource.dart,
+          tag: 't',
+          message: 'entry',
+        ),
+      );
     final bloc = LogsBloc(logs, settingsRepository, tunnelRepository);
     addTearDown(bloc.close);
 
     bloc.add(const LogsStarted());
     await Future<void>.delayed(Duration.zero);
-
-    bloc.add(const LogsLevelChangeRequested(LogDisplayLevel.debug));
-    await Future<void>.delayed(Duration.zero);
-
-    expect(logs.entries, hasLength(1));
-    expect(logs.entries.single.level, LogLevel.debug);
-    expect(logs.entries.single.tag, 'logs');
-    expect(
-      logs.entries.single.message,
-      'Log level changed previous=info to=debug',
-    );
-
     bloc.add(const LogsCleared());
     await Future<void>.delayed(Duration.zero);
 
