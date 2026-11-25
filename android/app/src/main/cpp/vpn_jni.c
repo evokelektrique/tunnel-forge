@@ -23,10 +23,6 @@ static void throw_io_exception(JNIEnv *env, const char *message) {
 }
 
 void tunnel_loop_stop(void);
-int ikev1_run_audit_check(int item_id, char *err_buf, size_t err_cap);
-int ppp_run_audit_check(int item_id, char *err_buf, size_t err_cap);
-int packet_endpoint_run_audit_check(int item_id, char *err_buf, size_t err_cap);
-int pptp_root_run_audit_check(int item_id, char *err_buf, size_t err_cap);
 
 static jint native_negotiate(JNIEnv *env, jclass clazz, jstring jserver, jstring juser, jstring jpassword, jstring jpsk,
                              jint tun_mtu, jint protocol, jint ppp_auth, jint mppe_mode, jintArray jout_client_ipv4,
@@ -379,40 +375,6 @@ static void native_stop_tunnel(JNIEnv *env, jclass clazz) {
   tunnel_loop_stop();
 }
 
-static jstring native_run_audit_check(JNIEnv *env, jclass clazz, jint item_id) {
-  (void)clazz;
-  char err_buf[512] = {0};
-  int rc = -1;
-  switch ((int)item_id) {
-  case 1:
-  case 3:
-    rc = ikev1_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
-    break;
-  case 2:
-  case 4:
-    rc = ppp_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
-    break;
-  case 5:
-    rc = packet_endpoint_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
-    break;
-  case 7:
-    rc = pptp_root_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
-    break;
-  case 16:
-    rc = esp_run_audit_check((int)item_id, err_buf, sizeof(err_buf));
-    break;
-  default:
-    snprintf(err_buf, sizeof(err_buf), "unknown native audit itemId=%d", (int)item_id);
-    rc = -1;
-    break;
-  }
-  if (rc == 0)
-    return NULL;
-  if (err_buf[0] == '\0')
-    snprintf(err_buf, sizeof(err_buf), "native audit item %d failed rc=%d", (int)item_id, rc);
-  return (*env)->NewStringUTF(env, err_buf);
-}
-
 static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
       {"nativeFailure", "()[I", (void *)native_failure},
@@ -440,7 +402,6 @@ static int register_vpn_bridge(JNIEnv *env) {
       {"nativeReadVpnDnsQuery", "(I)[B", (void *)native_read_vpn_dns_query},
       {"nativeQueueVpnDnsResponse", "([B)I", (void *)native_queue_vpn_dns_response},
       {"nativeStopTunnel", "()V", (void *)native_stop_tunnel},
-      {"nativeRunAuditCheck", "(I)Ljava/lang/String;", (void *)native_run_audit_check},
   };
   jclass bridge_class = (*env)->FindClass(env, VPN_BRIDGE_CLASS);
   if (bridge_class == NULL) {

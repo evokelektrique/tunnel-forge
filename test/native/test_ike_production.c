@@ -92,5 +92,30 @@ int main(void) {
   assert(resolve_udp("127.0.0.1", IKE_PORT, &resolved, &resolved_len) == 0);
   assert(resolved.ss_family == AF_INET);
   assert(ntohs(((struct sockaddr_in *)&resolved)->sin_port) == IKE_PORT);
+
+  /* Oversized ciphertext must fail without writing past output capacity. */
+  uint8_t oversized_ct[272] = {0};
+  uint8_t dec_buf[1024];
+  size_t dec_out_len = 0;
+  uint8_t dec_iv_out[16];
+  memset(dec_buf, 0xA5, sizeof(dec_buf));
+  assert(isakmp_aes128_decrypt(key, iv, oversized_ct, sizeof(oversized_ct), dec_buf, 256u, &dec_out_len, dec_iv_out) !=
+         0);
+  assert(dec_buf[256] == 0xA5);
+  memset(dec_buf, 0xA5, sizeof(dec_buf));
+  assert(isakmp_3des_decrypt(key, iv, oversized_ct, 264u, dec_buf, 256u, &dec_out_len, dec_iv_out) != 0);
+  assert(dec_buf[256] == 0xA5);
+
+  /* ESP keymat derivation must succeed with debug keymat logging disabled by default. */
+  esp_keys_t esp_out;
+  memset(&esp_out, 0, sizeof(esp_out));
+  uint8_t skd[20] = {1, 2, 3, 4};
+  uint8_t ni[16] = {5}, nr[16] = {6};
+  uint8_t ip_us[4] = {192, 0, 2, 1}, ip_peer[4] = {192, 0, 2, 2};
+  assert(ike_install_esp_keymat(&esp_out, skd, sizeof(skd), 0x11223344u, 0x55667788u, ni, sizeof(ni), nr, sizeof(nr),
+                                ESP_CIPHER_AES_CBC, 16u, ip_us, ip_peer) == 0);
+#if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
+#error "TUNNEL_FORGE_DEBUG_ESP_KEYMAT must stay disabled in default builds"
+#endif
   return 0;
 }

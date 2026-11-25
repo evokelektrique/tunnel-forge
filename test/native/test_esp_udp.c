@@ -49,8 +49,13 @@ static void test_esp_round_trip(uint8_t cipher, size_t key_len) {
   assert(plaintext_len == sizeof(payload) && memcmp(plaintext, payload, plaintext_len) == 0);
   plaintext_len = sizeof(plaintext);
   assert(esp_try_decrypt(&receiver, datagram, (size_t)sent, plaintext, &plaintext_len) == -1);
+  assert(sender.cache.tx_cipher_ready && sender.cache.tx_md_ready);
+  assert(receiver.cache.rx_cipher_ready && receiver.cache.rx_md_ready);
   esp_keys_cleanup(&sender);
   esp_keys_cleanup(&receiver);
+  assert(!sender.cache.tx_cipher_ready && !sender.cache.tx_md_ready);
+  assert(!receiver.cache.rx_cipher_ready && !receiver.cache.rx_md_ready);
+  assert(sender.enc_key[0] == 0 && receiver.enc_key[key_len] == 0);
 }
 
 int main(void) {

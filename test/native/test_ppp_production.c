@@ -88,13 +88,53 @@ int l2tp_send_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, sock
   (void)ppp_len;
   return -1;
 }
+#endif
 int packet_endpoint_write(packet_endpoint_t *endpoint, const uint8_t *buf, size_t len) {
-  (void)endpoint;
+  if (endpoint == NULL || endpoint->write_packet == NULL)
+    return -1;
+  return endpoint->write_packet(endpoint->ctx, buf, len);
+}
+
+typedef struct {
+  const uint8_t *frames[8];
+  size_t lens[8];
+  size_t count;
+  size_t idx;
+  size_t tx_count;
+} audit_ppp_mock_t;
+
+static int audit_ppp_mock_send(void *ctx, const uint8_t *ppp, size_t len) {
+  (void)ppp;
+  (void)len;
+  audit_ppp_mock_t *m = (audit_ppp_mock_t *)ctx;
+  m->tx_count++;
+  return 0;
+}
+
+static int audit_ppp_mock_recv(void *ctx, uint8_t *out, size_t cap, int timeout_ms) {
+  (void)timeout_ms;
+  audit_ppp_mock_t *m = (audit_ppp_mock_t *)ctx;
+  if (m->idx >= m->count)
+    return -1;
+  size_t flen = m->lens[m->idx];
+  if (flen > cap)
+    return -1;
+  memcpy(out, m->frames[m->idx], flen);
+  m->idx++;
+  return (int)flen;
+}
+
+typedef struct {
+  size_t write_count;
+} audit_ep_ctx_t;
+
+static int audit_ep_write(void *ctx, const uint8_t *buf, size_t len) {
   (void)buf;
   (void)len;
-  return -1;
+  audit_ep_ctx_t *ep = (audit_ep_ctx_t *)ctx;
+  ep->write_count++;
+  return 0;
 }
-#endif
 static int fake_send(void *ctx, const uint8_t *in, size_t n) {
   (void)ctx;
   if (test_mode >= 2) {
@@ -489,6 +529,28 @@ int main(void) {
       assert(ppp_lcp_negotiate_transport(&t, &auth, &sess) == 0);
       assert(sess.link_mtu == 1400u);
     }
+  }
+
+  /* Cleartext PROTO_IP must be dropped while mppe.enabled == 1 and delivered when mppe.enabled == 0. */
+  {
+    audit_ep_ctx_t ep_ctx = {0};
+    packet_endpoint_t ep = {.ctx = &ep_ctx, .write_packet = audit_ep_write, .name = "audit"};
+    static const uint8_t cleartext_ip_frame[] = {
+        0xff, 0x03, 0x00, 0x21, 0x45, 0x00, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00,
+        0x40, 0x11, 0x00, 0x00, 10,   0,    0,    1,    10,   0,    0,    2,
+    };
+    ppp_session_t sess;
+    memset(&sess, 0, sizeof(sess));
+    uint8_t hh_mppe[16] = {1};
+    uint8_t ntr_mppe[24] = {2};
+    assert(ppp_mppe_init_client(&sess.mppe, hh_mppe, ntr_mppe, 0) == 0);
+    (void)ppp_dispatch_ppp_frame_over_transport(NULL, &sess, cleartext_ip_frame, sizeof(cleartext_ip_frame), &ep);
+    assert(ep_ctx.write_count == 0u);
+    ppp_mppe_zero(&sess.mppe);
+
+    memset(&sess, 0, sizeof(sess));
+    assert(ppp_dispatch_ppp_frame_over_transport(NULL, &sess, cleartext_ip_frame, sizeof(cleartext_ip_frame), &ep) == 0);
+    assert(ep_ctx.write_count == 1u);
   }
   return 0;
 }

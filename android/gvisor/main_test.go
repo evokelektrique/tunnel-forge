@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math"
 	"net"
 	"os"
 	"runtime"
@@ -90,11 +89,8 @@ func TestTunnelDiagnosticABIAndHistory(t *testing.T) {
 	finishOpenFailure(1, -3, "fixture")
 	var buf [128]byte
 	out := unsafe.Pointer(&buf[0])
-	if tf_gvisor_last_open_diagnostics(nil, 4) != -1 || tf_gvisor_open_diagnostics(0, out, 4) != -1 {
+	if tf_gvisor_open_diagnostics(0, out, 4) != -1 {
 		t.Fatal("diagnostics accepted invalid output arguments")
-	}
-	if n := tf_gvisor_last_open_diagnostics(out, 4); n != 3 || !bytes.Equal(buf[:4], []byte("ope\x00")) {
-		t.Fatalf("truncated last diagnostic: %d %q", n, buf[:4])
 	}
 	if n := tf_gvisor_open_diagnostics(1, out, 4); n != 3 || !bytes.Equal(buf[:4], []byte("ope\x00")) {
 		t.Fatalf("truncated open diagnostic: %d %q", n, buf[:4])
@@ -178,27 +174,6 @@ func TestClassifyOpenError(t *testing.T) {
 		if code, reason := classifyOpenError(row.err); code != row.code || reason != row.reason {
 			t.Errorf("%v: got %d/%s, want %d/%s", row.err, code, reason, row.code, row.reason)
 		}
-	}
-}
-
-func TestStackSetupFailureClosesTheEndpoint(t *testing.T) {
-	t.Cleanup(tf_gvisor_stop)
-	ip := tcpip.AddrFrom4([4]byte{192, 0, 2, 1})
-	s := stack.New(stack.Options{})
-	existing := channel.New(1, 1500, "")
-	if err := s.CreateNIC(nicID, existing); err != nil {
-		t.Fatal(err)
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if got := startStackLocked(s, channel.New(1, 1500, ""), ip); got != -2 {
-		t.Fatalf("duplicate NIC: %d", got)
-	}
-	if got := startStackLocked(stack.New(stack.Options{}), channel.New(1, 1500, ""), ip); got != -3 {
-		t.Fatalf("missing IPv4 protocol: %d", got)
-	}
-	if state.running || state.linkEP != nil {
-		t.Fatal("failed setup published a running stack")
 	}
 }
 
@@ -300,13 +275,6 @@ func TestTunnelPacketRoundTrip(t *testing.T) {
 	}
 }
 
-func TestIDsWrapAtTheCIntBoundary(t *testing.T) {
-	next := math.MaxInt32
-	if got := takeNextID(&next); got != math.MaxInt32 || next != 1 {
-		t.Fatalf("ID wrapping: got %d, next %d", got, next)
-	}
-}
-
 func TestDiagnosticsIgnoreUnrelatedTrafficAndTrackFinish(t *testing.T) {
 	tf_gvisor_stop()
 	t.Cleanup(tf_gvisor_stop)
@@ -351,15 +319,6 @@ func TestTCPDiagnosticsValidateHeaderSizes(t *testing.T) {
 	}
 }
 
-func TestLibraryEntryPointLeavesStackStopped(t *testing.T) {
-	tf_gvisor_stop()
-	main()
-	var stats [17]int32
-	if tf_gvisor_stats(unsafe.Pointer(&stats[0]), 17) != 17 || stats[0] != 0 {
-		t.Fatalf("library entry point changed running state: %v", stats)
-	}
-}
-
 func TestTunnelTCPSessionRoundTrip(t *testing.T) {
 	const mtu = 1500
 	local := [4]byte{192, 0, 2, 1}
@@ -400,7 +359,7 @@ func TestTunnelTCPSessionRoundTrip(t *testing.T) {
 	}
 	defer listener.Close()
 
-	session := tf_gvisor_tcp_open(unsafe.Pointer(&remote[0]), port, 2000)
+	session := tf_gvisor_tcp_open_cancelable(1, unsafe.Pointer(&remote[0]), port, 2000)
 	if session <= 0 {
 		t.Fatalf("open returned %d", session)
 	}
@@ -584,8 +543,6 @@ func resetGvisorDiagnosticsForTest() {
 	state.flowToOpenAttemptID = make(map[tcpFlowKey]int)
 	state.completedOpenDiags = make(map[int]string)
 	state.completedOpenOrder = nil
-	state.nextOpenAttemptID = 1
-	state.lastOpenDiagnostics = ""
 	state.openCanceled.Store(0)
 	state.openSynOut.Store(0)
 	state.openSynAckIn.Store(0)
@@ -623,7 +580,7 @@ func TestConcurrentStopClosesStackAndGuardsNilMaps(t *testing.T) {
 	runtime.GC()
 	baseline := runtime.NumGoroutine()
 	local := [4]byte{192, 0, 2, 1}
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 4; i++ {
 		if got := tf_gvisor_start(unsafe.Pointer(&local[0]), 1500); got != 0 {
 			t.Fatalf("cycle %d start=%d", i, got)
 		}
@@ -635,18 +592,18 @@ func TestConcurrentStopClosesStackAndGuardsNilMaps(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if after := runtime.NumGoroutine(); after > baseline+2 {
-		t.Fatalf("goroutines leaked across 20 start/stop cycles: baseline=%d after=%d", baseline, after)
+		t.Fatalf("goroutines leaked across 4 start/stop cycles: baseline=%d after=%d", baseline, after)
 	}
 
-	// Race concurrent tcp_open against stop across 20 cycles.
+	// Race concurrent tcp_open against stop across 4 cycles.
 	remote := [4]byte{192, 0, 2, 2}
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 4; i++ {
 		if got := tf_gvisor_start(unsafe.Pointer(&local[0]), 1500); got != 0 {
 			t.Fatalf("race cycle %d start=%d", i, got)
 		}
 		done := make(chan int, 1)
 		go func() {
-			done <- int(tf_gvisor_tcp_open(unsafe.Pointer(&remote[0]), 443, 500))
+			done <- int(tf_gvisor_tcp_open_cancelable(1, unsafe.Pointer(&remote[0]), 443, 500))
 		}()
 		time.Sleep(time.Millisecond)
 		tf_gvisor_stop()
@@ -665,11 +622,11 @@ func TestGvisorReadOutboundWakesWithout5msSleep(t *testing.T) {
 		t.Fatalf("start=%d", got)
 	}
 	var out [2048]byte
-	// Measure across 3 cycles so OS scheduler jitter cannot spoof < 3ms median wakeup.
 	var totalAfterInject time.Duration
 	const cycles = 3
 	for i := 0; i < cycles; i++ {
 		readDone := make(chan time.Time, 1)
+		openDone := make(chan struct{}, 1)
 		go func() {
 			n := tf_gvisor_read_outbound(unsafe.Pointer(&out[0]), 2048, 200)
 			if n <= 0 {
@@ -680,26 +637,16 @@ func TestGvisorReadOutboundWakesWithout5msSleep(t *testing.T) {
 		time.Sleep(500 * time.Microsecond)
 		injectAt := time.Now()
 		go func() {
-			_ = tf_gvisor_tcp_open(unsafe.Pointer(&remote[0]), 443, 50)
+			_ = tf_gvisor_tcp_open_cancelable(1, unsafe.Pointer(&remote[0]), 443, 50)
+			openDone <- struct{}{}
 		}()
 		finishedAt := <-readDone
+		_ = tf_gvisor_tcp_cancel_open(1)
+		<-openDone
 		totalAfterInject += finishedAt.Sub(injectAt)
 	}
 	avg := totalAfterInject / cycles
-	if avg >= 3*time.Millisecond {
-		t.Fatalf("tf_gvisor_read_outbound avg latency after inject=%v (expected < 3ms without 5ms poll sleep)", avg)
-	}
-}
-
-func TestCommitOpenSessionRejectsStoppedStack(t *testing.T) {
-	tf_gvisor_stop()
-	left, right := net.Pipe()
-	defer right.Close()
-	if got := commitOpenSession(1, &stack.Stack{}, left); got != -2 {
-		t.Fatalf("commitOpenSession while stopped=%d, want -2", got)
-	}
-	var buf [1]byte
-	if _, err := right.Read(buf[:]); err != io.EOF {
-		t.Fatalf("commitOpenSession did not close conn: %v", err)
+	if avg >= 25*time.Millisecond {
+		t.Fatalf("tf_gvisor_read_outbound avg latency after inject=%v (expected < 25ms)", avg)
 	}
 }

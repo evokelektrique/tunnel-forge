@@ -171,8 +171,4 @@ object VpnBridge {
 
     @JvmStatic
     external fun nativeStopTunnel()
-
-    @androidx.annotation.VisibleForTesting
-    @JvmStatic
-    external fun nativeRunAuditCheck(itemId: Int): String?
 }
