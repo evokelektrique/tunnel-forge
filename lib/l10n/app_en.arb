@@ -370,6 +370,8 @@
   "automaticDnsHelp": "Receive DNS configuration automatically from the VPN server during PPP negotiation.",
   "dnsServers": "DNS servers",
   "dnsHelp": "DNS 1 is primary. DNS 2 is fallback.",
+  "dns1Hint": "Enter primary DNS",
+  "dns2Hint": "Enter secondary DNS",
   "mtuHint": "Optional",
   "mtuHelper": "Leave empty to negotiate MTU automatically. Range {min}-{max}.",
   "@mtuHelper": {

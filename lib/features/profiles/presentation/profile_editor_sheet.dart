@@ -190,6 +190,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     required DnsProtocol protocol,
     required bool dnsAutomatic,
     required String label,
+    required String hint,
     required String? errorText,
     required ValueChanged<String> onChanged,
     required ValueChanged<DnsProtocol?> onProtocolChanged,
@@ -204,7 +205,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
             enabled: !dnsAutomatic,
             keyboardType: TextInputType.text,
             onChanged: onChanged,
-            decoration: _deco(context, label: label).copyWith(
+            decoration: _deco(context, label: label, hint: hint).copyWith(
               floatingLabelBehavior: FloatingLabelBehavior.always,
               errorText: errorText,
               errorMaxLines: 2,
@@ -276,6 +277,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
           protocol: state.dns1Protocol,
           dnsAutomatic: state.dnsAutomatic,
           label: 'DNS 1',
+          hint: t.dns1Hint,
           errorText: state.dns1ErrorText,
           onChanged: (value) => context.read<ProfileFormBloc>().add(
             ProfileFormDns1Changed(value),
@@ -291,6 +293,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
           protocol: state.dns2Protocol,
           dnsAutomatic: state.dnsAutomatic,
           label: 'DNS 2',
+          hint: t.dns2Hint,
           errorText: state.dns2ErrorText,
           onChanged: (value) => context.read<ProfileFormBloc>().add(
             ProfileFormDns2Changed(value),
