@@ -2,9 +2,12 @@ package io.github.evokelektrique.tunnelforge
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
 
 internal enum class NetworkTransitionEvent {
@@ -186,15 +189,84 @@ internal class ActiveNetworkMonitor(
         registered = true
     }
 
-    fun activeInterfaceName(): String? {
+    fun activePhysicalNetwork(): Network? {
         val preferred = tracker.preferredHandle()?.let { knownNetworks[it] }
-        val network =
-            preferred ?: connectivityManager.activeNetwork?.takeIf { candidate ->
-                val caps = connectivityManager.getNetworkCapabilities(candidate)
-                caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            }
-        return network?.let { connectivityManager.getLinkProperties(it)?.interfaceName }?.takeIf { it.isNotBlank() }
+        return preferred ?: connectivityManager.activeNetwork?.takeIf { candidate ->
+            val caps = connectivityManager.getNetworkCapabilities(candidate)
+            caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        }
     }
+
+    fun interfaceNameFor(network: Network?): String? =
+        network?.let { connectivityManager.getLinkProperties(it)?.interfaceName }?.takeIf { it.isNotBlank() }
+
+    fun activeInterfaceName(): String? = interfaceNameFor(activePhysicalNetwork())
+
+    fun describeNetworkState(): String {
+        val active = activePhysicalNetwork()
+        val caps = active?.let { connectivityManager.getNetworkCapabilities(it) }
+        val lp = active?.let { connectivityManager.getLinkProperties(it) }
+        val defaultActive = connectivityManager.activeNetwork
+        val defaultMatches = active != null && defaultActive?.networkHandle == active.networkHandle
+        val v4Addrs =
+            lp?.linkAddresses
+                ?.filter { it.address is Inet4Address }
+                ?.joinToString("+") { "${it.address.hostAddress}/${it.prefixLength}" }
+                ?.ifEmpty { "none" }
+                ?: "none"
+        val v6Count = lp?.linkAddresses?.count { it.address is Inet6Address } ?: 0
+        val defaultV4 = lp?.routes?.any { it.isDefaultRoute && it.destination.address is Inet4Address } == true
+        val defaultV6 = lp?.routes?.any { it.isDefaultRoute && it.destination.address is Inet6Address } == true
+        val gwV4 =
+            lp?.routes
+                ?.firstOrNull { it.isDefaultRoute && it.destination.address is Inet4Address }
+                ?.gateway
+                ?.hostAddress
+                ?: "none"
+        val dnsList = lp?.dnsServers.orEmpty()
+        val dnsSummary =
+            if (dnsList.isEmpty()) {
+                "dnsCount=0"
+            } else {
+                val indexed =
+                    dnsList.take(3).mapIndexed { idx, addr ->
+                        "dns$idx=${addr.hostAddress ?: "?"}"
+                    }.joinToString(" ")
+                "dnsCount=${dnsList.size} $indexed"
+            }
+        val privateDnsMode = formatPrivateDnsMode(lp)
+        val trackedSummary =
+            if (knownNetworks.isEmpty()) {
+                "none"
+            } else {
+                knownNetworks.values.joinToString(",") { net ->
+                    val netCaps = connectivityManager.getNetworkCapabilities(net)
+                    val netLp = connectivityManager.getLinkProperties(net)
+                    val validated = netCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                    "${tierFor(netCaps)}:${netLp?.interfaceName ?: "?"}:val=$validated"
+                }
+            }
+        return "netHandle=${active?.networkHandle ?: -1L} " +
+            "tier=${tierFor(caps)} " +
+            "iface=${lp?.interfaceName ?: "none"} " +
+            "validated=${caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true} " +
+            "captivePortal=${caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true} " +
+            "internet=${caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true} " +
+            "metered=${caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false} " +
+            "linkMtu=${lp?.mtu ?: 0} " +
+            "v4=$v4Addrs v6Count=$v6Count defaultV4=$defaultV4 defaultV6=$defaultV6 gwV4=$gwV4 " +
+            "$dnsSummary privateDns=$privateDnsMode " +
+            "defaultNetMatches=$defaultMatches dataSaver=${connectivityManager.restrictBackgroundStatus} " +
+            "trackedNets=[$trackedSummary]"
+    }
+
+    private fun formatPrivateDnsMode(lp: LinkProperties?): String =
+        when {
+            lp == null -> "unknown"
+            !lp.isPrivateDnsActive -> "off"
+            lp.privateDnsServerName.isNullOrBlank() -> "opportunistic"
+            else -> "strict"
+        }
 
     override fun hasUsableNetwork(): Boolean = tracker.hasUsableNetwork()
 

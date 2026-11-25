@@ -22,6 +22,7 @@ import java.io.File
 import java.io.IOException
 import java.net.DatagramSocket
 import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.Socket
 import java.util.concurrent.Executors
@@ -963,6 +964,12 @@ class TunnelVpnService : VpnService() {
         monitor: ActiveNetworkMonitor,
     ): AttemptResult {
         VpnBridge.nativeSetSocketProtectionEnabled(true)
+        VpnTunnelEvents.emitEngineLog(
+            Log.DEBUG,
+            TAG,
+            "${prefixAttempt(attemptId)}active_network ${monitor.describeNetworkState()}",
+        )
+        emitServerDnsDiagnostics(attemptId, server)
         if (protocol == VpnContract.PROTOCOL_PPTP) {
             val helperPath = File(applicationInfo.nativeLibraryDir, PPTP_GRE_HELPER_LIB_NAME).absolutePath
             VpnBridge.nativeSetPptpRuntimeConfig(helperPath, monitor.activeInterfaceName().orEmpty())
@@ -1751,12 +1758,49 @@ class TunnelVpnService : VpnService() {
         @JvmStatic
         fun protectSocketFd(fd: Int): Boolean {
             val svc = instance ?: return false
-            return try {
-                svc.protect(fd)
-            } catch (e: Exception) {
-                AppLog.e(TAG, "protect failed for fd=$fd", e)
-                false
+            val protected =
+                try {
+                    svc.protect(fd)
+                } catch (e: Exception) {
+                    AppLog.e(TAG, "protect failed for fd=$fd", e)
+                    return false
+                }
+            if (!protected) {
+                VpnTunnelEvents.emitEngineLog(
+                    Log.WARN,
+                    TAG,
+                    "protectSocketFd fd=$fd protect=false",
+                )
+                return false
             }
+            val monitor = svc.networkMonitor
+            val network = monitor?.activePhysicalNetwork()
+            if (network == null) {
+                VpnTunnelEvents.emitEngineLog(
+                    Log.DEBUG,
+                    TAG,
+                    "protectSocketFd fd=$fd protect=true bindNet=none",
+                )
+                return true
+            }
+            val iface = monitor.interfaceNameFor(network) ?: "none"
+            try {
+                ParcelFileDescriptor.fromFd(fd).use { dupPfd ->
+                    network.bindSocket(dupPfd.fileDescriptor)
+                }
+                VpnTunnelEvents.emitEngineLog(
+                    Log.DEBUG,
+                    TAG,
+                    "protectSocketFd fd=$fd protect=true bindNet=${network.networkHandle} iface=$iface bindOk=true",
+                )
+            } catch (e: Exception) {
+                VpnTunnelEvents.emitEngineLog(
+                    Log.WARN,
+                    TAG,
+                    "protectSocketFd fd=$fd protect=true bindNet=${network.networkHandle} iface=$iface bindOk=false err=${e.javaClass.simpleName}:${e.message}",
+                )
+            }
+            return true
         }
 
         @JvmStatic
@@ -1805,6 +1849,29 @@ class TunnelVpnService : VpnService() {
                 attemptId = attemptId,
                 connectionMode = VpnContract.MODE_VPN_TUNNEL,
                 proxyExposure = proxyExposure,
+            )
+        }
+    }
+
+    private fun emitServerDnsDiagnostics(attemptId: String, server: String) {
+        val startNs = System.nanoTime()
+        try {
+            val addrs = InetAddress.getAllByName(server)
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+            val v4 = addrs.filterIsInstance<Inet4Address>()
+            val v6 = addrs.filterIsInstance<Inet6Address>()
+            val hasPrivateV4 = v4.any { it.isSiteLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress }
+            VpnTunnelEvents.emitEngineLog(
+                Log.DEBUG,
+                TAG,
+                "${prefixAttempt(attemptId)}server_dns v4Count=${v4.size} v6Count=${v6.size} hasPrivateV4=$hasPrivateV4 resolveMs=$elapsedMs",
+            )
+        } catch (e: Exception) {
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+            VpnTunnelEvents.emitEngineLog(
+                Log.WARN,
+                TAG,
+                "${prefixAttempt(attemptId)}server_dns failed err=${e.javaClass.simpleName}:${e.message} resolveMs=$elapsedMs",
             )
         }
     }

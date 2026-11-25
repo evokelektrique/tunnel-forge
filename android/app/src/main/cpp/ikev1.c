@@ -136,7 +136,11 @@ extern const uint8_t rfc3526_modp2048_p[256];
 static const uint8_t k_vid_rfc3947[IKE_VID_RFC3947_LEN] = {0x4a, 0x13, 0x1c, 0x81, 0x07, 0x03, 0x58, 0x45,
                                                            0x5c, 0x57, 0x28, 0xf2, 0x0e, 0x95, 0x45, 0x2f};
 
-static int resolve_udp(const char *host, uint16_t port, struct sockaddr_storage *out, socklen_t *olen) {
+static int resolve_udp_candidates(const char *host, uint16_t port, struct sockaddr_storage *outs, socklen_t *olens,
+                                  size_t max_outs, size_t *out_count) {
+  if (host == NULL || outs == NULL || olens == NULL || max_outs == 0u || out_count == NULL)
+    return -1;
+  *out_count = 0u;
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_INET;
@@ -151,10 +155,39 @@ static int resolve_udp(const char *host, uint16_t port, struct sockaddr_storage 
                       r ? gai_strerror(r) : "getaddrinfo returned null");
     return -1;
   }
-  memcpy(out, res->ai_addr, res->ai_addrlen);
-  *olen = (socklen_t)res->ai_addrlen;
+  size_t total_v4 = 0u;
+  for (struct addrinfo *it = res; it != NULL; it = it->ai_next) {
+    if (it->ai_family != AF_INET || it->ai_addr == NULL || it->ai_addrlen > sizeof(outs[0]))
+      continue;
+    total_v4++;
+    int dup = 0;
+    const struct sockaddr_in *cand = (const struct sockaddr_in *)it->ai_addr;
+    for (size_t j = 0u; j < *out_count; j++) {
+      const struct sockaddr_in *existing = (const struct sockaddr_in *)&outs[j];
+      if (existing->sin_addr.s_addr == cand->sin_addr.s_addr && existing->sin_port == cand->sin_port) {
+        dup = 1;
+        break;
+      }
+    }
+    if (!dup && *out_count < max_outs) {
+      memcpy(&outs[*out_count], it->ai_addr, it->ai_addrlen);
+      olens[*out_count] = (socklen_t)it->ai_addrlen;
+      (*out_count)++;
+    }
+  }
   freeaddrinfo(res);
+  if (*out_count == 0u) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "resolve_udp host=%s port=%s: no IPv4 addresses", host, portbuf);
+    return -1;
+  }
+  tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE resolve host=%s port=%u unique_v4=%zu total_v4=%zu", host,
+                    (unsigned)port, *out_count, total_v4);
   return 0;
+}
+
+static int resolve_udp(const char *host, uint16_t port, struct sockaddr_storage *out, socklen_t *olen) {
+  size_t count = 0u;
+  return resolve_udp_candidates(host, port, out, olen, 1u, &count);
 }
 
 /* Disable kernel DF / PMTU rejection on IPv4 UDP sockets so large ESP-over-UDP packets fragment instead of raising
@@ -163,14 +196,18 @@ static void ike_disable_ipv4_pmtud(int fd) {
 #if defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
   int val = IP_PMTUDISC_DONT;
   if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &val, (socklen_t)sizeof(val)) != 0) {
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE: setsockopt(IP_MTU_DISCOVER=DONT) errno=%d", errno);
+    int err = errno;
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE: setsockopt(IP_MTU_DISCOVER=DONT) errno=%d (%s)", err,
+                      strerror(err));
+  } else {
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: setsockopt(IP_MTU_DISCOVER=DONT) ok fd=%d", fd);
   }
 #else
   (void)fd;
 #endif
 }
 
-/* Best-effort local UDP port bind (e.g. RFC 3947 port 4500 on NAT-T fallback); falls back to ephemeral on failure. */
+/* Best-effort local UDP port bind (e.g. port 500 or RFC 3947 port 4500); falls back to ephemeral on failure. */
 static void ike_try_bind_local_port(int fd, uint16_t port) {
   struct sockaddr_in local;
   memset(&local, 0, sizeof(local));
@@ -178,11 +215,73 @@ static void ike_try_bind_local_port(int fd, uint16_t port) {
   local.sin_addr.s_addr = htonl(INADDR_ANY);
   local.sin_port = htons(port);
   if (bind(fd, (struct sockaddr *)&local, (socklen_t)sizeof(local)) != 0) {
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: bind local port %u skipped errno=%d (using ephemeral)",
-                      (unsigned)port, errno);
+    int err = errno;
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: bind local port %u skipped errno=%d (%s; using ephemeral)",
+                      (unsigned)port, err, strerror(err));
   } else {
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: bound local port %u", (unsigned)port);
   }
+}
+
+static int ike_open_udp_socket(const struct sockaddr_storage *peer, socklen_t peer_len, uint16_t bind_local_port,
+                               int allow_ephemeral_fallback, const char *label, int *out_errno) {
+  if (out_errno != NULL)
+    *out_errno = 0;
+  if (peer == NULL || peer_len == 0) {
+    if (out_errno != NULL)
+      *out_errno = EINVAL;
+    return -1;
+  }
+  for (int pass = 0; pass < 2; pass++) {
+    uint16_t attempt_port = (pass == 0) ? bind_local_port : 0u;
+    int fd = socket(peer->ss_family, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+      int err = errno;
+      if (out_errno != NULL)
+        *out_errno = err;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: socket(%s) errno=%d (%s)", label, err, strerror(err));
+      return -1;
+    }
+    if (peer->ss_family == AF_INET) {
+      ike_disable_ipv4_pmtud(fd);
+    }
+    if (util_protect_fd(fd) != 0) {
+      if (out_errno != NULL)
+        *out_errno = EACCES;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: protect(%s, fd=%d) failed", label, fd);
+      close(fd);
+      return -1;
+    }
+    if (attempt_port != 0u && peer->ss_family == AF_INET) {
+      ike_try_bind_local_port(fd, attempt_port);
+    }
+    if (connect(fd, (const struct sockaddr *)peer, peer_len) == 0) {
+      struct sockaddr_storage lss;
+      socklen_t lsl = sizeof(lss);
+      if (getsockname(fd, (struct sockaddr *)&lss, &lsl) == 0) {
+        char ep_label[64];
+        snprintf(ep_label, sizeof(ep_label), "IKE local endpoint (%s)", label);
+        ike_log_endpoint(ep_label, (struct sockaddr *)&lss, lsl);
+      } else {
+        int err = errno;
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE: getsockname(%s) errno=%d (%s)", label, err, strerror(err));
+      }
+      return fd;
+    }
+    int err = errno;
+    close(fd);
+    if (pass == 0 && attempt_port != 0u && allow_ephemeral_fallback) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                        "IKE: connect(%s) after local port %u bind failed errno=%d (%s); retrying ephemeral", label,
+                        (unsigned)attempt_port, err, strerror(err));
+      continue;
+    }
+    if (out_errno != NULL)
+      *out_errno = err;
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(%s) errno=%d (%s)", label, err, strerror(err));
+    return -1;
+  }
+  return -1;
 }
 
 static int cleartext_l2tp(const char *server, ike_session_t *ike, esp_keys_t *esp) {
@@ -193,24 +292,9 @@ static int cleartext_l2tp(const char *server, ike_session_t *ike, esp_keys_t *es
     return -1;
   }
   ike_log_endpoint("cleartext_l2tp peer", (struct sockaddr *)&ike->peer, ike->peer_len);
-  int fd = socket(ike->peer.ss_family, SOCK_DGRAM, IPPROTO_UDP);
-  if (fd < 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "cleartext_l2tp: socket errno=%d", errno);
+  int fd = ike_open_udp_socket(&ike->peer, ike->peer_len, 0u, 0, "cleartext_l2tp", NULL);
+  if (fd < 0)
     return -1;
-  }
-  if (ike->peer.ss_family == AF_INET) {
-    ike_disable_ipv4_pmtud(fd);
-  }
-  if (util_protect_fd(fd) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "cleartext_l2tp: protect(fd=%d) failed", fd);
-    close(fd);
-    return -1;
-  }
-  if (connect(fd, (struct sockaddr *)&ike->peer, ike->peer_len) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "cleartext_l2tp: connect errno=%d", errno);
-    close(fd);
-    return -1;
-  }
   ike->esp_fd = fd;
   esp->udp_encap = 0;
   tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "L2TP without IPsec: plaintext UDP to server (IPsec skipped)");
@@ -294,13 +378,17 @@ static int ike_recv_only(int fd, uint8_t *in, size_t in_cap, int timeout_ms, int
   return -1;
 }
 
-static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *out, size_t out_len,
-                         uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
+static int ike_send_recv_ex(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *out, size_t out_len,
+                            uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500, int *out_errno) {
+  if (out_errno != NULL)
+    *out_errno = 0;
   uint8_t wr[4096];
   const uint8_t *sendptr = out;
   size_t sendlen = out_len;
   if (prefix4500) {
     if (out_len + 4 > sizeof(wr)) {
+      if (out_errno != NULL)
+        *out_errno = EMSGSIZE;
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: packet too large for NAT-T wrapper");
       return -1;
     }
@@ -313,6 +401,7 @@ static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len
   static const int retry_ms[] = {2000, 4000, 5000, 5000};
   int attempts = (timeout_ms >= 16000) ? 4 : (timeout_ms >= 10000) ? 3 : (timeout_ms >= 4000) ? 2 : 1;
   int remaining = timeout_ms;
+  int elapsed_total = 0;
 
   /* Retry loop: re-send request each attempt until reply or timeout budget is exhausted. */
   for (int attempt = 0; attempt < attempts && remaining > 0; attempt++) {
@@ -322,8 +411,11 @@ static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len
     }
     ssize_t ns = sendto(fd, sendptr, sendlen, 0, peer, peer_len);
     if (ns != (ssize_t)sendlen) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: sendto ret=%zd want=%zu errno=%d nat_t=%d", ns,
-                        sendlen, errno, prefix4500);
+      int err = errno;
+      if (out_errno != NULL)
+        *out_errno = err;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: sendto ret=%zd want=%zu errno=%d (%s) nat_t=%d", ns,
+                        sendlen, err, strerror(err), prefix4500);
       return -1;
     }
     int wait = (attempt < 4) ? retry_ms[attempt] : 5000;
@@ -334,7 +426,7 @@ static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len
     /* Poll in small slices so stop requests are honored promptly. */
     int waited = 0;
     int pr = 0;
-    struct pollfd pfd = {.fd = fd, .events = POLLIN};
+    struct pollfd pfd = {.fd = fd, .events = POLLIN, .revents = 0};
     while (waited < wait) {
       if (tunnel_should_stop()) {
         tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled while waiting for reply");
@@ -345,16 +437,20 @@ static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len
         slice = 200;
       pr = poll(&pfd, 1, slice);
       waited += slice;
+      elapsed_total += slice;
       if (pr != 0)
         break;
     }
     remaining -= waited;
     if (pr < 0) {
+      int err = errno;
       if (tunnel_should_stop()) {
         tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled after poll interruption");
         return -1;
       }
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: poll errno=%d", errno);
+      if (out_errno != NULL)
+        *out_errno = err;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: poll errno=%d (%s)", err, strerror(err));
       return -1;
     }
     if (pr == 0) {
@@ -362,17 +458,34 @@ static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len
         tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled after wait budget expired");
         return -1;
       }
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ike_send_recv: no reply after %d ms (attempt %d)", waited,
-                        attempt + 1);
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ike_send_recv: no reply after %d ms (attempt %d, revents=0x%x)",
+                        waited, attempt + 1, (unsigned)pfd.revents);
       continue;
+    }
+    if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 && (pfd.revents & POLLIN) == 0) {
+      int so_err = 0;
+      socklen_t so_len = (socklen_t)sizeof(so_err);
+      if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) != 0)
+        so_err = errno;
+      if (out_errno != NULL)
+        *out_errno = so_err != 0 ? so_err : EIO;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                        "ike_send_recv: socket error revents=0x%x so_error=%d (%s) nat_t=%d attempt=%d",
+                        (unsigned)pfd.revents, so_err, strerror(so_err), prefix4500, attempt + 1);
+      return -1;
     }
     ssize_t n = recv(fd, in, in_cap, 0);
     if (n <= 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: recv ret=%zd errno=%d", n, errno);
+      int err = (n < 0) ? errno : ECONNRESET;
+      if (out_errno != NULL)
+        *out_errno = err;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: recv ret=%zd errno=%d (%s) revents=0x%x nat_t=%d",
+                        n, err, strerror(err), (unsigned)pfd.revents, prefix4500);
       return -1;
     }
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ike_send_recv: got UDP reply %zd bytes nat_t=%d (attempt %d)", n,
-                      prefix4500, attempt + 1);
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                      "ike_send_recv: got UDP reply %zd bytes nat_t=%d (attempt %d, elapsed~%d ms)", n, prefix4500,
+                      attempt + 1, elapsed_total);
     /* NAT-T receive path: strip RFC 3948 non-ESP marker before higher-layer parsing. */
     if (prefix4500 && n >= 4 && util_read_be32(in) == 0u) {
       memmove(in, in + 4, (size_t)n - 4);
@@ -380,9 +493,16 @@ static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len
     }
     return (int)n;
   }
-  tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: all %d attempts failed (total timeout %d ms)", attempts,
-                    timeout_ms);
+  if (out_errno != NULL && *out_errno == 0)
+    *out_errno = ETIMEDOUT;
+  tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: all %d attempts failed (elapsed~%d ms / budget %d ms)",
+                    attempts, elapsed_total, timeout_ms);
   return -1;
+}
+
+static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *out, size_t out_len,
+                         uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
+  return ike_send_recv_ex(fd, peer, peer_len, out, out_len, in, in_cap, timeout_ms, prefix4500, NULL);
 }
 
 static int isakmp_3des_decrypt(const uint8_t key24[24], const uint8_t iv_in[8], const uint8_t *ct, size_t ct_len,
@@ -882,78 +1002,119 @@ static int isakmp_aes128_decrypt(const uint8_t key16[16], const uint8_t iv_in[16
   return 0;
 }
 
-static size_t build_p1_sa(uint8_t *b, size_t cap) {
-  size_t o = 0;
-  if (o + 8 + 120 > cap)
-    return 0;
-  util_write_be32(b + o, 1);
-  o += 4;
-  util_write_be32(b + o, 1);
-  o += 4;
+typedef enum {
+  IKE_MM1_PRIMARY = 0,
+  IKE_MM1_COMPAT = 1,
+} ike_mm1_profile_t;
 
+static size_t build_p1_sa(uint8_t *b, size_t cap, int include_lifetimes) {
   /* Group 0x000e = MODP2048 (RFC 3526), required by default Libreswan l2tp-psk (modp2048). */
   static const uint8_t attrs_aes[] = {0x80, 0x01, 0x00, 0x07, 0x80, 0x0e, 0x00, 0x80, 0x80, 0x02,
                                       0x00, 0x02, 0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
   static const uint8_t attrs_3des[] = {0x80, 0x01, 0x00, 0x05, 0x80, 0x02, 0x00, 0x02,
                                        0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
+  /* Optional Phase-1 lifetime attributes (TV LIFE_TYPE=1 Seconds + TLV LIFE_DURATION=28800s). */
+  static const uint8_t attrs_life[] = {0x80, 0x0b, 0x00, 0x01, 0x00, 0x0c, 0x00, 0x04, 0x00, 0x00, 0x70, 0x80};
+  const size_t life_len = include_lifetimes ? sizeof(attrs_life) : 0u;
+  const size_t need = 8u + 8u + 2u * ((8u + sizeof(attrs_aes) + life_len) + (8u + sizeof(attrs_3des) + life_len));
+  if (b == NULL || cap < need)
+    return 0u;
+
+  size_t o = 0u;
+  util_write_be32(b + o, 1u);
+  o += 4u;
+  util_write_be32(b + o, 1u);
+  o += 4u;
 
   /*
-   * One ISAKMP Proposal with two Transform payloads (AES then 3DES). Libreswan 5.x rejects
+   * One ISAKMP Proposal with four Transform payloads (AES/3DES x MODP2048/MODP1024). Libreswan 5.x rejects
    * two chained Proposal payloads inside the SA ("Proposal must be alone in Oakley SA").
    */
   size_t prop0 = o;
   b[o++] = IKE_PT_NONE;
-  b[o++] = 0;
+  b[o++] = 0u;
   size_t prop_len_m = o;
-  o += 2;
-  b[o++] = 1;
-  b[o++] = 1;
-  b[o++] = 0;
-  b[o++] = 4;
+  o += 2u;
+  b[o++] = 1u;
+  b[o++] = 1u;
+  b[o++] = 0u;
+  b[o++] = 4u;
 
-  size_t t1s = o;
-  b[o++] = IKE_PT_T;
-  b[o++] = 0;
-  size_t t1_len_m = o;
-  o += 2;
-  b[o++] = 1;
-  b[o++] = 1;
-  b[o++] = 0;
-  b[o++] = 0;
-  memcpy(b + o, attrs_aes, sizeof(attrs_aes));
-  o += sizeof(attrs_aes);
-  util_write_be16(b + t1_len_m, (uint16_t)(o - t1s));
-
-  size_t t2s = o;
-  b[o++] = IKE_PT_T;
-  b[o++] = 0;
-  size_t t2_len_m = o;
-  o += 2;
-  b[o++] = 2;
-  b[o++] = 1;
-  b[o++] = 0;
-  b[o++] = 0;
-  memcpy(b + o, attrs_3des, sizeof(attrs_3des));
-  o += sizeof(attrs_3des);
-  util_write_be16(b + t2_len_m, (uint16_t)(o - t2s));
-  for (unsigned i = 0; i < 2; i++) {
-    const uint8_t *attrs = i ? attrs_3des : attrs_aes;
-    size_t n = i ? sizeof(attrs_3des) : sizeof(attrs_aes);
-    if (o + 8 + n > cap)
-      return 0;
-    b[o++] = i ? IKE_PT_NONE : IKE_PT_T;
-    b[o++] = 0;
-    util_write_be16(b + o, (uint16_t)(8 + n));
-    o += 2;
-    b[o++] = (uint8_t)(3 + i);
-    b[o++] = 1;
-    b[o++] = 0;
-    b[o++] = 0;
-    memcpy(b + o, attrs, n);
-    b[o + n - 1] = 2;
-    o += n;
+  for (unsigned i = 0u; i < 4u; i++) {
+    const int is_3des = (i % 2u) == 1u;
+    const uint8_t dh_group = (i < 2u) ? 0x0eu : 0x02u;
+    const uint8_t *attrs = is_3des ? attrs_3des : attrs_aes;
+    const size_t attr_len = is_3des ? sizeof(attrs_3des) : sizeof(attrs_aes);
+    const size_t t_start = o;
+    b[o++] = (i == 3u) ? IKE_PT_NONE : IKE_PT_T;
+    b[o++] = 0u;
+    size_t t_len_m = o;
+    o += 2u;
+    b[o++] = (uint8_t)(i + 1u);
+    b[o++] = 1u;
+    b[o++] = 0u;
+    b[o++] = 0u;
+    memcpy(b + o, attrs, attr_len);
+    b[o + attr_len - 1u] = dh_group;
+    o += attr_len;
+    if (include_lifetimes) {
+      memcpy(b + o, attrs_life, sizeof(attrs_life));
+      o += sizeof(attrs_life);
+    }
+    util_write_be16(b + t_len_m, (uint16_t)(o - t_start));
   }
   util_write_be16(b + prop_len_m, (uint16_t)(o - prop0));
+  return o;
+}
+
+static size_t ike_build_mm1_packet(uint8_t *pkt, size_t pkt_cap, const uint8_t icookie[8], const uint8_t *sa_inner,
+                                   size_t sa_len, ike_mm1_profile_t profile) {
+  static const uint8_t k_vid_natt_draft02_nl[16] = {0x90, 0xcb, 0x80, 0x91, 0x3e, 0xbb, 0x69, 0x6e,
+                                                    0x08, 0x63, 0x81, 0xb5, 0xec, 0x42, 0x7b, 0x1f};
+  static const uint8_t k_vid_natt_draft02[16] = {0xcd, 0x60, 0x46, 0x43, 0x35, 0xdf, 0x21, 0xf8,
+                                                 0x7c, 0xfd, 0xb2, 0xfc, 0x68, 0xb6, 0xa4, 0x48};
+  static const uint8_t k_vid_natt_draft03[16] = {0x7d, 0x94, 0x19, 0xa6, 0x53, 0x10, 0xca, 0x6f,
+                                                 0x2c, 0x17, 0x9d, 0x92, 0x15, 0x52, 0x9d, 0x56};
+  static const uint8_t k_vid_dpd[16] = {0xaf, 0xca, 0xd7, 0x13, 0x68, 0xa1, 0xf1, 0xc9,
+                                        0x6b, 0x86, 0x96, 0xfc, 0x77, 0x57, 0x01, 0x00};
+  const uint8_t *compat_vids[] = {k_vid_rfc3947, k_vid_natt_draft02_nl, k_vid_natt_draft02, k_vid_natt_draft03,
+                                  k_vid_dpd};
+  const size_t vid_count = (profile == IKE_MM1_COMPAT) ? (sizeof(compat_vids) / sizeof(compat_vids[0])) : 1u;
+  const size_t total = 28u + 4u + sa_len + vid_count * (4u + IKE_VID_RFC3947_LEN);
+  if (pkt == NULL || icookie == NULL || sa_inner == NULL || sa_len == 0u || pkt_cap < total)
+    return 0u;
+
+  size_t o = 0u;
+  memcpy(pkt + o, icookie, 8u);
+  o += 8u;
+  memset(pkt + o, 0, 8u);
+  o += 8u;
+  pkt[o++] = IKE_PT_SA;
+  pkt[o++] = 0x10u;
+  pkt[o++] = IKE_EXCH_MAIN;
+  pkt[o++] = 0u;
+  util_write_be32(pkt + o, 0u);
+  o += 4u;
+  size_t len_m1 = o;
+  o += 4u;
+
+  pkt[o++] = IKE_PT_VID;
+  pkt[o++] = 0u;
+  util_write_be16(pkt + o, (uint16_t)(4u + sa_len));
+  o += 2u;
+  memcpy(pkt + o, sa_inner, sa_len);
+  o += sa_len;
+
+  for (size_t i = 0u; i < vid_count; i++) {
+    const uint8_t *vid = (profile == IKE_MM1_COMPAT) ? compat_vids[i] : k_vid_rfc3947;
+    pkt[o++] = (i + 1u < vid_count) ? IKE_PT_VID : IKE_PT_NONE;
+    pkt[o++] = 0u;
+    util_write_be16(pkt + o, (uint16_t)(4u + IKE_VID_RFC3947_LEN));
+    o += 2u;
+    memcpy(pkt + o, vid, IKE_VID_RFC3947_LEN);
+    o += IKE_VID_RFC3947_LEN;
+  }
+  util_write_be32(pkt + len_m1, (uint32_t)o);
   return o;
 }
 
@@ -1499,44 +1660,13 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     return -1;
   }
 
-  struct sockaddr_storage peer500;
-  socklen_t l500 = sizeof(peer500);
-  if (resolve_udp(server, IKE_PORT, &peer500, &l500) != 0) {
+  struct sockaddr_storage peers500[4];
+  socklen_t peers500_len[4] = {0};
+  size_t n_peers500 = 0u;
+  if (resolve_udp_candidates(server, IKE_PORT, peers500, peers500_len, 4u, &n_peers500) != 0) {
     mbedtls_ctr_drbg_free(&ctr);
     mbedtls_entropy_free(&entropy);
     return -1;
-  }
-  ike_log_endpoint("IKE peer:500", (struct sockaddr *)&peer500, l500);
-
-  int fd = socket(peer500.ss_family, SOCK_DGRAM, IPPROTO_UDP);
-  if (fd < 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: socket(500) errno=%d", errno);
-    goto fail_early;
-  }
-  if (peer500.ss_family == AF_INET) {
-    ike_disable_ipv4_pmtud(fd);
-  }
-  if (util_protect_fd(fd) != 0)
-    goto fail_fd;
-  if (connect(fd, (struct sockaddr *)&peer500, l500) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(500) errno=%d", errno);
-    goto fail_fd;
-  }
-
-  struct sockaddr_storage lss;
-  socklen_t lsl = sizeof(lss);
-  if (getsockname(fd, (struct sockaddr *)&lss, &lsl) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: getsockname errno=%d", errno);
-    goto fail_fd;
-  }
-  ike_log_endpoint("IKE local endpoint (500)", (struct sockaddr *)&lss, lsl);
-
-  uint8_t ip_us[4], ip_peer[4];
-  uint16_t port_us_be, port_peer_be;
-  if (sockaddr_to_v4((struct sockaddr *)&lss, lsl, ip_us, &port_us_be) != 0 ||
-      sockaddr_to_v4((struct sockaddr *)&peer500, l500, ip_peer, &port_peer_be) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IPv4 required for IKE");
-    goto fail_fd;
   }
 
   mbedtls_dhm_context dhm;
@@ -1547,127 +1677,127 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   uint8_t pubkey[IKE_DH_PUBKEY_BYTES];
   size_t pubkey_len = sizeof(pubkey);
   uint8_t icookie[8];
-  mbedtls_ctr_drbg_random(&ctr, icookie, sizeof(icookie));
-  memcpy(ike->icookie, icookie, 8);
+  memset(icookie, 0, sizeof(icookie));
   memset(ike->rcookie, 0, 8);
 
   uint8_t ni[32];
   mbedtls_ctr_drbg_random(&ctr, ni, sizeof(ni));
 
   uint8_t sa_inner[256];
-  size_t sa_len = build_p1_sa(sa_inner, sizeof(sa_inner));
-  if (sa_len == 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: build_p1_sa failed");
-    mbedtls_dhm_free(&dhm);
-    goto fail_fd;
-  }
-
+  size_t sa_len = 0u;
   uint8_t id_body[8];
   id_body[0] = 1;
   id_body[1] = id_body[2] = id_body[3] = 0;
-  memcpy(id_body + 4, ip_us, 4);
+  memset(id_body + 4, 0, 4);
 
   uint8_t pkt[2048];
   uint8_t in[8192];
-  size_t o;
-  int inlen;
+  size_t o = 0u;
+  int inlen = -1;
+  int fd = -1;
 
   struct sockaddr_storage peer_active;
-  socklen_t peer_active_len = l500;
-  memcpy(&peer_active, &peer500, l500);
+  socklen_t peer_active_len = peers500_len[0];
+  memcpy(&peer_active, &peers500[0], peers500_len[0]);
   int p1_prefix = 0;
 
-  /* MM1: propose SA and advertise NAT-T capability via RFC 3947 VID. */
-  o = 0;
-  memcpy(pkt + o, icookie, 8);
-  o += 8;
-  memset(pkt + o, 0, 8);
-  o += 8;
-  pkt[o++] = IKE_PT_SA;
-  pkt[o++] = 0x10;
-  pkt[o++] = IKE_EXCH_MAIN;
-  pkt[o++] = 0;
-  util_write_be32(pkt + o, 0);
-  o += 4;
-  size_t len_m1 = o;
-  o += 4;
-  // SA payload; next payload is VID so Pluto enables NAT-T before MM3.
-  pkt[o++] = IKE_PT_VID;
-  pkt[o++] = 0;
-  util_write_be16(pkt + o, (uint16_t)(4 + sa_len));
-  o += 2;
-  memcpy(pkt + o, sa_inner, sa_len);
-  o += sa_len;
-  /* VID payload (RFC 3947 NAT-T) */
-  pkt[o++] = IKE_PT_NONE;
-  pkt[o++] = 0;
-  util_write_be16(pkt + o, (uint16_t)(4 + IKE_VID_RFC3947_LEN));
-  o += 2;
-  memcpy(pkt + o, k_vid_rfc3947, IKE_VID_RFC3947_LEN);
-  o += IKE_VID_RFC3947_LEN;
-  util_write_be32(pkt + len_m1, (uint32_t)o);
+  typedef struct {
+    const char *label;
+    uint16_t remote_port;
+    uint16_t local_bind_port;
+    int prefix4500;
+    ike_mm1_profile_t profile;
+    int timeout_ms;
+  } mm1_stage_t;
+  static const mm1_stage_t stages[3] = {
+      {"UDP500-primary", IKE_PORT, IKE_PORT, 0, IKE_MM1_PRIMARY, 6000},
+      {"UDP500-compat", IKE_PORT, IKE_PORT, 0, IKE_MM1_COMPAT, 4000},
+      {"UDP4500-compat", NAT_T_PORT, NAT_T_PORT, 1, IKE_MM1_COMPAT, 4000},
+  };
+  int stage_err[3] = {0, 0, 0};
+  int stages_tried = 0;
 
-  tunnel_log("IKE Main Mode msg1 -> %zu bytes (transport=%s)", o, p1_prefix ? "UDP4500+marker" : "UDP500");
-  inlen = ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 8000, p1_prefix);
-  if (inlen < 28) {
-    /* No usable MM2 reply on UDP/500: retry full MM1 over UDP/4500 + non-ESP marker. */
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                      "IKE MM1: no reply on UDP 500, retrying via NAT-T UDP 4500 (RFC 3947 non-ESP marker)");
-    close(fd);
-    if (resolve_udp(server, NAT_T_PORT, &peer_active, &peer_active_len) != 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: resolve NAT-T :4500 for MM1 fallback failed");
+  for (size_t sidx = 0u; sidx < sizeof(stages) / sizeof(stages[0]) && inlen < 28; sidx++) {
+    if (tunnel_should_stop())
+      break;
+    stages_tried++;
+    const mm1_stage_t *st = &stages[sidx];
+    mbedtls_ctr_drbg_random(&ctr, icookie, sizeof(icookie));
+    memcpy(ike->icookie, icookie, 8);
+    sa_len = build_p1_sa(sa_inner, sizeof(sa_inner), st->profile == IKE_MM1_COMPAT);
+    if (sa_len == 0u) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: build_p1_sa failed (%s)", st->label);
       mbedtls_dhm_free(&dhm);
       goto fail_early;
     }
-    ike_log_endpoint("IKE peer:4500 (MM1 fallback)", (struct sockaddr *)&peer_active, peer_active_len);
-    fd = socket(peer_active.ss_family, SOCK_DGRAM, IPPROTO_UDP);
-    if (fd < 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: socket(4500 MM1 fallback) errno=%d", errno);
+    o = ike_build_mm1_packet(pkt, sizeof(pkt), icookie, sa_inner, sa_len, st->profile);
+    if (o == 0u) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: build_mm1_packet failed (%s)", st->label);
       mbedtls_dhm_free(&dhm);
       goto fail_early;
     }
-    if (peer_active.ss_family == AF_INET) {
-      ike_disable_ipv4_pmtud(fd);
+
+    for (size_t cidx = 0u; cidx < n_peers500; cidx++) {
+      if (tunnel_should_stop())
+        break;
+      struct sockaddr_storage cand = peers500[cidx];
+      socklen_t cand_len = peers500_len[cidx];
+      if (cand.ss_family == AF_INET) {
+        ((struct sockaddr_in *)&cand)->sin_port = htons(st->remote_port);
+      }
+      char peer_label[64];
+      snprintf(peer_label, sizeof(peer_label), "IKE peer (%s cand %zu/%zu)", st->label, cidx + 1u, n_peers500);
+      ike_log_endpoint(peer_label, (struct sockaddr *)&cand, cand_len);
+
+      int open_err = 0;
+      fd = ike_open_udp_socket(&cand, cand_len, st->local_bind_port, 1, st->label, &open_err);
+      if (fd < 0) {
+        stage_err[sidx] = open_err;
+        continue;
+      }
+      memcpy(&peer_active, &cand, cand_len);
+      peer_active_len = cand_len;
+      p1_prefix = st->prefix4500;
+      esp->udp_encap = st->prefix4500;
+      tunnel_log("IKE Main Mode msg1 (%s) -> %zu bytes (transport=%s)", st->label, o,
+                 p1_prefix ? "UDP4500+marker" : "UDP500");
+      int io_err = 0;
+      inlen = ike_send_recv_ex(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in),
+                               st->timeout_ms, p1_prefix, &io_err);
+      if (inlen >= 28) {
+        break;
+      }
+      stage_err[sidx] = io_err;
+      close(fd);
+      fd = -1;
     }
-    if (util_protect_fd(fd) != 0) {
-      mbedtls_dhm_free(&dhm);
-      goto fail_fd;
-    }
-    if (peer_active.ss_family == AF_INET) {
-      ike_try_bind_local_port(fd, NAT_T_PORT);
-    }
-    if (connect(fd, (struct sockaddr *)&peer_active, peer_active_len) != 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(4500 MM1 fallback) errno=%d", errno);
-      mbedtls_dhm_free(&dhm);
-      goto fail_fd;
-    }
-    lsl = sizeof(lss);
-    if (getsockname(fd, (struct sockaddr *)&lss, &lsl) != 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: getsockname after MM1 fallback errno=%d", errno);
-      mbedtls_dhm_free(&dhm);
-      goto fail_fd;
-    }
-    ike_log_endpoint("IKE local endpoint (MM1 NAT-T path)", (struct sockaddr *)&lss, lsl);
-    if (sockaddr_to_v4((struct sockaddr *)&lss, lsl, ip_us, &port_us_be) != 0 ||
-        sockaddr_to_v4((struct sockaddr *)&peer_active, peer_active_len, ip_peer, &port_peer_be) != 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IPv4 required for IKE (MM1 NAT-T path)");
-      mbedtls_dhm_free(&dhm);
-      goto fail_fd;
-    }
-    memcpy(id_body + 4, ip_us, 4);
-    p1_prefix = 1;
-    esp->udp_encap = 1;
-    tunnel_log("IKE Main Mode msg1 retry -> %zu bytes (transport=UDP4500+marker)", o);
-    inlen =
-        ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 8000, p1_prefix);
   }
-  if (inlen < 28) {
+  if (inlen < 28 || fd < 0) {
     tunnel_engine_log(
         ANDROID_LOG_ERROR, LOG_TAG,
-        "IKE MM msg2: no valid reply on UDP 500 or UDP 4500 (check router/firewall/IPsec passthrough/MAP-E)");
+        "IKE MM msg2: no valid reply (stages=%d udp500_primary_err=%d udp500_compat_err=%d "
+        "udp4500_err=%d candidates=%zu; check router/firewall/IPsec passthrough or UDP 500 source-port policy)",
+        stages_tried, stage_err[0], stage_err[1], stage_err[2], n_peers500);
     mbedtls_dhm_free(&dhm);
     goto fail_fd;
   }
+
+  struct sockaddr_storage lss;
+  socklen_t lsl = sizeof(lss);
+  if (getsockname(fd, (struct sockaddr *)&lss, &lsl) != 0) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: getsockname after MM2 errno=%d", errno);
+    mbedtls_dhm_free(&dhm);
+    goto fail_fd;
+  }
+  uint8_t ip_us[4], ip_peer[4];
+  uint16_t port_us_be, port_peer_be;
+  if (sockaddr_to_v4((struct sockaddr *)&lss, lsl, ip_us, &port_us_be) != 0 ||
+      sockaddr_to_v4((struct sockaddr *)&peer_active, peer_active_len, ip_peer, &port_peer_be) != 0) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IPv4 required for IKE");
+    mbedtls_dhm_free(&dhm);
+    goto fail_fd;
+  }
+  memcpy(id_body + 4, ip_us, 4);
   ike_log_isakmp_summary("IKE MM msg2", in, inlen);
   memcpy(ike->rcookie, in + 8, 8);
 
@@ -1865,13 +1995,16 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     tunnel_log("NAT-T (UDP 4500) needed=%d natd_payloads=%d before MM5", use4500, am4.natd_count);
     prefix = 0;
     if (use4500) {
-      if (resolve_udp(server, NAT_T_PORT, &peer_active, &peer_active_len) != 0) {
+      if (peer_active.ss_family == AF_INET) {
+        ((struct sockaddr_in *)&peer_active)->sin_port = htons(NAT_T_PORT);
+      } else if (resolve_udp(server, NAT_T_PORT, &peer_active, &peer_active_len) != 0) {
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: resolve NAT-T :4500 failed");
-        goto fail_early;
+        goto fail_fd;
       }
       ike_log_endpoint("IKE peer:4500", (struct sockaddr *)&peer_active, peer_active_len);
       if (connect(fd, (struct sockaddr *)&peer_active, peer_active_len) != 0) {
-        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(4500) errno=%d", errno);
+        int err = errno;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(4500) errno=%d (%s)", err, strerror(err));
         goto fail_fd;
       }
       p1_prefix = 1;
@@ -2709,7 +2842,9 @@ qm2_received:
   return 0;
 
 fail_fd:
-  close(fd);
+  if (fd >= 0) {
+    close(fd);
+  }
 fail_early:
   tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE ipsec_negotiate failed (scroll up for tunnel_engine)");
   mbedtls_ctr_drbg_free(&ctr);

@@ -594,6 +594,11 @@ class ProxyTunnelService : Service() {
 
         try {
             VpnBridge.nativeSetSocketProtectionEnabled(false)
+            VpnTunnelEvents.emitEngineLog(
+                Log.DEBUG,
+                TAG,
+                "${prefixAttempt(attemptId)}active_network ${monitor.describeNetworkState()}",
+            )
             if (protocol == VpnContract.PROTOCOL_PPTP) {
                 val helperPath = File(applicationInfo.nativeLibraryDir, TunnelVpnService.PPTP_GRE_HELPER_LIB_NAME).absolutePath
                 VpnBridge.nativeSetPptpRuntimeConfig(helperPath, "")

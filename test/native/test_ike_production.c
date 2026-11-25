@@ -13,8 +13,8 @@ void tunnel_engine_log(int prio, const char *tag, const char *fmt, ...) {
 }
 int main(void) {
   uint8_t sa[256];
-  size_t n = build_p1_sa(sa, sizeof(sa));
-  assert(n > 0 && sa[15] == 4);
+  size_t n = build_p1_sa(sa, sizeof(sa), 0);
+  assert(n == 120u && sa[15] == 4);
   size_t off = 16;
   const unsigned groups[] = {14, 14, 2, 2};
   for (unsigned i = 0; i < 4; i++) {
@@ -25,6 +25,44 @@ int main(void) {
     off += len;
   }
   assert(off == n);
+
+  uint8_t sa_compat[256];
+  size_t n_compat = build_p1_sa(sa_compat, sizeof(sa_compat), 1);
+  assert(n_compat == 168u && sa_compat[15] == 4);
+  off = 16u;
+  for (unsigned i = 0; i < 4; i++) {
+    size_t len = util_read_be16(sa_compat + off + 2);
+    assert(len >= 20u && off + len <= n_compat);
+    assert(sa_compat[off] == (i == 3 ? IKE_PT_NONE : IKE_PT_T));
+    assert(util_read_be16(sa_compat + off + len - 12u) == 0x800bu);
+    assert(util_read_be16(sa_compat + off + len - 10u) == 0x0001u);
+    assert(util_read_be16(sa_compat + off + len - 8u) == 0x000cu);
+    assert(util_read_be32(sa_compat + off + len - 4u) == 28800u);
+    assert(util_read_be16(sa_compat + off + len - 14u) == groups[i]);
+    off += len;
+  }
+  assert(off == n_compat);
+
+  uint8_t icookie[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  uint8_t mm1_pkt[512];
+  size_t mm1_primary_len = ike_build_mm1_packet(mm1_pkt, sizeof(mm1_pkt), icookie, sa, n, IKE_MM1_PRIMARY);
+  assert(mm1_primary_len == 172u);
+  assert(util_read_be32(mm1_pkt + 24) == 172u);
+  size_t mm1_compat_len = ike_build_mm1_packet(mm1_pkt, sizeof(mm1_pkt), icookie, sa_compat, n_compat, IKE_MM1_COMPAT);
+  assert(mm1_compat_len == 300u);
+  assert(util_read_be32(mm1_pkt + 24) == 300u);
+  size_t walk = 28u;
+  uint8_t np = mm1_pkt[16];
+  int vid_count = 0;
+  while (walk + 4u <= mm1_compat_len && np != IKE_PT_NONE) {
+    uint16_t pl = util_read_be16(mm1_pkt + walk + 2u);
+    assert(pl >= 4u && walk + pl <= mm1_compat_len);
+    if (np == IKE_PT_VID)
+      vid_count++;
+    np = mm1_pkt[walk];
+    walk += pl;
+  }
+  assert(walk == mm1_compat_len && np == IKE_PT_NONE && vid_count == 5);
   uint8_t dh[256] = {1};
   size_t size = 1;
   assert(normalize_dh_value(dh, &size, sizeof(dh), 128) == 0);
@@ -92,6 +130,21 @@ int main(void) {
   assert(resolve_udp("127.0.0.1", IKE_PORT, &resolved, &resolved_len) == 0);
   assert(resolved.ss_family == AF_INET);
   assert(ntohs(((struct sockaddr_in *)&resolved)->sin_port) == IKE_PORT);
+
+  struct sockaddr_storage resolved_list[4];
+  socklen_t resolved_lens[4] = {0};
+  size_t resolved_count = 0u;
+  assert(resolve_udp_candidates("127.0.0.1", IKE_PORT, resolved_list, resolved_lens, 4u, &resolved_count) == 0);
+  assert(resolved_count == 1u);
+
+  int open_err = 0;
+  int fd_open = ike_open_udp_socket(&resolved, resolved_len, 0u, 1, "test-loopback", &open_err);
+  assert(fd_open >= 0 && open_err == 0);
+  int so_err = -1;
+  socklen_t so_len = (socklen_t)sizeof(so_err);
+  assert(getsockopt(fd_open, SOL_SOCKET, SO_ERROR, &so_err, &so_len) == 0);
+  assert(so_err == 0);
+  close(fd_open);
 
   /* Oversized ciphertext must fail without writing past output capacity. */
   uint8_t oversized_ct[272] = {0};
