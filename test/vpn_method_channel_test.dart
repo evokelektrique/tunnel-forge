@@ -11,34 +11,6 @@ import 'package:tunnel_forge/features/tunnel/domain/tunnel_runtime_state.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('VpnContract', () {
-    test('channel', () {
-      expect(VpnContract.channel, 'io.github.evokelektrique.tunnelforge/vpn');
-    });
-
-    test('proxy exposure event contract', () {
-      expect(VpnContract.getRuntimeState, 'getRuntimeState');
-      expect(VpnContract.onProxyExposureChanged, 'onProxyExposureChanged');
-      expect(VpnContract.argProxyExposureActive, 'proxyExposureActive');
-      expect(
-        VpnContract.argProxyExposureBindAddress,
-        'proxyExposureBindAddress',
-      );
-      expect(
-        VpnContract.argProxyExposureDisplayAddress,
-        'proxyExposureDisplayAddress',
-      );
-      expect(VpnContract.argProxyExposureHttpPort, 'proxyExposureHttpPort');
-      expect(VpnContract.argProxyExposureSocksPort, 'proxyExposureSocksPort');
-      expect(
-        VpnContract.argProxyExposureLanRequested,
-        'proxyExposureLanRequested',
-      );
-      expect(VpnContract.argProxyExposureLanActive, 'proxyExposureLanActive');
-      expect(VpnContract.argProxyExposureWarning, 'proxyExposureWarning');
-    });
-  });
-
   group('ProxyExposure', () {
     test('displayAddresses prepends loopback only when LAN IP is active', () {
       const lanActive = ProxyExposure(
@@ -593,6 +565,79 @@ void main() {
           isFalse,
         );
         client.dispose();
+      },
+    );
+
+    test('prepareVpn returns false on null or non-bool response', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (
+            call,
+          ) async {
+            return null;
+          });
+      expect(await VpnClient().prepareVpn(), isFalse);
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (
+            call,
+          ) async {
+            return 'yes';
+          });
+      expect(await VpnClient().prepareVpn(), isFalse);
+    });
+
+    test('connect propagates PlatformException from host', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (
+            call,
+          ) async {
+            if (call.method == VpnContract.connect) {
+              throw PlatformException(
+                code: 'vpn_permission',
+                message: 'not granted',
+              );
+            }
+            return null;
+          });
+      expect(
+        () => VpnClient().connect(server: 'x.example'),
+        throwsA(
+          isA<PlatformException>().having(
+            (e) => e.code,
+            'code',
+            'vpn_permission',
+          ),
+        ),
+      );
+    });
+
+    test(
+      'connect clears PSK for PPTP and normalizes mppeMode for L2TP',
+      () async {
+        await VpnClient().connect(
+          server: 'pptp.example',
+          protocol: TunnelProtocol.pptp,
+          user: 'alice',
+          password: 'pw',
+          psk: 'ignored',
+          pppAuth: PppAuthMethod.mschapV2,
+          mppeMode: MppeMode.off,
+        );
+        var args = Map<Object?, Object?>.from(calls.last.arguments as Map);
+        expect(args[VpnContract.argProtocol], VpnContract.protocolPptp);
+        expect(args[VpnContract.argPsk], isEmpty);
+        expect(args[VpnContract.argPppAuth], VpnContract.pppAuthMschapV2);
+        expect(args[VpnContract.argMppe], VpnContract.mppeOff);
+
+        await VpnClient().connect(
+          server: 'l2tp.example',
+          protocol: TunnelProtocol.l2tp,
+          pppAuth: PppAuthMethod.pap,
+          mppeMode: MppeMode.on,
+        );
+        args = Map<Object?, Object?>.from(calls.last.arguments as Map);
+        expect(args[VpnContract.argPppAuth], VpnContract.pppAuthPap);
+        expect(args[VpnContract.argMppe], VpnContract.mppeAuto);
       },
     );
   });
