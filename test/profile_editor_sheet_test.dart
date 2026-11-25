@@ -113,8 +113,9 @@ void main() {
     await pumpHost(tester, store: store, profileId: profile.id);
 
     expect(find.byKey(const Key('dns_servers_section')), findsOneWidget);
+    expect(find.text('DNS'), findsOneWidget);
     expect(find.text('Automatic'), findsOneWidget);
-    expect(find.text('DNS servers'), findsNWidgets(3));
+    expect(find.text('DNS servers'), findsNothing);
     expect(find.text('DNS 1 is primary. DNS 2 is fallback.'), findsOneWidget);
     expect(find.text('DNS 1'), findsOneWidget);
     expect(find.text('DNS 2'), findsOneWidget);
@@ -428,11 +429,15 @@ void main() {
 
     expect(find.byKey(const Key('dns_servers_section')), findsOneWidget);
 
+    await tester.ensureVisible(find.byType(CheckboxListTile));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(CheckboxListTile));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('dns_servers_section')), findsNothing);
 
+    await tester.ensureVisible(find.byType(CheckboxListTile));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(CheckboxListTile));
     await tester.pumpAndSettle();
 

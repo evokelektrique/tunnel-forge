@@ -189,27 +189,26 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     required TextEditingController controller,
     required DnsProtocol protocol,
     required bool dnsAutomatic,
-    required String hint,
+    required String label,
     required String? errorText,
     required ValueChanged<String> onChanged,
     required ValueChanged<DnsProtocol?> onProtocolChanged,
   }) {
-    final t = AppL10n.of(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: TextField(
-            key: ValueKey('dns_input_$hint'),
+            key: ValueKey('dns_input_$label'),
             controller: controller,
             enabled: !dnsAutomatic,
             keyboardType: TextInputType.text,
             onChanged: onChanged,
-            decoration: _deco(
-              context,
-              label: t.dnsServers,
-              hint: hint,
-            ).copyWith(errorText: errorText, errorMaxLines: 2),
+            decoration: _deco(context, label: label).copyWith(
+              floatingLabelBehavior: FloatingLabelBehavior.always,
+              errorText: errorText,
+              errorMaxLines: 2,
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -217,7 +216,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
           width: 118,
           height: _kDnsControlHeight,
           child: InputDecorator(
-            key: ValueKey('dns_protocol_$hint'),
+            key: ValueKey('dns_protocol_$label'),
             isEmpty: false,
             expands: false,
             decoration: _deco(context).copyWith(
@@ -258,59 +257,49 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     ProfileFormState state,
     ThemeData theme,
     TextTheme tt,
-    Color dnsSectionColor,
   ) {
     final t = AppL10n.of(context);
-    return Container(
+    return Column(
       key: const Key('dns_servers_section'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: dnsSectionColor,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(t.dnsServers, style: tt.titleSmall),
-          const SizedBox(height: 4),
-          Text(
-            t.dnsHelp,
-            style: tt.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          t.dnsHelp,
+          style: tt.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
           ),
-          const SizedBox(height: 12),
-          _dnsRow(
-            context: context,
-            controller: _dns1Controller,
-            protocol: state.dns1Protocol,
-            dnsAutomatic: state.dnsAutomatic,
-            hint: 'DNS 1',
-            errorText: state.dns1ErrorText,
-            onChanged: (value) => context.read<ProfileFormBloc>().add(
-              ProfileFormDns1Changed(value),
-            ),
-            onProtocolChanged: (value) => context.read<ProfileFormBloc>().add(
-              ProfileFormDns1ProtocolChanged(value ?? DnsProtocol.dnsOverUdp),
-            ),
+        ),
+        const SizedBox(height: 12),
+        _dnsRow(
+          context: context,
+          controller: _dns1Controller,
+          protocol: state.dns1Protocol,
+          dnsAutomatic: state.dnsAutomatic,
+          label: 'DNS 1',
+          errorText: state.dns1ErrorText,
+          onChanged: (value) => context.read<ProfileFormBloc>().add(
+            ProfileFormDns1Changed(value),
           ),
-          const SizedBox(height: 12),
-          _dnsRow(
-            context: context,
-            controller: _dns2Controller,
-            protocol: state.dns2Protocol,
-            dnsAutomatic: state.dnsAutomatic,
-            hint: 'DNS 2',
-            errorText: state.dns2ErrorText,
-            onChanged: (value) => context.read<ProfileFormBloc>().add(
-              ProfileFormDns2Changed(value),
-            ),
-            onProtocolChanged: (value) => context.read<ProfileFormBloc>().add(
-              ProfileFormDns2ProtocolChanged(value ?? DnsProtocol.dnsOverUdp),
-            ),
+          onProtocolChanged: (value) => context.read<ProfileFormBloc>().add(
+            ProfileFormDns1ProtocolChanged(value ?? DnsProtocol.dnsOverUdp),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 12),
+        _dnsRow(
+          context: context,
+          controller: _dns2Controller,
+          protocol: state.dns2Protocol,
+          dnsAutomatic: state.dnsAutomatic,
+          label: 'DNS 2',
+          errorText: state.dns2ErrorText,
+          onChanged: (value) => context.read<ProfileFormBloc>().add(
+            ProfileFormDns2Changed(value),
+          ),
+          onProtocolChanged: (value) => context.read<ProfileFormBloc>().add(
+            ProfileFormDns2ProtocolChanged(value ?? DnsProtocol.dnsOverUdp),
+          ),
+        ),
+      ],
     );
   }
 
@@ -355,7 +344,6 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     final maxH = MediaQuery.sizeOf(context).height * 0.9;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final safeBottom = MediaQuery.paddingOf(context).bottom;
-    final dnsSectionColor = theme.colorScheme.surfaceContainerHigh;
     final t = AppL10n.of(context);
     final mtuHelper = t.mtuHelper(Profile.minVpnMtu, Profile.maxVpnMtu);
 
@@ -557,31 +545,49 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                             ),
                           ],
                           const SizedBox(height: 12),
-                          CheckboxListTile(
-                            value: state.dnsAutomatic,
-                            controlAffinity: ListTileControlAffinity.leading,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(t.automatic),
-                            subtitle: Text(t.automaticDnsHelp),
-                            onChanged: state.loading
-                                ? null
-                                : (value) =>
-                                      context.read<ProfileFormBloc>().add(
-                                        ProfileFormDnsAutomaticChanged(
-                                          value ?? true,
-                                        ),
-                                      ),
-                          ),
-                          if (!state.dnsAutomatic) ...[
-                            const SizedBox(height: 12),
-                            _dnsSection(
-                              context,
-                              state,
-                              theme,
-                              tt,
-                              dnsSectionColor,
+                          Material(
+                            color: Colors.transparent,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: BorderSide(
+                                color: theme.colorScheme.outlineVariant,
+                              ),
                             ),
-                          ],
+                            clipBehavior: Clip.antiAlias,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text('DNS', style: tt.titleSmall),
+                                  const SizedBox(height: 4),
+                                  CheckboxListTile(
+                                    value: state.dnsAutomatic,
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(t.automatic),
+                                    subtitle: Text(t.automaticDnsHelp),
+                                    onChanged: state.loading
+                                        ? null
+                                        : (value) => context
+                                              .read<ProfileFormBloc>()
+                                              .add(
+                                                ProfileFormDnsAutomaticChanged(
+                                                  value ?? true,
+                                                ),
+                                              ),
+                                  ),
+                                  if (!state.dnsAutomatic) ...[
+                                    const SizedBox(height: 8),
+                                    const Divider(height: 1),
+                                    const SizedBox(height: 12),
+                                    _dnsSection(context, state, theme, tt),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
                           const SizedBox(height: 12),
                           TextField(
                             key: const Key('mtu_field'),
