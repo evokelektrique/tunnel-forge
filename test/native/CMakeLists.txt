@@ -58,7 +58,7 @@ target_link_libraries(test_pptp_control PRIVATE tf_native_common)
 if(NOT WIN32)
   target_sources(test_pptp_control PRIVATE ../../android/app/src/main/cpp/pptp_root.c)
   target_include_directories(test_pptp_control PRIVATE stubs)
-  target_compile_definitions(test_pptp_control PRIVATE TF_TEST_PPTP_ROOT=1 _DEFAULT_SOURCE)
+  target_compile_definitions(test_pptp_control PRIVATE TF_TEST_PPTP_ROOT=1 _DEFAULT_SOURCE _GNU_SOURCE)
 endif()
 add_test(NAME pptp_control COMMAND test_pptp_control)
 
