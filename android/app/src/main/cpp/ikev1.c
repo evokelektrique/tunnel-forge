@@ -223,6 +223,55 @@ static void ike_try_bind_local_port(int fd, uint16_t port) {
   }
 }
 
+static int ike_open_udp_socket_once(const struct sockaddr_storage *peer, socklen_t peer_len, uint16_t attempt_port,
+                                    const char *label, int *out_errno, int *out_connect_failed) {
+  if (out_errno != NULL)
+    *out_errno = 0;
+  if (out_connect_failed != NULL)
+    *out_connect_failed = 0;
+  int fd = socket(peer->ss_family, SOCK_DGRAM, IPPROTO_UDP);
+  if (fd < 0) {
+    int err = errno;
+    if (out_errno != NULL)
+      *out_errno = err;
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: socket(%s) errno=%d (%s)", label, err, strerror(err));
+    return -1;
+  }
+  if (peer->ss_family == AF_INET) {
+    ike_disable_ipv4_pmtud(fd);
+  }
+  if (util_protect_fd(fd) != 0) {
+    if (out_errno != NULL)
+      *out_errno = EACCES;
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: protect(%s, fd=%d) failed", label, fd);
+    close(fd);
+    return -1;
+  }
+  if (attempt_port != 0u && peer->ss_family == AF_INET) {
+    ike_try_bind_local_port(fd, attempt_port);
+  }
+  if (connect(fd, (const struct sockaddr *)peer, peer_len) == 0) {
+    struct sockaddr_storage lss;
+    socklen_t lsl = sizeof(lss);
+    if (getsockname(fd, (struct sockaddr *)&lss, &lsl) == 0) {
+      char ep_label[64];
+      snprintf(ep_label, sizeof(ep_label), "IKE local endpoint (%s)", label);
+      ike_log_endpoint(ep_label, (struct sockaddr *)&lss, lsl);
+    } else {
+      int err = errno;
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE: getsockname(%s) errno=%d (%s)", label, err, strerror(err));
+    }
+    return fd;
+  }
+  int err = errno;
+  close(fd);
+  if (out_errno != NULL)
+    *out_errno = err;
+  if (out_connect_failed != NULL)
+    *out_connect_failed = 1;
+  return -1;
+}
+
 static int ike_open_udp_socket(const struct sockaddr_storage *peer, socklen_t peer_len, uint16_t bind_local_port,
                                int allow_ephemeral_fallback, const char *label, int *out_errno) {
   if (out_errno != NULL)
@@ -232,56 +281,22 @@ static int ike_open_udp_socket(const struct sockaddr_storage *peer, socklen_t pe
       *out_errno = EINVAL;
     return -1;
   }
-  for (int pass = 0; pass < 2; pass++) {
-    uint16_t attempt_port = (pass == 0) ? bind_local_port : 0u;
-    int fd = socket(peer->ss_family, SOCK_DGRAM, IPPROTO_UDP);
-    if (fd < 0) {
-      int err = errno;
-      if (out_errno != NULL)
-        *out_errno = err;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: socket(%s) errno=%d (%s)", label, err, strerror(err));
-      return -1;
-    }
-    if (peer->ss_family == AF_INET) {
-      ike_disable_ipv4_pmtud(fd);
-    }
-    if (util_protect_fd(fd) != 0) {
-      if (out_errno != NULL)
-        *out_errno = EACCES;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: protect(%s, fd=%d) failed", label, fd);
-      close(fd);
-      return -1;
-    }
-    if (attempt_port != 0u && peer->ss_family == AF_INET) {
-      ike_try_bind_local_port(fd, attempt_port);
-    }
-    if (connect(fd, (const struct sockaddr *)peer, peer_len) == 0) {
-      struct sockaddr_storage lss;
-      socklen_t lsl = sizeof(lss);
-      if (getsockname(fd, (struct sockaddr *)&lss, &lsl) == 0) {
-        char ep_label[64];
-        snprintf(ep_label, sizeof(ep_label), "IKE local endpoint (%s)", label);
-        ike_log_endpoint(ep_label, (struct sockaddr *)&lss, lsl);
-      } else {
-        int err = errno;
-        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE: getsockname(%s) errno=%d (%s)", label, err, strerror(err));
-      }
-      return fd;
-    }
-    int err = errno;
-    close(fd);
-    if (pass == 0 && attempt_port != 0u && allow_ephemeral_fallback) {
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
-                        "IKE: connect(%s) after local port %u bind failed errno=%d (%s); retrying ephemeral", label,
-                        (unsigned)attempt_port, err, strerror(err));
-      continue;
-    }
+  int err = 0;
+  int connect_failed = 0;
+  int fd = ike_open_udp_socket_once(peer, peer_len, bind_local_port, label, &err, &connect_failed);
+  if (fd < 0 && connect_failed && bind_local_port != 0u && allow_ephemeral_fallback) {
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                      "IKE: connect(%s) after local port %u bind failed errno=%d (%s); retrying ephemeral", label,
+                      (unsigned)bind_local_port, err, strerror(err));
+    fd = ike_open_udp_socket_once(peer, peer_len, 0u, label, &err, &connect_failed);
+  }
+  if (fd < 0) {
     if (out_errno != NULL)
       *out_errno = err;
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(%s) errno=%d (%s)", label, err, strerror(err));
-    return -1;
+    if (connect_failed)
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(%s) errno=%d (%s)", label, err, strerror(err));
   }
-  return -1;
+  return fd;
 }
 
 static int cleartext_l2tp(const char *server, ike_session_t *ike, esp_keys_t *esp) {
