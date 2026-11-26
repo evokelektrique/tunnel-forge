@@ -35,6 +35,12 @@ body:
       required: true
 
   - type: input
+    id: other_install_source
+    attributes:
+      label: Other install source
+      description: If you selected Other, say where you installed TunnelForge from.
+
+  - type: input
     id: self_built_commit
     attributes:
       label: Commit SHA (if Self-built / Debug)
@@ -89,6 +95,13 @@ body:
     validations:
       required: true
 
+  - type: textarea
+    id: routing_apps
+    attributes:
+      label: Apps selected for per-app routing
+      description: If you selected Inclusive or Exclusive, list each selected app and its Android package name, one per line.
+      placeholder: Firefox (org.mozilla.firefox)
+
   - type: input
     id: dns_mtu
     attributes:
@@ -105,5 +118,4 @@ body:
     id: logs
     attributes:
       label: App debug logs
-      description: From logs tab, click the export button and upload the .txt file here.
-      render: text
+      description: Export the .txt file from the Logs tab and attach it here.
