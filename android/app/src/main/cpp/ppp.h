@@ -24,6 +24,14 @@ typedef struct {
   int enable_mppe;
   int auth_policy; /**< TUNNEL_PPP_AUTH_* (0 = AUTO) */
   int mppe_mode;   /**< TUNNEL_MPPE_* (0 = AUTO, 1 = ON, 2 = OFF) */
+  /* Saved LCP request state once open so late Configure-Nak/Reject triggers clean renegotiation. */
+  uint8_t lcp_cr_id;
+  uint16_t lcp_cr_mru;
+  int lcp_out_include_ac;
+  int lcp_accm_in_cr;
+  int lcp_auth_in_cr;
+  int lcp_mru_in_cr;
+  int lcp_active_auth;
 } ppp_transport_t;
 
 /** LCP + auth + optional CCP/MPPE (PPTP) + IPCP over a generic PPP transport. */

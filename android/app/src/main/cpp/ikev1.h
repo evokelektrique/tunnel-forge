@@ -37,4 +37,10 @@ typedef struct {
  */
 int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp);
 
+/**
+ * Best-effort encrypted ISAKMP Informational Delete for active ESP and Phase-1 SAs.
+ * No-op when cleartext L2TP is used or Phase-1 keying material/socket is unavailable.
+ */
+void ikev1_send_delete(ike_session_t *ike, const esp_keys_t *esp);
+
 #endif

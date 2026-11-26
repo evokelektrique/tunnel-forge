@@ -444,68 +444,99 @@ static int recv_ctrl_update_nr(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt,
                                int *out_result_err, int *used_alt) {
   if (out_result_err != NULL)
     *out_result_err = 0;
-  int ilen = recv_plain(esp_fd, esp, esp_alt, used_alt, in, cap, timeout_ms);
-  if (ilen < 0) {
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: recv_plain failed/timeout ilen=%d", ilen);
-    return -1;
-  }
-  if (ilen < (int)L2TP_CTRL_HDR) {
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: short decrypted packet ilen=%d", ilen);
-    return -1;
-  }
-  uint16_t total = util_read_be16(in + 2);
-  if (total != (uint16_t)ilen) {
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: length mismatch total=%u ilen=%d flags=0x%04x",
-                      (unsigned)total, ilen, (unsigned)util_read_be16(in));
-    return -1;
-  }
-  uint16_t peer_ns, peer_nr;
-  if (l2tp_ctrl_get_ns_nr(in, (size_t)ilen, &peer_ns, &peer_nr) != 0)
-    return -1;
-  if (ilen > (int)L2TP_CTRL_HDR)
-    ingest_peer_ns(s, peer_ns);
-  if (l2tp_ctrl_result_ok(in, (size_t)ilen) != 0) {
-    if (out_result_err != NULL)
-      *out_result_err = 1;
-    uint16_t mt_dbg = 0;
-    uint16_t result_code = 0;
-    uint16_t error_code = 0;
-    char error_msg[128];
-    error_msg[0] = '\0';
-    int details = l2tp_ctrl_result_details(in, (size_t)ilen, &result_code, &error_code, error_msg, sizeof(error_msg));
-    (void)l2tp_ctrl_msg_type(in, (size_t)ilen, &mt_dbg);
-    if (details == 0 && (mt_dbg == 4 || mt_dbg == 14))
-      tunnel_set_failure(mt_dbg == 4 ? 2 : 3, result_code, error_code);
-    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
-                      "l2tp ctrl result-not-ok: mt=%u ilen=%d flags=0x%04x peer_ns=%u peer_nr=%u result=%u error=%u "
-                      "details=%d msg=%s",
-                      (unsigned)mt_dbg, ilen, (unsigned)util_read_be16(in), (unsigned)peer_ns, (unsigned)peer_nr,
-                      (unsigned)result_code, (unsigned)error_code, details, error_msg[0] != '\0' ? error_msg : "-");
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: Result Code AVP error");
-    return -1;
-  }
-  if (out_nr != NULL)
-    *out_nr = peer_nr;
-  if (out_mt) {
-    if (l2tp_ctrl_msg_type(in, (size_t)ilen, out_mt) != 0) {
-      // ZLB/ACK control packets may have no Message Type AVP.
-      *out_mt = 0;
-      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                        "l2tp ctrl recv: no Message Type AVP (treat as ZLB/ack) ilen=%d flags=0x%04x peer_ns=%u "
-                        "peer_nr=%u local_nr_now=%u",
-                        ilen, (unsigned)util_read_be16(in), (unsigned)peer_ns, (unsigned)peer_nr,
-                        (unsigned)s->recv_nr_expected);
-    } else {
-      uint16_t tid_dbg = util_read_be16(in + 4);
-      uint16_t sid_dbg = util_read_be16(in + 6);
-      tunnel_engine_log(
-          ANDROID_LOG_DEBUG, LOG_TAG,
-          "l2tp ctrl recv: mt=%u ilen=%d flags=0x%04x peer_tid=%u peer_sid=%u peer_ns=%u peer_nr=%u local_nr_now=%u",
-          (unsigned)*out_mt, ilen, (unsigned)util_read_be16(in), (unsigned)tid_dbg, (unsigned)sid_dbg,
-          (unsigned)peer_ns, (unsigned)peer_nr, (unsigned)s->recv_nr_expected);
+  struct timeval start;
+  gettimeofday(&start, NULL);
+  for (;;) {
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    int elapsed_ms = (int)((now.tv_sec - start.tv_sec) * 1000 + (now.tv_usec - start.tv_usec) / 1000);
+    int rem_ms = timeout_ms - elapsed_ms;
+    if (rem_ms <= 0) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: timeout waiting for matching control packet");
+      return -1;
     }
+    int ilen = recv_plain(esp_fd, esp, esp_alt, used_alt, in, cap, rem_ms);
+    if (ilen < 0) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: recv_plain failed/timeout ilen=%d", ilen);
+      return -1;
+    }
+    if (ilen < 2)
+      continue;
+    uint16_t flags = util_read_be16(in);
+    /* RFC 2661 control messages must set both T (0x8000) and L (0x4000). Skip stale/early data frames (T=0). */
+    if ((flags & 0xc000u) != 0xc000u) {
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp recv_ctrl: ignoring non-control packet flags=0x%04x ilen=%d",
+                        (unsigned)flags, ilen);
+      continue;
+    }
+    if (ilen < (int)L2TP_CTRL_HDR) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: short control packet ilen=%d", ilen);
+      continue;
+    }
+    uint16_t total = util_read_be16(in + 2);
+    if (total != (uint16_t)ilen) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_ctrl: length mismatch total=%u ilen=%d flags=0x%04x",
+                        (unsigned)total, ilen, (unsigned)flags);
+      continue;
+    }
+    uint16_t pkt_tid = util_read_be16(in + 4);
+    uint16_t pkt_sid = util_read_be16(in + 6);
+    if (s != NULL && s->peer_tunnel_id != 0u && pkt_tid != 0u && pkt_tid != s->peer_tunnel_id) {
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp recv_ctrl: ignoring control packet for wrong tid=%u want=%u",
+                        (unsigned)pkt_tid, (unsigned)s->peer_tunnel_id);
+      continue;
+    }
+    if (s != NULL && s->peer_session_id != 0u && pkt_sid != 0u && pkt_sid != s->peer_session_id) {
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "l2tp recv_ctrl: ignoring control packet for wrong sid=%u want=%u",
+                        (unsigned)pkt_sid, (unsigned)s->peer_session_id);
+      continue;
+    }
+    uint16_t peer_ns, peer_nr;
+    if (l2tp_ctrl_get_ns_nr(in, (size_t)ilen, &peer_ns, &peer_nr) != 0)
+      continue;
+    if (ilen > (int)L2TP_CTRL_HDR && (s == NULL || peer_ns == s->recv_nr_expected))
+      ingest_peer_ns(s, peer_ns);
+    if (l2tp_ctrl_result_ok(in, (size_t)ilen) != 0) {
+      if (out_result_err != NULL)
+        *out_result_err = 1;
+      uint16_t mt_dbg = 0;
+      uint16_t result_code = 0;
+      uint16_t error_code = 0;
+      char error_msg[128];
+      error_msg[0] = '\0';
+      int details = l2tp_ctrl_result_details(in, (size_t)ilen, &result_code, &error_code, error_msg, sizeof(error_msg));
+      (void)l2tp_ctrl_msg_type(in, (size_t)ilen, &mt_dbg);
+      if (details == 0 && (mt_dbg == 4 || mt_dbg == 14))
+        tunnel_set_failure(mt_dbg == 4 ? 2 : 3, result_code, error_code);
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                        "l2tp ctrl result-not-ok: mt=%u ilen=%d flags=0x%04x peer_ns=%u peer_nr=%u result=%u "
+                        "error=%u details=%d msg=%s",
+                        (unsigned)mt_dbg, ilen, (unsigned)flags, (unsigned)peer_ns, (unsigned)peer_nr,
+                        (unsigned)result_code, (unsigned)error_code, details, error_msg[0] != '\0' ? error_msg : "-");
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp: Result Code AVP error");
+      return -1;
+    }
+    if (out_nr != NULL)
+      *out_nr = peer_nr;
+    if (out_mt) {
+      if (l2tp_ctrl_msg_type(in, (size_t)ilen, out_mt) != 0) {
+        // ZLB/ACK control packets may have no Message Type AVP.
+        *out_mt = 0;
+        tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                          "l2tp ctrl recv: no Message Type AVP (treat as ZLB/ack) ilen=%d flags=0x%04x peer_ns=%u "
+                          "peer_nr=%u local_nr_now=%u",
+                          ilen, (unsigned)flags, (unsigned)peer_ns, (unsigned)peer_nr,
+                          s != NULL ? (unsigned)s->recv_nr_expected : 0u);
+      } else {
+        tunnel_engine_log(
+            ANDROID_LOG_DEBUG, LOG_TAG,
+            "l2tp ctrl recv: mt=%u ilen=%d flags=0x%04x peer_tid=%u peer_sid=%u peer_ns=%u peer_nr=%u local_nr_now=%u",
+            (unsigned)*out_mt, ilen, (unsigned)flags, (unsigned)pkt_tid, (unsigned)pkt_sid, (unsigned)peer_ns,
+            (unsigned)peer_nr, s != NULL ? (unsigned)s->recv_nr_expected : 0u);
+      }
+    }
+    return ilen;
   }
-  return ilen;
 }
 
 static int recv_until_mt(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, uint8_t *in,
@@ -698,6 +729,7 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
   uint16_t local_sid = pick_local_id(local_tid, 0x2222u);
   if (local_sid == 0)
     local_sid = 1;
+  s->peer_session_id = local_sid;
 
   ao = 0;
   avp_u16(avps, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_ICRQ);

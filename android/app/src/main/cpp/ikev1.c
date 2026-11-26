@@ -26,6 +26,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #define LOG_TAG "tunnel_engine"
@@ -591,28 +593,45 @@ static int ike_is_duplicate_qm2_retransmit(int p1_aes, const uint8_t *aeskey, co
   return 0;
 }
 
+static long long ike_now_ms(void) {
+  struct timeval now;
+  gettimeofday(&now, NULL);
+  return ((long long)now.tv_sec * 1000ll) + ((long long)now.tv_usec / 1000ll);
+}
+
 /**
  * Wait for QM3 completion: ignore duplicate server QM2 (common Libreswan retransmit), resend QM3.
- * Accept optional Informational ack. If peer is silent after timeout, continue (many stacks send nothing).
+ * Uses real elapsed time with a short quiet settle window so silent peers do not stall L2TP setup for 16 s,
+ * and stops without consuming early ESP traffic when peer starts L2TP immediately.
  */
 static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *qm3_pkt,
                                     size_t qm3_len, uint8_t *in, size_t in_cap, int prefix4500, uint32_t qm_mid,
                                     int p1_aes, const uint8_t *aeskey, const uint8_t *deskey, const uint8_t *qm1_tail) {
-  const int total_ms = 16000;
-  const int slice_ms = 400;
-  int elapsed = 0;
+  const long long idle_settle_ms = 1200ll;
+  const long long max_total_ms = 6000ll;
+  const int slice_ms = 250;
   int resend_count = 0;
 
   if (ike_send_qm3_payload(fd, peer, peer_len, qm3_pkt, qm3_len, prefix4500) != 0)
     return -1;
 
-  while (elapsed < total_ms) {
+  long long start_ms = ike_now_ms();
+  long long last_qm3_ms = start_ms;
+
+  for (;;) {
+    long long now_ms = ike_now_ms();
+    long long total_rem = max_total_ms - (now_ms - start_ms);
+    long long settle_rem = idle_settle_ms - (now_ms - last_qm3_ms);
+    long long rem_ms = total_rem < settle_rem ? total_rem : settle_rem;
+    if (rem_ms <= 0ll)
+      break;
     if (tunnel_should_stop()) {
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "Quick Mode msg3: canceled while waiting for completion");
       return -1;
     }
+    int wait_ms = rem_ms < (long long)slice_ms ? (int)rem_ms : slice_ms;
     struct pollfd pfd = {.fd = fd, .events = POLLIN};
-    int pr = poll(&pfd, 1, slice_ms);
+    int pr = poll(&pfd, 1, wait_ms);
     if (pr < 0) {
       if (errno == EINTR)
         continue;
@@ -623,13 +642,27 @@ static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: poll errno=%d", errno);
       return -1;
     }
-    elapsed += slice_ms;
     if (pr == 0)
       continue;
 
+    /* Peek before consuming so early peer ESP/L2TP frames remain queued for l2tp_handshake(). */
+    ssize_t peek_n = recv(fd, in, in_cap, MSG_PEEK);
+    if (peek_n < 0) {
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+        continue;
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: peek errno=%d", errno);
+      return -1;
+    }
+    if (prefix4500 && peek_n >= 4 && util_read_be32(in) != 0u) {
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                        "Quick Mode msg3: peer started ESP traffic early (%lld ms); proceeding to L2TP",
+                        ike_now_ms() - start_ms);
+      return 0;
+    }
+
     ssize_t n = recv(fd, in, in_cap, 0);
     if (n < 0) {
-      if (errno == EINTR)
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
         continue;
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: recv errno=%d", errno);
       return -1;
@@ -658,8 +691,10 @@ static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                           "Quick Mode: server msg2 retransmit while waiting for QM3 ack; resending HASH(3) (resend=%d)",
                           resend_count);
-        if (resend_count < 16 && ike_send_qm3_payload(fd, peer, peer_len, qm3_pkt, qm3_len, prefix4500) == 0)
+        if (resend_count < 16 && ike_send_qm3_payload(fd, peer, peer_len, qm3_pkt, qm3_len, prefix4500) == 0) {
           resend_count++;
+          last_qm3_ms = ike_now_ms();
+        }
         continue;
       }
     }
@@ -668,7 +703,8 @@ static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen
   }
 
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                    "Quick Mode msg3: finished wait %d ms without Informational (peer often silent; ok)", total_ms);
+                    "Quick Mode msg3: finished settle wait (%lld ms) without Informational (ok)",
+                    ike_now_ms() - start_ms);
   return 0;
 }
 
@@ -2841,6 +2877,7 @@ qm2_received:
   ike->skeyid_a_len = sizeof(skeyid_a);
   memcpy(ike->skeyid_e, skeyid_e, sizeof(skeyid_e));
   ike->skeyid_e_len = sizeof(skeyid_e);
+  memcpy(ike->iv_phase1, p1_last_block, sizeof(ike->iv_phase1));
   ike->nat_t = use4500 ? 1 : 0;
 
   mbedtls_ctr_drbg_free(&ctr);
@@ -2877,4 +2914,108 @@ int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_k
   }
   tunnel_log("ikev1_connect: IPsec+IKE path psk_len=%zu", strlen(psk));
   return ipsec_negotiate(server, psk, ike, esp);
+}
+
+void ikev1_send_delete(ike_session_t *ike, const esp_keys_t *esp) {
+  if (ike == NULL || ike->esp_fd < 0 || ike->skeyid_a_len < 20u || ike->skeyid_e_len < 20u || ike->peer_len == 0) {
+    return;
+  }
+
+  uint32_t mid = 0u;
+  if (getrandom(&mid, sizeof(mid), 0) != (ssize_t)sizeof(mid) || mid == 0u) {
+    mid = 1u;
+  }
+
+  uint8_t del_body[64];
+  size_t db = 0u;
+  const int have_esp = (esp != NULL && esp->spi_r != 0u);
+  if (have_esp) {
+    del_body[db++] = IKE_PT_DELETE;
+    del_body[db++] = 0u;
+    util_write_be16(del_body + db, 16u);
+    db += 2u;
+    util_write_be32(del_body + db, 1u); /* DOI = IPSEC */
+    db += 4u;
+    del_body[db++] = 3u; /* Protocol = ESP */
+    del_body[db++] = 4u; /* SPI size */
+    util_write_be16(del_body + db, 1u);
+    db += 2u;
+    util_write_be32(del_body + db, esp->spi_r);
+    db += 4u;
+  }
+
+  del_body[db++] = IKE_PT_NONE;
+  del_body[db++] = 0u;
+  util_write_be16(del_body + db, 28u);
+  db += 2u;
+  util_write_be32(del_body + db, 1u); /* DOI = IPSEC */
+  db += 4u;
+  del_body[db++] = 1u;  /* Protocol = ISAKMP */
+  del_body[db++] = 16u; /* SPI size = cookies */
+  util_write_be16(del_body + db, 1u);
+  db += 2u;
+  memcpy(del_body + db, ike->icookie, 8u);
+  db += 8u;
+  memcpy(del_body + db, ike->rcookie, 8u);
+  db += 8u;
+
+  uint8_t hash_in[4 + sizeof(del_body)];
+  util_write_be32(hash_in, mid);
+  memcpy(hash_in + 4u, del_body, db);
+  uint8_t hash_del[20];
+  if (prf_hmac_sha1(ike->skeyid_a, 20u, hash_in, 4u + db, hash_del) != 0)
+    return;
+
+  uint8_t plain[24 + sizeof(del_body)];
+  size_t pl = 0u;
+  plain[pl++] = IKE_PT_DELETE;
+  plain[pl++] = 0u;
+  util_write_be16(plain + pl, 24u);
+  pl += 2u;
+  memcpy(plain + pl, hash_del, 20u);
+  pl += 20u;
+  memcpy(plain + pl, del_body, db);
+  pl += db;
+
+  uint8_t ct[128];
+  size_t ctl = 0u;
+  if (ike->p1_aes) {
+    uint8_t aeskey[16];
+    uint8_t iv[16];
+    if (derive_aes128_key(ike->skeyid_e, aeskey) != 0)
+      return;
+    qm_first_iv_aes(ike->iv_phase1, mid, iv);
+    if (isakmp_aes128_encrypt(aeskey, iv, plain, pl, ct, &ctl) != 0)
+      return;
+  } else {
+    uint8_t deskey[24];
+    uint8_t iv8[8];
+    if (derive_3des_key(ike->skeyid_e, deskey) != 0)
+      return;
+    qm_first_iv_sha1(ike->iv_phase1, mid, iv8);
+    if (isakmp_3des_encrypt(deskey, iv8, plain, pl, ct, &ctl) != 0)
+      return;
+  }
+
+  uint8_t pkt[28 + sizeof(ct)];
+  size_t o = 0u;
+  memcpy(pkt + o, ike->icookie, 8u);
+  o += 8u;
+  memcpy(pkt + o, ike->rcookie, 8u);
+  o += 8u;
+  pkt[o++] = IKE_PT_HASH;
+  pkt[o++] = 0x10u;
+  pkt[o++] = IKE_EXCH_INFO;
+  pkt[o++] = IKE_FLAG_ENC;
+  util_write_be32(pkt + o, mid);
+  o += 4u;
+  util_write_be32(pkt + o, (uint32_t)(28u + ctl));
+  o += 4u;
+  memcpy(pkt + o, ct, ctl);
+  o += ctl;
+
+  if (ike_send_qm3_payload(ike->esp_fd, (struct sockaddr *)&ike->peer, ike->peer_len, pkt, o, ike->nat_t) == 0) {
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: sent Informational Delete (esp=%d spi_r=%08x)", have_esp,
+                      esp != NULL ? (unsigned)esp->spi_r : 0u);
+  }
 }

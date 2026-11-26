@@ -34,6 +34,8 @@ typedef struct {
   int have_secondary_dns;
   /** Effective inner IPv4 link MTU after PPP LCP MRU negotiation. */
   uint16_t link_mtu;
+  /** Non-zero when the caller provided an explicit manual MTU rather than auto negotiation. */
+  int link_mtu_manual;
   /** TCP MSS clamp derived from [link_mtu] for outbound IPv4 SYN packets. */
   uint16_t tcp_mss;
   /** LCP option 8 (ACFC) accepted via peer Configure-Request: if set, omit FF 03 on outbound PPP frames. */

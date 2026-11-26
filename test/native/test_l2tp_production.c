@@ -135,6 +135,37 @@ int main(void) {
   packet_endpoint_t endpoint = {0};
   assert(l2tp_dispatch_incoming(sockets[1], NULL, NULL, 0, &session, data, sizeof(data), &endpoint, &ppp) == 17);
 
+  /* Handshake control receiver must skip orphaned data packets (flags=0x0002) and wrong-TID control frames. */
+  {
+    l2tp_session_t hs = {0};
+    hs.peer_tunnel_id = 12613u;
+    const uint8_t stale_data[] = {0x00, 0x02, 0xd8, 0x0e, 0xa0, 0x71, 0xff, 0x03, 0xc0, 0x21, 0x01, 0x01};
+    uint8_t wrong_tid_sccrp[64];
+    uint8_t right_tid_sccrp[64];
+    size_t wrong_len = 0, right_len = 0;
+    off = 0;
+    assert(l2tp_avp_append_u16(avps, sizeof(avps), &off, L2TP_AVP_MSG_TYPE, L2TP_MSG_SCCRP) == 0);
+    assert(l2tp_avp_append_u16(avps, sizeof(avps), &off, L2TP_AVP_ASSIGNED_TUNNEL, 267u) == 0);
+    assert(l2tp_ctrl_build(wrong_tid_sccrp, sizeof(wrong_tid_sccrp), 49162u, 0u, 0u, 1u, avps, off, &wrong_len) == 0);
+    off = 0;
+    assert(l2tp_avp_append_u16(avps, sizeof(avps), &off, L2TP_AVP_MSG_TYPE, L2TP_MSG_SCCRP) == 0);
+    assert(l2tp_avp_append_u16(avps, sizeof(avps), &off, L2TP_AVP_ASSIGNED_TUNNEL, 271u) == 0);
+    assert(l2tp_ctrl_build(right_tid_sccrp, sizeof(right_tid_sccrp), 12613u, 0u, 0u, 1u, avps, off, &right_len) == 0);
+
+    assert(send(sockets[0], stale_data, sizeof(stale_data), 0) == (ssize_t)sizeof(stale_data));
+    assert(send(sockets[0], wrong_tid_sccrp, wrong_len, 0) == (ssize_t)wrong_len);
+    assert(send(sockets[0], right_tid_sccrp, right_len, 0) == (ssize_t)right_len);
+
+    uint16_t got_mt = 0;
+    assert(recv_ctrl_update_nr(sockets[1], &esp, NULL, incoming, sizeof(incoming), 200, &hs, &got_mt, NULL, NULL,
+                               NULL) == (int)right_len);
+    assert(got_mt == L2TP_MSG_SCCRP);
+    uint16_t picked_remote_tid = 0;
+    assert(l2tp_avp_first_u16(incoming, right_len, L2TP_AVP_ASSIGNED_TUNNEL, &picked_remote_tid) == 0);
+    assert(picked_remote_tid == 271u);
+    assert(hs.recv_nr_expected == 1u);
+  }
+
   close(sockets[0]);
   close(sockets[1]);
   return 0;

@@ -170,5 +170,88 @@ int main(void) {
 #if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
 #error "TUNNEL_FORGE_DEBUG_ESP_KEYMAT must stay disabled in default builds"
 #endif
+
+  /* Encrypted ISAKMP Delete emits NAT-T prefix + AES-CBC HASH|DELETE(ESP)|DELETE(ISAKMP), and safe no-ops work. */
+  {
+    ike_session_t ike_empty;
+    memset(&ike_empty, 0, sizeof(ike_empty));
+    ike_empty.esp_fd = -1;
+    ikev1_send_delete(&ike_empty, NULL);
+
+    int sv[2];
+    assert(socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0);
+    struct sockaddr_storage peer_addr;
+    socklen_t peer_len = sizeof(peer_addr);
+    assert(getsockname(sv[1], (struct sockaddr *)&peer_addr, &peer_len) == 0);
+
+    ike_session_t ike;
+    memset(&ike, 0, sizeof(ike));
+    for (size_t i = 0; i < 8u; i++) {
+      ike.icookie[i] = (uint8_t)(0x10u + i);
+      ike.rcookie[i] = (uint8_t)(0x20u + i);
+    }
+    memset(ike.skeyid_a, 0x33u, 20u);
+    ike.skeyid_a_len = 20u;
+    memset(ike.skeyid_e, 0x44u, 20u);
+    ike.skeyid_e_len = 20u;
+    memset(ike.iv_phase1, 0x55u, sizeof(ike.iv_phase1));
+    ike.nat_t = 1;
+    ike.p1_aes = 1;
+    ike.esp_fd = sv[0];
+    memcpy(&ike.peer, &peer_addr, peer_len);
+    ike.peer_len = peer_len;
+
+    esp_keys_t esp_del;
+    memset(&esp_del, 0, sizeof(esp_del));
+    esp_del.spi_r = 0xdeadbeefu;
+
+    ikev1_send_delete(&ike, &esp_del);
+
+    uint8_t wire[512];
+    ssize_t n = recv(sv[1], wire, sizeof(wire), 0);
+    assert(n > 4 + 28);
+    assert(util_read_be32(wire) == 0u);
+    const uint8_t *hdr = wire + 4;
+    size_t hdr_len = (size_t)n - 4u;
+    assert(hdr[16] == IKE_PT_HASH && hdr[18] == IKE_EXCH_INFO && (hdr[19] & IKE_FLAG_ENC) != 0u);
+    assert(util_read_be32(hdr + 24) == hdr_len);
+    uint32_t mid = util_read_be32(hdr + 20);
+    assert(mid != 0u);
+
+    uint8_t aeskey[16];
+    uint8_t iv[16];
+    uint8_t iv_out[16];
+    derive_aes128_key(ike.skeyid_e, aeskey);
+    qm_first_iv_aes(ike.iv_phase1, mid, iv);
+    uint8_t plain[256];
+    size_t plain_len = 0u;
+    assert(isakmp_aes128_decrypt(aeskey, iv, hdr + 28, hdr_len - 28u, plain, sizeof(plain), &plain_len, iv_out) == 0);
+    assert(plain_len >= 24u + 16u + 28u);
+    assert(plain[0] == IKE_PT_DELETE && util_read_be16(plain + 2) == 24u);
+    assert(plain[24] == IKE_PT_DELETE && util_read_be16(plain + 26) == 16u && plain[32] == 3u &&
+           util_read_be32(plain + 36) == esp_del.spi_r);
+    assert(plain[40] == IKE_PT_NONE && util_read_be16(plain + 42) == 28u && plain[48] == 1u &&
+           memcmp(plain + 52, ike.icookie, 8u) == 0 && memcmp(plain + 60, ike.rcookie, 8u) == 0);
+
+    uint8_t hash_in[4 + 44];
+    util_write_be32(hash_in, mid);
+    memcpy(hash_in + 4, plain + 24, 44u);
+    uint8_t expected_hash[20];
+    assert(prf_hmac_sha1(ike.skeyid_a, 20u, hash_in, sizeof(hash_in), expected_hash) == 0);
+    assert(memcmp(plain + 4, expected_hash, 20u) == 0);
+
+    /* Early NAT-T ESP packet (non-zero SPI) stops ike_qm3_finish_recv_loop without consuming the ESP packet. */
+    const uint8_t fake_esp[16] = {0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 1};
+    assert(send(sv[1], fake_esp, sizeof(fake_esp), 0) == (ssize_t)sizeof(fake_esp));
+    const uint8_t qm3_dummy[32] = {0};
+    assert(ike_qm3_finish_recv_loop(sv[0], (struct sockaddr *)&peer_addr, peer_len, qm3_dummy, sizeof(qm3_dummy), wire,
+                                    sizeof(wire), 1, 1u, 1, aeskey, NULL, ike.iv_phase1) == 0);
+    uint8_t rx_after[64];
+    ssize_t rn = recv(sv[0], rx_after, sizeof(rx_after), MSG_DONTWAIT);
+    assert(rn == (ssize_t)sizeof(fake_esp) && memcmp(rx_after, fake_esp, sizeof(fake_esp)) == 0);
+
+    close(sv[0]);
+    close(sv[1]);
+  }
   return 0;
 }
