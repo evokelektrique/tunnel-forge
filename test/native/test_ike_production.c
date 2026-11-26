@@ -178,11 +178,25 @@ int main(void) {
     ike_empty.esp_fd = -1;
     ikev1_send_delete(&ike_empty, NULL);
 
-    int sv[2];
-    assert(socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0);
+    int fd_tx = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int fd_rx = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    assert(fd_tx >= 0 && fd_rx >= 0);
+
+    struct sockaddr_in bind_addr;
+    memset(&bind_addr, 0, sizeof(bind_addr));
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    bind_addr.sin_port = htons(0);
+    assert(bind(fd_tx, (const struct sockaddr *)&bind_addr, (socklen_t)sizeof(bind_addr)) == 0);
+    assert(bind(fd_rx, (const struct sockaddr *)&bind_addr, (socklen_t)sizeof(bind_addr)) == 0);
+
+    struct sockaddr_storage tx_addr;
+    socklen_t tx_len = (socklen_t)sizeof(tx_addr);
+    assert(getsockname(fd_tx, (struct sockaddr *)&tx_addr, &tx_len) == 0);
+
     struct sockaddr_storage peer_addr;
-    socklen_t peer_len = sizeof(peer_addr);
-    assert(getsockname(sv[1], (struct sockaddr *)&peer_addr, &peer_len) == 0);
+    socklen_t peer_len = (socklen_t)sizeof(peer_addr);
+    assert(getsockname(fd_rx, (struct sockaddr *)&peer_addr, &peer_len) == 0);
 
     ike_session_t ike;
     memset(&ike, 0, sizeof(ike));
@@ -197,7 +211,7 @@ int main(void) {
     memset(ike.iv_phase1, 0x55u, sizeof(ike.iv_phase1));
     ike.nat_t = 1;
     ike.p1_aes = 1;
-    ike.esp_fd = sv[0];
+    ike.esp_fd = fd_tx;
     memcpy(&ike.peer, &peer_addr, peer_len);
     ike.peer_len = peer_len;
 
@@ -207,8 +221,10 @@ int main(void) {
 
     ikev1_send_delete(&ike, &esp_del);
 
+    struct pollfd rx_pfd = {.fd = fd_rx, .events = POLLIN};
+    assert(poll(&rx_pfd, 1, 1000) == 1);
     uint8_t wire[512];
-    ssize_t n = recv(sv[1], wire, sizeof(wire), 0);
+    ssize_t n = recv(fd_rx, wire, sizeof(wire), 0);
     assert(n > 4 + 28);
     assert(util_read_be32(wire) == 0u);
     const uint8_t *hdr = wire + 4;
@@ -242,16 +258,17 @@ int main(void) {
 
     /* Early NAT-T ESP packet (non-zero SPI) stops ike_qm3_finish_recv_loop without consuming the ESP packet. */
     const uint8_t fake_esp[16] = {0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 1};
-    assert(send(sv[1], fake_esp, sizeof(fake_esp), 0) == (ssize_t)sizeof(fake_esp));
+    assert(sendto(fd_rx, fake_esp, sizeof(fake_esp), 0, (const struct sockaddr *)&tx_addr, tx_len) ==
+           (ssize_t)sizeof(fake_esp));
     const uint8_t qm3_dummy[32] = {0};
-    assert(ike_qm3_finish_recv_loop(sv[0], (struct sockaddr *)&peer_addr, peer_len, qm3_dummy, sizeof(qm3_dummy), wire,
+    assert(ike_qm3_finish_recv_loop(fd_tx, (struct sockaddr *)&peer_addr, peer_len, qm3_dummy, sizeof(qm3_dummy), wire,
                                     sizeof(wire), 1, 1u, 1, aeskey, NULL, ike.iv_phase1) == 0);
     uint8_t rx_after[64];
-    ssize_t rn = recv(sv[0], rx_after, sizeof(rx_after), MSG_DONTWAIT);
+    ssize_t rn = recv(fd_tx, rx_after, sizeof(rx_after), MSG_DONTWAIT);
     assert(rn == (ssize_t)sizeof(fake_esp) && memcmp(rx_after, fake_esp, sizeof(fake_esp)) == 0);
 
-    close(sv[0]);
-    close(sv[1]);
+    close(fd_tx);
+    close(fd_rx);
   }
   return 0;
 }
