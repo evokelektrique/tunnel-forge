@@ -843,5 +843,62 @@ void main() {
         expect(row.secretsMissing, isFalse);
       },
     );
+
+    test('Profile value equality compares all fields', () {
+      const a = Profile(
+        id: 'p1',
+        displayName: 'Alpha',
+        server: 'alpha.example',
+        user: 'alice',
+        protocol: TunnelProtocol.l2tp,
+      );
+      const b = Profile(
+        id: 'p1',
+        displayName: 'Alpha',
+        server: 'alpha.example',
+        user: 'alice',
+        protocol: TunnelProtocol.l2tp,
+      );
+      const c = Profile(
+        id: 'p1',
+        displayName: 'Alpha',
+        server: 'alpha.example',
+        user: 'alice',
+        protocol: TunnelProtocol.pptp,
+      );
+      expect(a, equals(b));
+      expect(a.hashCode, equals(b.hashCode));
+      expect(a, isNot(equals(c)));
+    });
+
+    test(
+      'upsertProfile with selectAsLastProfile=false keeps lastProfileId unchanged',
+      () async {
+        await store.upsertProfile(
+          const Profile(
+            id: 'p1',
+            displayName: 'One',
+            server: 'one.example',
+            user: 'u1',
+          ),
+          password: 'pw1',
+          psk: 'psk1',
+        );
+        expect(await store.loadLastProfileId(), 'p1');
+
+        await store.upsertProfile(
+          const Profile(
+            id: 'p2',
+            displayName: 'Two',
+            server: 'two.example',
+            user: 'u2',
+          ),
+          password: 'pw2',
+          psk: 'psk2',
+          selectAsLastProfile: false,
+        );
+        expect(await store.loadLastProfileId(), 'p1');
+      },
+    );
   });
 }

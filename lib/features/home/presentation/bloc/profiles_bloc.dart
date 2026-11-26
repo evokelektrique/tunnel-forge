@@ -77,12 +77,16 @@ final class ProfilesDeleteMultipleRequested extends ProfilesEvent {
 }
 
 final class ProfilesRefreshRequested extends ProfilesEvent {
-  const ProfilesRefreshRequested({this.preferredActiveId});
+  const ProfilesRefreshRequested({
+    this.preferredActiveId,
+    this.editedProfileId,
+  });
 
   final String? preferredActiveId;
+  final String? editedProfileId;
 
   @override
-  List<Object?> get props => [preferredActiveId];
+  List<Object?> get props => [preferredActiveId, editedProfileId];
 }
 
 final class ProfilesCopyShareLinkRequested extends ProfilesEvent {
@@ -246,6 +250,31 @@ final class _ProfilesScheduledSubscriptionSyncRequested extends ProfilesEvent {
   List<Object?> get props => [subscriptionId];
 }
 
+enum ActiveProfileTunnelAction { reconnect, disconnect }
+
+class ActiveProfileTunnelEffect extends Equatable {
+  const ActiveProfileTunnelEffect._({
+    required this.id,
+    required this.action,
+    this.row,
+  });
+
+  const ActiveProfileTunnelEffect.reconnect({
+    required int id,
+    required ProfileSecretRow row,
+  }) : this._(id: id, action: ActiveProfileTunnelAction.reconnect, row: row);
+
+  const ActiveProfileTunnelEffect.disconnect({required int id})
+    : this._(id: id, action: ActiveProfileTunnelAction.disconnect);
+
+  final int id;
+  final ActiveProfileTunnelAction action;
+  final ProfileSecretRow? row;
+
+  @override
+  List<Object?> get props => [id, action, row];
+}
+
 class ProfilesState extends Equatable {
   const ProfilesState({
     this.loading = true,
@@ -261,6 +290,7 @@ class ProfilesState extends Equatable {
     this.activeProfileRow,
     this.selectImportedProfileWhenIdle = true,
     this.message,
+    this.pendingTunnelEffect,
   });
 
   final bool loading;
@@ -276,6 +306,7 @@ class ProfilesState extends Equatable {
   final ProfileSecretRow? activeProfileRow;
   final bool selectImportedProfileWhenIdle;
   final HomeMessage? message;
+  final ActiveProfileTunnelEffect? pendingTunnelEffect;
 
   bool get hasActiveProfile {
     final activeId = activeProfileId;
@@ -303,6 +334,8 @@ class ProfilesState extends Equatable {
     bool? selectImportedProfileWhenIdle,
     HomeMessage? message,
     bool clearMessage = false,
+    ActiveProfileTunnelEffect? pendingTunnelEffect,
+    bool clearPendingTunnelEffect = false,
   }) {
     return ProfilesState(
       loading: loading ?? this.loading,
@@ -332,6 +365,9 @@ class ProfilesState extends Equatable {
       selectImportedProfileWhenIdle:
           selectImportedProfileWhenIdle ?? this.selectImportedProfileWhenIdle,
       message: clearMessage ? null : (message ?? this.message),
+      pendingTunnelEffect: clearPendingTunnelEffect
+          ? null
+          : (pendingTunnelEffect ?? this.pendingTunnelEffect),
     );
   }
 
@@ -350,6 +386,7 @@ class ProfilesState extends Equatable {
     activeProfileRow,
     selectImportedProfileWhenIdle,
     message,
+    pendingTunnelEffect,
   ];
 }
 
@@ -398,6 +435,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
   StreamSubscription<IncomingProfileTransfer>? _transferSub;
   int _messageId = 0;
   int _summaryEventId = 0;
+  int _tunnelEffectId = 0;
 
   void _log(LogLevel level, String message) {
     _logsRepository?.logDart(level, 'profiles', message);
@@ -697,6 +735,9 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           message: _nextMessage(
             count == 1 ? t.profileRemoved : t.profilesRemovedCount(count),
           ),
+          pendingTunnelEffect: shouldSelectFallback
+              ? _nextTunnelDisconnectEffect()
+              : null,
         ),
       );
     } catch (error) {
@@ -721,10 +762,23 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     ProfilesRefreshRequested event,
     Emitter<ProfilesState> emit,
   ) async {
+    final previousActiveId = state.activeProfileId;
     await _reloadProfiles(
       emit,
       preferredActiveId: event.preferredActiveId ?? state.activeProfileId,
     );
+    if (event.editedProfileId != null &&
+        event.editedProfileId == previousActiveId &&
+        state.activeProfileId == previousActiveId &&
+        state.activeProfileRow != null) {
+      emit(
+        state.copyWith(
+          pendingTunnelEffect: _nextTunnelReconnectEffect(
+            state.activeProfileRow!,
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _onCopyShareLinkRequested(
@@ -1067,12 +1121,20 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           trigger: SubscriptionSyncTrigger.manual,
         );
       }
+      final previousActiveId = state.activeProfileId;
+      final previousActiveRow = state.activeProfileRow;
       await _reloadProfiles(
         emit,
         preferredActiveId: state.activeProfileId,
         showLoading: false,
       );
       await subsRepo.syncSchedules(state.subscriptions);
+      final tunnelEffect = event.urlChanged
+          ? _tunnelEffectAfterSubscriptionReload(
+              previousActiveId: previousActiveId,
+              previousActiveRow: previousActiveRow,
+            )
+          : null;
       emit(
         state.copyWith(
           subscriptionSubmitting: false,
@@ -1085,6 +1147,7 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           message: syncSummary == null
               ? _nextMessage(t.subscriptionSaved)
               : null,
+          pendingTunnelEffect: tunnelEffect,
         ),
       );
     } on SubscriptionException catch (error) {
@@ -1133,6 +1196,8 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       ),
     );
     try {
+      final previousActiveId = state.activeProfileId;
+      final previousActiveRow = state.activeProfileRow;
       final summary = await subsRepo.syncSubscriptionById(
         event.subscriptionId,
         trigger: event.trigger,
@@ -1152,6 +1217,10 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           pendingSummaryEvent: shouldShowDialog
               ? _nextSummaryEvent([summary])
               : null,
+          pendingTunnelEffect: _tunnelEffectAfterSubscriptionReload(
+            previousActiveId: previousActiveId,
+            previousActiveRow: previousActiveRow,
+          ),
         ),
       );
     } on SubscriptionException catch (error) {
@@ -1210,6 +1279,8 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
     );
     var outcome = SubscriptionContract.outcomeSuccess;
     try {
+      final previousActiveId = state.activeProfileId;
+      final previousActiveRow = state.activeProfileRow;
       final summary = await subsRepo.syncSubscriptionById(
         event.subscriptionId,
         trigger: SubscriptionSyncTrigger.foregroundAuto,
@@ -1227,6 +1298,10 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
           pendingSummaryEvent: summary != null && summary.hasChanges
               ? _nextSummaryEvent([summary])
               : null,
+          pendingTunnelEffect: _tunnelEffectAfterSubscriptionReload(
+            previousActiveId: previousActiveId,
+            previousActiveRow: previousActiveRow,
+          ),
         ),
       );
     } on SubscriptionException catch (error) {
@@ -1281,7 +1356,14 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
         add(ProfilesSelectionChanged(state.profiles.first.id));
       }
       await subsRepo.syncSchedules(state.subscriptions);
-      emit(state.copyWith(message: _nextMessage(t.subscriptionDeleted)));
+      emit(
+        state.copyWith(
+          message: _nextMessage(t.subscriptionDeleted),
+          pendingTunnelEffect: activeWasInSub
+              ? _nextTunnelDisconnectEffect()
+              : null,
+        ),
+      );
     } catch (error) {
       _log(
         LogLevel.warning,
@@ -1307,15 +1389,24 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
 
     if (pendingSummaries.isNotEmpty ||
         loadedSubscriptions != state.subscriptions) {
+      final previousActiveId = state.activeProfileId;
+      final previousActiveRow = state.activeProfileRow;
       await _reloadProfiles(
         emit,
         preferredActiveId: state.activeProfileId,
         showLoading: false,
       );
-      if (pendingSummaries.isNotEmpty) {
+      final tunnelEffect = _tunnelEffectAfterSubscriptionReload(
+        previousActiveId: previousActiveId,
+        previousActiveRow: previousActiveRow,
+      );
+      if (pendingSummaries.isNotEmpty || tunnelEffect != null) {
         emit(
           state.copyWith(
-            pendingSummaryEvent: _nextSummaryEvent(pendingSummaries),
+            pendingSummaryEvent: pendingSummaries.isNotEmpty
+                ? _nextSummaryEvent(pendingSummaries)
+                : null,
+            pendingTunnelEffect: tunnelEffect,
           ),
         );
       }
@@ -1357,15 +1448,24 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       }
     }
 
+    final previousActiveId = state.activeProfileId;
+    final previousActiveRow = state.activeProfileRow;
     await _reloadProfiles(
       emit,
       preferredActiveId: state.activeProfileId,
       showLoading: false,
     );
-    if (changedSummaries.isNotEmpty) {
+    final tunnelEffect = _tunnelEffectAfterSubscriptionReload(
+      previousActiveId: previousActiveId,
+      previousActiveRow: previousActiveRow,
+    );
+    if (changedSummaries.isNotEmpty || tunnelEffect != null) {
       emit(
         state.copyWith(
-          pendingSummaryEvent: _nextSummaryEvent(changedSummaries),
+          pendingSummaryEvent: changedSummaries.isNotEmpty
+              ? _nextSummaryEvent(changedSummaries)
+              : null,
+          pendingTunnelEffect: tunnelEffect,
         ),
       );
     }
@@ -1442,6 +1542,33 @@ class ProfilesBloc extends Bloc<ProfilesEvent, ProfilesState> {
       id: _summaryEventId,
       summaries: List<SubscriptionSyncSummary>.unmodifiable(summaries),
     );
+  }
+
+  ActiveProfileTunnelEffect? _tunnelEffectAfterSubscriptionReload({
+    required String? previousActiveId,
+    required ProfileSecretRow? previousActiveRow,
+  }) {
+    if (previousActiveId == null) return null;
+    if (state.activeProfileId == null) {
+      return _nextTunnelDisconnectEffect();
+    }
+    if (state.activeProfileId == previousActiveId &&
+        previousActiveRow != null &&
+        state.activeProfileRow != null &&
+        previousActiveRow != state.activeProfileRow) {
+      return _nextTunnelReconnectEffect(state.activeProfileRow!);
+    }
+    return null;
+  }
+
+  ActiveProfileTunnelEffect _nextTunnelReconnectEffect(ProfileSecretRow row) {
+    _tunnelEffectId += 1;
+    return ActiveProfileTunnelEffect.reconnect(id: _tunnelEffectId, row: row);
+  }
+
+  ActiveProfileTunnelEffect _nextTunnelDisconnectEffect() {
+    _tunnelEffectId += 1;
+    return ActiveProfileTunnelEffect.disconnect(id: _tunnelEffectId);
   }
 
   @override

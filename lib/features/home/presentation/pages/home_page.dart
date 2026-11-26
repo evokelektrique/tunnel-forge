@@ -86,6 +86,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   final ScrollController _logsScroll = ScrollController();
   bool _logsStickToBottom = true;
   int _lastProfilesMessageId = 0;
+  int _lastProfilesTunnelEffectId = 0;
   int _lastSubscriptionSummaryEventId = 0;
   int _lastTunnelMessageId = 0;
   int _lastSettingsMessageId = 0;
@@ -274,6 +275,27 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       _lastSubscriptionSummaryEventId = summaryEvent.id;
       unawaited(SubscriptionUpdateDialog.show(context, summaryEvent.summaries));
     }
+    final tunnelEffect = state.pendingTunnelEffect;
+    if (tunnelEffect != null &&
+        tunnelEffect.id != _lastProfilesTunnelEffectId) {
+      _lastProfilesTunnelEffectId = tunnelEffect.id;
+      final tunnelBloc = context.read<TunnelBloc>();
+      if (_isTunnelActiveForAction(tunnelBloc.state)) {
+        switch (tunnelEffect.action) {
+          case ActiveProfileTunnelAction.reconnect:
+            final row = tunnelEffect.row;
+            if (row != null) {
+              _reconnectToRow(
+                row,
+                settingsBloc: context.read<SettingsBloc>(),
+                tunnelBloc: tunnelBloc,
+              );
+            }
+          case ActiveProfileTunnelAction.disconnect:
+            tunnelBloc.add(const TunnelDisconnectRequested());
+        }
+      }
+    }
     _syncQuickSettings(state, context.read<SettingsBloc>().state);
   }
 
@@ -386,6 +408,11 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     }
   }
 
+  bool _isTunnelActiveForAction(TunnelState tunnelState) {
+    final isTunnelActive = tunnelState.tunnelUp || tunnelState.awaitingTunnel;
+    return isTunnelActive && !tunnelState.busy && !tunnelState.stopRequested;
+  }
+
   Future<void> _openProfilePicker() async {
     final profilesBloc = context.read<ProfilesBloc>();
     final settingsBloc = context.read<SettingsBloc>();
@@ -398,13 +425,12 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       profilesBloc: profilesBloc,
       store: widget.locator<ProfileStore>(),
       logsRepository: widget.locator<LogsRepository>(),
+      isTunnelActive: () => _isTunnelActiveForAction(tunnelBloc.state),
     );
     if (!mounted || selectedId == null || selectedId == previousActiveId) {
       return;
     }
-    final tunnelState = tunnelBloc.state;
-    final isTunnelActive = tunnelState.tunnelUp || tunnelState.awaitingTunnel;
-    if (!isTunnelActive || tunnelState.busy || tunnelState.stopRequested) {
+    if (!_isTunnelActiveForAction(tunnelBloc.state)) {
       return;
     }
     await _reconnectToProfile(
@@ -412,6 +438,24 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       profilesBloc: profilesBloc,
       settingsBloc: settingsBloc,
       tunnelBloc: tunnelBloc,
+    );
+  }
+
+  void _reconnectToRow(
+    ProfileSecretRow row, {
+    required SettingsBloc settingsBloc,
+    required TunnelBloc tunnelBloc,
+  }) {
+    if (row.secretsMissing) {
+      unawaited(_handleMissingSecrets(row.profile));
+      return;
+    }
+    final settingsState = settingsBloc.state;
+    if (settingsState.connectionMode == ConnectionMode.vpnTunnel) {
+      settingsBloc.add(const SettingsBatteryOptimizationVpnConnectAttempted());
+    }
+    tunnelBloc.add(
+      TunnelReconnectRequested(_buildConnectRequest(row, settingsState)),
     );
   }
 
@@ -441,17 +485,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     if (!mounted) return;
     final row = resolved.activeProfileRow;
     if (row == null) return;
-    if (row.secretsMissing) {
-      unawaited(_handleMissingSecrets(row.profile));
-      return;
-    }
-    final settingsState = settingsBloc.state;
-    if (settingsState.connectionMode == ConnectionMode.vpnTunnel) {
-      settingsBloc.add(const SettingsBatteryOptimizationVpnConnectAttempted());
-    }
-    tunnelBloc.add(
-      TunnelReconnectRequested(_buildConnectRequest(row, settingsState)),
-    );
+    _reconnectToRow(row, settingsBloc: settingsBloc, tunnelBloc: tunnelBloc);
   }
 
   Future<void> _pickAppsForVpn() async {
@@ -735,7 +769,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       return t.reconnectingTapCancel;
     }
     if (tunnelState.awaitingTunnel && !tunnelState.tunnelUp) {
-      return t.connectingTapCancel;
+      return t.connecting;
     }
     if (tunnelState.busy) return t.working;
     if (tunnelState.tunnelUp) {
@@ -799,6 +833,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
           listenWhen: (previous, current) =>
               previous.message != current.message ||
               previous.pendingSummaryEvent != current.pendingSummaryEvent ||
+              previous.pendingTunnelEffect != current.pendingTunnelEffect ||
               previous.loading != current.loading ||
               previous.activeProfileId != current.activeProfileId ||
               previous.activeProfileRow != current.activeProfileRow,

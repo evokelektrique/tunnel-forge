@@ -217,8 +217,14 @@ class ProfilesRepositoryImpl implements ProfilesRepository {
     Profile profile, {
     required String password,
     required String psk,
+    bool selectAsLastProfile = true,
   }) {
-    return _profileStore.upsertProfile(profile, password: password, psk: psk);
+    return _profileStore.upsertProfile(
+      profile,
+      password: password,
+      psk: psk,
+      selectAsLastProfile: selectAsLastProfile,
+    );
   }
 }
 

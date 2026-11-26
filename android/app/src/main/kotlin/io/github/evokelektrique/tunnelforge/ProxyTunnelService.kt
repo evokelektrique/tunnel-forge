@@ -346,8 +346,9 @@ class ProxyTunnelService : Service() {
         val nativeOwner = NativeTunnelOwner(VpnContract.MODE_PROXY_ONLY, attemptId)
         var nativeOwnerAcquired = false
         var monitor: ActiveNetworkMonitor? = null
+        val connectingDetail = "Negotiating tunnel for local proxy (${label.ifEmpty { "profile" }})..."
         currentTunnelState = VpnContract.TUNNEL_CONNECTING
-        currentTunnelDetail = "Negotiating tunnel for local proxy (${label.ifEmpty { "profile" }})..."
+        currentTunnelDetail = connectingDetail
         emitAttemptState(attemptId, VpnContract.TUNNEL_CONNECTING, currentTunnelDetail)
         VpnTunnelEvents.emitEngineLog(Log.INFO, TAG, "${prefixAttempt(attemptId)}Starting proxy negotiation")
         var hasEverConnected = false
@@ -429,6 +430,12 @@ class ProxyTunnelService : Service() {
                     }
                 } else {
                     immediateSwitchReconnect = false
+                    if (currentTunnelState != VpnContract.TUNNEL_CONNECTING) {
+                        currentTunnelState = VpnContract.TUNNEL_CONNECTING
+                        currentTunnelDetail = connectingDetail
+                        emitAttemptState(attemptId, VpnContract.TUNNEL_CONNECTING, currentTunnelDetail)
+                        updateForegroundNotification(AppLocaleSupport.getString(this, R.string.proxy_notification_starting))
+                    }
                 }
 
                 networkInterruptEvent = null

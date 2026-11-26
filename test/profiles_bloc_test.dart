@@ -410,4 +410,115 @@ void main() {
       }
     },
   );
+
+  test('ProfileFormBloc respects canSelectAsLastProfile when false', () async {
+    await store.upsertProfile(
+      const Profile(
+        id: 'p1',
+        displayName: 'Active',
+        server: 'active.example',
+        user: 'u1',
+      ),
+      password: 'pw1',
+      psk: 'psk1',
+    );
+    expect(await store.loadLastProfileId(), 'p1');
+
+    final bloc = ProfileFormBloc(
+      profilesRepository,
+      logsRepository: logsRepository,
+      canSelectAsLastProfile: () => false,
+    );
+    addTearDown(bloc.close);
+
+    bloc.add(const ProfileFormStarted(null));
+    await Future<void>.delayed(Duration.zero);
+    bloc.add(const ProfileFormServerChanged('other.example'));
+    bloc.add(const ProfileFormSaveRequested());
+    await Future<void>.delayed(Duration.zero);
+
+    expect(bloc.state.saved, isTrue);
+    expect(await store.loadLastProfileId(), 'p1');
+  });
+
+  test(
+    'ProfilesBloc emits reconnect on active profile edit refresh and disconnect on active delete',
+    () async {
+      await store.upsertProfile(
+        const Profile(
+          id: 'p1',
+          displayName: 'Alpha',
+          server: 'alpha.example',
+          user: 'u1',
+        ),
+        password: 'pw1',
+        psk: 'psk1',
+      );
+      await store.upsertProfile(
+        const Profile(
+          id: 'p2',
+          displayName: 'Beta',
+          server: 'beta.example',
+          user: 'u2',
+        ),
+        password: 'pw2',
+        psk: 'psk2',
+      );
+      await store.setLastProfileId('p1');
+
+      final bloc = ProfilesBloc(
+        profilesRepository,
+        transferRepository,
+        logsRepository: logsRepository,
+      );
+      addTearDown(bloc.close);
+
+      bloc.add(const ProfilesStarted());
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.activeProfileId, 'p1');
+      expect(bloc.state.pendingTunnelEffect, isNull);
+
+      // Editing a non-active profile does not emit a tunnel effect.
+      bloc.add(
+        const ProfilesRefreshRequested(
+          preferredActiveId: 'p1',
+          editedProfileId: null,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.pendingTunnelEffect, isNull);
+
+      // Editing the active profile emits a reconnect effect.
+      bloc.add(
+        const ProfilesRefreshRequested(
+          preferredActiveId: 'p1',
+          editedProfileId: 'p1',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        bloc.state.pendingTunnelEffect?.action,
+        ActiveProfileTunnelAction.reconnect,
+      );
+      expect(bloc.state.pendingTunnelEffect?.row?.profile.id, 'p1');
+
+      // Deleting a non-active profile does not emit a new tunnel effect.
+      final effectIdBeforeNonActiveDelete = bloc.state.pendingTunnelEffect!.id;
+      bloc.add(const ProfilesDeleteRequested('p2'));
+      await Future<void>.delayed(Duration.zero);
+      expect(bloc.state.pendingTunnelEffect?.id, effectIdBeforeNonActiveDelete);
+
+      // Deleting the active profile emits a disconnect effect.
+      bloc.add(const ProfilesDeleteRequested('p1'));
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        bloc.state.pendingTunnelEffect?.action,
+        ActiveProfileTunnelAction.disconnect,
+      );
+      expect(
+        bloc.state.pendingTunnelEffect?.id,
+        greaterThan(effectIdBeforeNonActiveDelete),
+      );
+    },
+  );
 }

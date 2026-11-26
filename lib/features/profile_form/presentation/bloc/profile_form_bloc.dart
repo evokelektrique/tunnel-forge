@@ -363,9 +363,13 @@ String? _mtuValidationMessage(String value) {
 }
 
 class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
-  ProfileFormBloc(this._profilesRepository, {LogsRepository? logsRepository})
-    : _logsRepository = logsRepository,
-      super(const ProfileFormState()) {
+  ProfileFormBloc(
+    this._profilesRepository, {
+    LogsRepository? logsRepository,
+    bool Function()? canSelectAsLastProfile,
+  }) : _logsRepository = logsRepository,
+       _canSelectAsLastProfile = canSelectAsLastProfile,
+       super(const ProfileFormState()) {
     on<ProfileFormStarted>(_onStarted);
     on<ProfileFormDisplayNameChanged>(
       (event, emit) =>
@@ -423,6 +427,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
 
   final ProfilesRepository _profilesRepository;
   final LogsRepository? _logsRepository;
+  final bool Function()? _canSelectAsLastProfile;
   bool _isNewProfile = false;
 
   void _log(LogLevel level, String message) {
@@ -667,6 +672,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         profile,
         password: state.password,
         psk: state.protocol.isPptp ? '' : state.psk,
+        selectAsLastProfile: _canSelectAsLastProfile?.call() ?? true,
       );
       _logSaved(profile);
       emit(state.copyWith(saving: false, saved: true));
@@ -714,6 +720,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         profile,
         password: state.password,
         psk: state.protocol.isPptp ? '' : state.psk,
+        selectAsLastProfile: _canSelectAsLastProfile?.call() ?? true,
       );
       _logSaved(profile, afterReset: true);
       emit(state.copyWith(saving: false, saved: true));

@@ -152,7 +152,6 @@
   "connected": "متصل",
   "proxyReady": "پروکسی آماده است",
   "working": "در حال کار...",
-  "connectingTapCancel": "در حال اتصال... برای لغو بزنید",
   "waitingForNetwork": "در انتظار شبکه",
   "waitingForNetworkBlocking": "در انتظار شبکه · مسدودسازی اینترنت",
   "reconnectingTapCancel": "در حال اتصال مجدد... برای لغو بزنید",

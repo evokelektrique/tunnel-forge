@@ -44,17 +44,20 @@ class ProfilePickerSheet extends StatefulWidget {
     required this.profilesBloc,
     required this.store,
     this.logsRepository,
+    this.isTunnelActive,
   });
 
   final ProfilesBloc profilesBloc;
   final ProfileStore store;
   final LogsRepository? logsRepository;
+  final bool Function()? isTunnelActive;
 
   static Future<String?> show(
     BuildContext context, {
     required ProfilesBloc profilesBloc,
     required ProfileStore store,
     LogsRepository? logsRepository,
+    bool Function()? isTunnelActive,
   }) {
     final theme = Theme.of(context);
     final sheetColor =
@@ -74,6 +77,7 @@ class ProfilePickerSheet extends StatefulWidget {
           profilesBloc: profilesBloc,
           store: store,
           logsRepository: logsRepository,
+          isTunnelActive: isTunnelActive,
         ),
       ),
     );
@@ -276,16 +280,26 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet>
     _profilesBloc.add(ProfilesSelectionChanged(id));
   }
 
-  Future<void> _refreshProfiles({required String preferredActiveId}) async {
+  Future<void> _refreshProfiles({
+    required String savedProfileId,
+    required String? preferredActiveId,
+    String? editedProfileId,
+  }) async {
     final refreshResult = _profilesBloc.stream
         .firstWhere((state) {
+          final activeMatches = preferredActiveId == null
+              ? state.activeProfileId == null
+              : state.activeProfileId == preferredActiveId;
           return !state.loading &&
-              state.activeProfileId == preferredActiveId &&
-              state.profiles.any((profile) => profile.id == preferredActiveId);
+              activeMatches &&
+              state.profiles.any((profile) => profile.id == savedProfileId);
         })
         .timeout(const Duration(seconds: 5));
     _profilesBloc.add(
-      ProfilesRefreshRequested(preferredActiveId: preferredActiveId),
+      ProfilesRefreshRequested(
+        preferredActiveId: preferredActiveId,
+        editedProfileId: editedProfileId,
+      ),
     );
     try {
       await refreshResult;
@@ -1268,17 +1282,35 @@ class _ProfilePickerSheetState extends State<ProfilePickerSheet>
       key: ValueKey<String>(
         'editor:${_editingProfileId ?? 'draft'}:$_editorSession',
       ),
-      create: (_) =>
-          ProfileFormBloc(repository, logsRepository: widget.logsRepository)
-            ..add(ProfileFormStarted(_editingProfileId)),
+      create: (_) => ProfileFormBloc(
+        repository,
+        logsRepository: widget.logsRepository,
+        canSelectAsLastProfile: () =>
+            _profilesBloc.state.selectImportedProfileWhenIdle ||
+            _editingProfileId == _profilesBloc.state.activeProfileId,
+      )..add(ProfileFormStarted(_editingProfileId)),
       child: ProfileEditorView(
         onClose: _closeEditor,
         onSaved: (profileId) async {
-          await _refreshProfiles(preferredActiveId: profileId);
-          if (!mounted) return;
-          _closeEditor();
+          final wasActive = profileId == _profilesBloc.state.activeProfileId;
+          final tunnelActive = widget.isTunnelActive?.call() ?? false;
+          final shouldSelect =
+              _profilesBloc.state.selectImportedProfileWhenIdle || wasActive;
+          final preferredActiveId = shouldSelect
+              ? profileId
+              : _profilesBloc.state.activeProfileId;
+          await _refreshProfiles(
+            savedProfileId: profileId,
+            preferredActiveId: preferredActiveId,
+            editedProfileId: wasActive ? profileId : null,
+          );
           if (!mounted) return;
           showAppSnackBar(this.context, AppL10n.of(this.context).profileSaved);
+          if (wasActive && tunnelActive) {
+            Navigator.of(this.context).pop();
+          } else {
+            _closeEditor();
+          }
         },
       ),
     );

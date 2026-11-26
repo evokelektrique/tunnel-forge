@@ -961,4 +961,43 @@ class Profile {
       subscriptionId: subscriptionId,
     );
   }
+
+  @override
+  bool operator ==(Object other) {
+    return other is Profile &&
+        id == other.id &&
+        displayName == other.displayName &&
+        server == other.server &&
+        user == other.user &&
+        protocol == other.protocol &&
+        pppAuth == other.pppAuth &&
+        mppeMode == other.mppeMode &&
+        dnsAutomatic == other.dnsAutomatic &&
+        dns1Host == other.dns1Host &&
+        dns1Protocol == other.dns1Protocol &&
+        dns2Host == other.dns2Host &&
+        dns2Protocol == other.dns2Protocol &&
+        mtu == other.mtu &&
+        favorite == other.favorite &&
+        subscriptionId == other.subscriptionId;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    displayName,
+    server,
+    user,
+    protocol,
+    pppAuth,
+    mppeMode,
+    dnsAutomatic,
+    dns1Host,
+    dns1Protocol,
+    dns2Host,
+    dns2Protocol,
+    mtu,
+    favorite,
+    subscriptionId,
+  );
 }

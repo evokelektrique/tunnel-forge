@@ -688,13 +688,14 @@ class TunnelVpnService : VpnService() {
             reconnectingAlertShown = false
             connectedEmitted.set(false)
             activeProxyConfig = proxyConfig
-            currentTunnelState = VpnContract.TUNNEL_CONNECTING
-            currentTunnelDetail =
+            val connectingDetail =
                 if (protocol == VpnContract.PROTOCOL_PPTP) {
                     "Negotiating PPTP/GRE/PPP..."
                 } else {
                     "Negotiating IKE/L2TP/PPP..."
                 }
+            currentTunnelState = VpnContract.TUNNEL_CONNECTING
+            currentTunnelDetail = connectingDetail
 
             val requestedInclusivePkgs =
                 requestedInclusivePackages(
@@ -820,6 +821,12 @@ class TunnelVpnService : VpnService() {
                     }
                 } else {
                     immediateSwitchReconnect = false
+                    if (currentTunnelState != VpnContract.TUNNEL_CONNECTING) {
+                        currentTunnelState = VpnContract.TUNNEL_CONNECTING
+                        currentTunnelDetail = connectingDetail
+                        emitAttemptState(attemptId, VpnContract.TUNNEL_CONNECTING, currentTunnelDetail)
+                        updateForegroundNotification(AppLocaleSupport.getString(this, R.string.vpn_notification_connecting))
+                    }
                 }
 
                 if (VpnService.prepare(this) != null) {

@@ -187,4 +187,138 @@ void main() {
       expect(bridge.syncedSchedules.last, isEmpty);
     },
   );
+
+  test(
+    'ProfilesBloc emits reconnect/disconnect tunnel effects when subscription sync updates or removes active profile',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = ProfileStore(
+        prefsOverride: prefs,
+        secretsOverride: MemorySecretStore(),
+      );
+      final bridge = _RecordingBridge();
+      final http = _StubHttpClient()
+        ..body =
+            'tf://a.example.com?displayName=Node+A&user=u&password=p1&psk=k1\n'
+            'tf://b.example.com?displayName=Node+B&user=u&password=p2&psk=k2';
+      final now = DateTime.utc(2026, 11, 20, 10, 0);
+      final syncService = SubscriptionSyncService(
+        profileStore: store,
+        bridge: bridge,
+        httpClient: http,
+        clock: () => now,
+      );
+      final subsRepo = SubscriptionsRepositoryImpl(
+        profileStore: store,
+        syncService: syncService,
+        bridge: bridge,
+      );
+      final transferRepo = _EmptyTransferRepo();
+      final bloc = ProfilesBloc(
+        ProfilesRepositoryImpl(store),
+        transferRepo,
+        subscriptionsRepository: subsRepo,
+        clock: () => now,
+      );
+      addTearDown(() async {
+        await bloc.close();
+        await transferRepo.dispose();
+      });
+
+      bloc.add(const ProfilesStarted());
+      await bloc.stream.firstWhere((s) => !s.loading);
+
+      bloc.add(
+        const ProfilesSubscriptionAddRequested(
+          name: 'Alpha',
+          url: 'https://example.com/alpha',
+          autoUpdate: false,
+          updateIntervalMinutes: 60,
+          intervalUnit: SubscriptionIntervalUnit.minutes,
+        ),
+      );
+      final addedState = await bloc.stream.firstWhere(
+        (s) => s.subscriptionSubmissionId == 1,
+      );
+      final subId = addedState.subscriptions.single.id;
+      final nodeAId = addedState.profiles
+          .firstWhere((p) => p.server == 'a.example.com')
+          .id;
+
+      bloc.add(ProfilesSelectionChanged(nodeAId));
+      await bloc.stream.firstWhere((s) => s.activeProfileId == nodeAId);
+      expect(bloc.state.pendingTunnelEffect, isNull);
+
+      // Updating only Node B does NOT emit a tunnel effect.
+      http.body =
+          'tf://a.example.com?displayName=Node+A&user=u&password=p1&psk=k1\n'
+          'tf://b.example.com?displayName=Node+B&user=u&password=p2-new&psk=k2';
+      bloc.add(
+        ProfilesSubscriptionSyncRequested(
+          subId,
+          trigger: SubscriptionSyncTrigger.manual,
+        ),
+      );
+      await bloc.stream.firstWhere(
+        (s) =>
+            (s.pendingSummaryEvent?.id ?? 0) >
+            addedState.pendingSummaryEvent!.id,
+      );
+      expect(bloc.state.pendingTunnelEffect, isNull);
+
+      // Updating active Node A's password emits reconnect.
+      final summaryIdBeforeNodeAChange = bloc.state.pendingSummaryEvent!.id;
+      http.body =
+          'tf://a.example.com?displayName=Node+A&user=u&password=p1-new&psk=k1\n'
+          'tf://b.example.com?displayName=Node+B&user=u&password=p2-new&psk=k2';
+      bloc.add(
+        ProfilesSubscriptionSyncRequested(
+          subId,
+          trigger: SubscriptionSyncTrigger.manual,
+        ),
+      );
+      final updatedActiveState = await bloc.stream.firstWhere(
+        (s) => (s.pendingSummaryEvent?.id ?? 0) > summaryIdBeforeNodeAChange,
+      );
+      expect(
+        updatedActiveState.pendingTunnelEffect?.action,
+        ActiveProfileTunnelAction.reconnect,
+      );
+      expect(updatedActiveState.pendingTunnelEffect?.row?.password, 'p1-new');
+
+      // Removing active Node A from subscription emits disconnect.
+      final effectIdBeforeRemove = updatedActiveState.pendingTunnelEffect!.id;
+      http.body =
+          'tf://b.example.com?displayName=Node+B&user=u&password=p2-new&psk=k2';
+      bloc.add(
+        ProfilesSubscriptionSyncRequested(
+          subId,
+          trigger: SubscriptionSyncTrigger.manual,
+        ),
+      );
+      final removedActiveState = await bloc.stream.firstWhere(
+        (s) => (s.pendingTunnelEffect?.id ?? 0) > effectIdBeforeRemove,
+      );
+      expect(
+        removedActiveState.pendingTunnelEffect?.action,
+        ActiveProfileTunnelAction.disconnect,
+      );
+
+      // Selecting Node B and deleting the subscription also emits disconnect.
+      final nodeBId = removedActiveState.profiles.single.id;
+      bloc.add(ProfilesSelectionChanged(nodeBId));
+      await bloc.stream.firstWhere((s) => s.activeProfileId == nodeBId);
+      final effectIdBeforeSubDelete = bloc.state.pendingTunnelEffect!.id;
+
+      bloc.add(ProfilesSubscriptionDeleteRequested(subId));
+      final deletedSubState = await bloc.stream.firstWhere(
+        (s) => (s.pendingTunnelEffect?.id ?? 0) > effectIdBeforeSubDelete,
+      );
+      expect(
+        deletedSubState.pendingTunnelEffect?.action,
+        ActiveProfileTunnelAction.disconnect,
+      );
+    },
+  );
 }

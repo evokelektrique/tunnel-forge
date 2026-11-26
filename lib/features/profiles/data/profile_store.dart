@@ -528,6 +528,7 @@ class ProfileStore {
     Profile profile, {
     required String password,
     required String psk,
+    bool selectAsLastProfile = true,
   }) {
     return _runSerialized(() async {
       final list = await loadProfiles();
@@ -544,7 +545,9 @@ class ProfileStore {
         profile.protocol.isPptp ? '' : psk,
       );
       await _saveProfileList(list);
-      await setLastProfileId(profile.id);
+      if (selectAsLastProfile) {
+        await setLastProfileId(profile.id);
+      }
     });
   }
 

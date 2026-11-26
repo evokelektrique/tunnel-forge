@@ -270,4 +270,206 @@ void main() {
       expect(args[VpnContract.argProfileName], 'Alpha');
     },
   );
+
+  testWidgets(
+    'editing active profile protocol while connected closes picker, updates badge, and reconnects',
+    (tester) async {
+      addTearDown(() async {
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.binding.setSurfaceSize(const Size(480, 1200));
+      final store = await createTwoProfileStore();
+
+      await tester.pumpWidget(
+        TunnelForgeApp(
+          profileStore: store,
+          connectivityChecker: _FakeConnectivityChecker(),
+          appVersionRepository: const _FakeAppVersionRepository(),
+          appUpdateRepository: const _FakeAppUpdateRepository(),
+          onboardingRepository: const _AcceptedOnboardingRepository(),
+          skipOnboardingDisclosure: true,
+        ),
+      );
+      await pumpStartup(tester);
+
+      await tester.tap(find.byKey(const Key('vpn_connect')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final firstConnect = vpnCalls
+          .where((c) => c.method == VpnContract.connect)
+          .single;
+      final firstAttemptId =
+          (firstConnect.arguments as Map)[VpnContract.argAttemptId] as String;
+
+      await simulateHostTunnelState(
+        tester,
+        VpnTunnelState.connected,
+        'VPN connected',
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // Open profile picker and edit the active profile (Alpha, L2TP -> PPTP).
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Profile actions').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit profile'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('protocol_dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('PPTP (root)').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Save'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // Picker closed and home badge updated to PPTP.
+      expect(find.text('Profiles'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('active_profile_protocol_badge')),
+          matching: find.text('PPTP'),
+        ),
+        findsOneWidget,
+      );
+
+      // Reconnect triggered with PPTP and a new attemptId.
+      final connectCalls = vpnCalls
+          .where((c) => c.method == VpnContract.connect)
+          .toList();
+      expect(connectCalls.length, 2);
+      final secondArgs = connectCalls.last.arguments as Map;
+      expect(secondArgs[VpnContract.argServer], 'alpha.example');
+      expect(secondArgs[VpnContract.argProtocol], VpnContract.protocolPptp);
+      expect(secondArgs[VpnContract.argPsk], isEmpty);
+      expect(secondArgs[VpnContract.argAttemptId], isNot(firstAttemptId));
+    },
+  );
+
+  testWidgets(
+    'creating or editing a non-active profile while connected leaves active profile and tunnel untouched',
+    (tester) async {
+      addTearDown(() async {
+        await tester.binding.setSurfaceSize(null);
+      });
+      await tester.binding.setSurfaceSize(const Size(480, 1200));
+      final store = await createTwoProfileStore();
+
+      await tester.pumpWidget(
+        TunnelForgeApp(
+          profileStore: store,
+          connectivityChecker: _FakeConnectivityChecker(),
+          appVersionRepository: const _FakeAppVersionRepository(),
+          appUpdateRepository: const _FakeAppUpdateRepository(),
+          onboardingRepository: const _AcceptedOnboardingRepository(),
+          skipOnboardingDisclosure: true,
+        ),
+      );
+      await pumpStartup(tester);
+
+      await tester.tap(find.byKey(const Key('vpn_connect')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await simulateHostTunnelState(
+        tester,
+        VpnTunnelState.connected,
+        'VPN connected',
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // Edit non-active profile Beta (p2).
+      await tester.tap(find.byKey(const Key('profile_picker_tile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Profile actions').at(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // Sheet remains open on list and Alpha (p1) stays active without reconnecting.
+      expect(find.text('Profiles'), findsOneWidget);
+      expect(await store.loadLastProfileId(), 'p1');
+      expect(vpnCalls.where((c) => c.method == VpnContract.connect).length, 1);
+
+      // Create a new profile while still connected.
+      await tester.tap(find.byTooltip('Add profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Create new profile'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (w) => w is TextField && w.decoration?.labelText == 'Server',
+        ),
+        'gamma.example',
+      );
+      await tester.pump();
+      await tester.tap(find.text('Save'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('Profiles'), findsOneWidget);
+      expect(await store.loadLastProfileId(), 'p1');
+      expect(vpnCalls.where((c) => c.method == VpnContract.connect).length, 1);
+      expect(
+        vpnCalls.where((c) => c.method == VpnContract.disconnect),
+        isEmpty,
+      );
+    },
+  );
+
+  testWidgets('deleting active profile while connected disconnects tunnel', (
+    tester,
+  ) async {
+    addTearDown(() async {
+      await tester.binding.setSurfaceSize(null);
+    });
+    await tester.binding.setSurfaceSize(const Size(480, 1200));
+    final store = await createTwoProfileStore();
+
+    await tester.pumpWidget(
+      TunnelForgeApp(
+        profileStore: store,
+        connectivityChecker: _FakeConnectivityChecker(),
+        appVersionRepository: const _FakeAppVersionRepository(),
+        appUpdateRepository: const _FakeAppUpdateRepository(),
+        onboardingRepository: const _AcceptedOnboardingRepository(),
+        skipOnboardingDisclosure: true,
+      ),
+    );
+    await pumpStartup(tester);
+
+    await tester.tap(find.byKey(const Key('vpn_connect')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await simulateHostTunnelState(
+      tester,
+      VpnTunnelState.connected,
+      'VPN connected',
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // Delete active profile Alpha (p1).
+    await tester.tap(find.byKey(const Key('profile_picker_tile')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Profile actions').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete profile'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(
+      vpnCalls.where((c) => c.method == VpnContract.disconnect),
+      hasLength(1),
+    );
+    expect(
+      vpnCalls.where((c) => c.method == VpnContract.connect),
+      hasLength(1),
+    );
+  });
 }

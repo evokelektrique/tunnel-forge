@@ -18,6 +18,7 @@ abstract class ProfilesRepository {
     Profile profile, {
     required String password,
     required String psk,
+    bool selectAsLastProfile = true,
   });
   Future<Profile> saveImportedProfile(
     ProfileTransferEnvelope envelope, {

@@ -258,7 +258,6 @@
   "connected": "Connected",
   "proxyReady": "Proxy ready",
   "working": "Working...",
-  "connectingTapCancel": "Connecting... tap to cancel",
   "waitingForNetwork": "Waiting for network",
   "waitingForNetworkBlocking": "Waiting for network · blocking internet",
   "reconnectingTapCancel": "Reconnecting... tap to cancel",

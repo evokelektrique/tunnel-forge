@@ -147,9 +147,7 @@ internal class ActiveNetworkMonitor(
                 network: Network,
                 networkCapabilities: NetworkCapabilities,
             ) {
-                if (!networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
-                    !networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                ) {
+                if (!isUsablePhysicalCapabilities(networkCapabilities)) {
                     return
                 }
                 knownNetworks[network.networkHandle] = network
@@ -169,17 +167,7 @@ internal class ActiveNetworkMonitor(
 
     fun start() {
         if (registered) return
-        val activeNetwork = connectivityManager.activeNetwork
-        if (activeNetwork != null) {
-            val caps = connectivityManager.getNetworkCapabilities(activeNetwork)
-            if (caps != null &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            ) {
-                knownNetworks[activeNetwork.networkHandle] = activeNetwork
-                tracker.onNetworkAvailable(activeNetwork.networkHandle, tierFor(caps))
-            }
-        }
+        seedExistingPhysicalNetworks()
         val request =
             NetworkRequest.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -188,6 +176,25 @@ internal class ActiveNetworkMonitor(
         connectivityManager.registerNetworkCallback(request, callback)
         registered = true
     }
+
+    @Suppress("DEPRECATION")
+    private fun seedExistingPhysicalNetworks() {
+        // Check allNetworks too because activeNetwork can still point to a tearing-down VPN during restart.
+        val candidates = LinkedHashSet<Network>()
+        connectivityManager.activeNetwork?.let(candidates::add)
+        connectivityManager.allNetworks.forEach(candidates::add)
+        for (network in candidates) {
+            val caps = connectivityManager.getNetworkCapabilities(network) ?: continue
+            if (isUsablePhysicalCapabilities(caps)) {
+                knownNetworks[network.networkHandle] = network
+                tracker.onNetworkAvailable(network.networkHandle, tierFor(caps))
+            }
+        }
+    }
+
+    private fun isUsablePhysicalCapabilities(caps: NetworkCapabilities): Boolean =
+        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
 
     fun activePhysicalNetwork(): Network? {
         val preferred = tracker.preferredHandle()?.let { knownNetworks[it] }
