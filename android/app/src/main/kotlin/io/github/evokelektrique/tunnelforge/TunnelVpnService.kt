@@ -9,12 +9,17 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
 import android.net.IpPrefix
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -25,6 +30,7 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1209,7 +1215,17 @@ class TunnelVpnService : VpnService() {
         val capturedAttemptId = synchronized(sessionLock) { activeAttemptId }
         val owner = capturedAttemptId.takeIf { it.isNotEmpty() }?.let(::nativeOwner)
         NativeTunnelSessions.shared.stopOwner(owner, reason = stopReason)
-        closeLiveDataplane()
+        try {
+            vpnDnsPacketBridge?.close()
+        } catch (_: Exception) {
+        }
+        vpnDnsPacketBridge = null
+        VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
+        stopLocalProxyRuntime()
+        // Detach TUN ownership immediately for future sessions, but defer closing the FD until the native worker exits
+        // so inbound TUN writes during shutdown do not fail with EBADF and abort L2TP/IKEv1 teardown.
+        val capturedTun = tunInterface
+        tunInterface = null
         val oldBlocking = blockingTunInterface
         blockingTunInterface = null
         closePfdQuietly(oldBlocking)
@@ -1224,18 +1240,22 @@ class TunnelVpnService : VpnService() {
         val finishThreadTeardown =
             Runnable {
                 try {
-                    if (capturedSetupThread != null && capturedSetupThread !== Thread.currentThread()) {
-                        capturedSetupThread.join(8_000)
+                    try {
+                        if (capturedSetupThread != null && capturedSetupThread !== Thread.currentThread()) {
+                            capturedSetupThread.join(8_000)
+                        }
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
                     }
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
-                try {
-                    if (capturedEngineThread != null && capturedEngineThread !== Thread.currentThread()) {
-                        capturedEngineThread.join(8_000)
+                    try {
+                        if (capturedEngineThread != null && capturedEngineThread !== Thread.currentThread()) {
+                            capturedEngineThread.join(8_000)
+                        }
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
                     }
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
+                } finally {
+                    closePfdQuietly(capturedTun)
                 }
                 synchronized(sessionLock) {
                     if (setupThread === capturedSetupThread) {
@@ -1287,6 +1307,97 @@ class TunnelVpnService : VpnService() {
         connectedEmitted.set(false)
         NativeTunnelSessions.shared.release(nativeOwner(attemptId), reason = "vpn loop finished")
         schedulePendingStopSelf()
+    }
+
+    private fun isEngineWorkerCurrent(worker: Thread): Boolean =
+        synchronized(sessionLock) { engineThread === worker }
+
+    private fun isVpnDefaultNetworkActive(
+        connectivityManager: ConnectivityManager? =
+            getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager,
+    ): Boolean {
+        val cm = connectivityManager ?: return true
+        val active = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(active) ?: return false
+        val lp = cm.getLinkProperties(active)
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+            !lp?.dnsServers.isNullOrEmpty()
+    }
+
+    private fun awaitVpnDefaultNetworkReady(
+        worker: Thread,
+        maxWaitMs: Long = VPN_NETWORK_READY_TIMEOUT_MS,
+    ) {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        if (isVpnDefaultNetworkActive(cm)) return
+        val attemptId = currentAttemptId()
+        val readyLatch = CountDownLatch(1)
+        val callback =
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    if (isVpnDefaultNetworkActive(cm)) readyLatch.countDown()
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    networkCapabilities: NetworkCapabilities,
+                ) {
+                    if (isVpnDefaultNetworkActive(cm)) readyLatch.countDown()
+                }
+
+                override fun onLinkPropertiesChanged(
+                    network: Network,
+                    linkProperties: LinkProperties,
+                ) {
+                    if (isVpnDefaultNetworkActive(cm)) readyLatch.countDown()
+                }
+            }
+        var registered = false
+        try {
+            cm.registerDefaultNetworkCallback(callback)
+            registered = true
+        } catch (e: Exception) {
+            AppLog.w(TAG, "${prefixAttempt(attemptId)}registerDefaultNetworkCallback failed: ${e.message}")
+            return
+        }
+        val startMs = SystemClock.elapsedRealtime()
+        val deadlineMs = startMs + maxWaitMs
+        try {
+            while (!isVpnDefaultNetworkActive(cm)) {
+                if (!running.get() || sessionStopRequested || !isEngineWorkerCurrent(worker)) {
+                    return
+                }
+                val remMs = deadlineMs - SystemClock.elapsedRealtime()
+                if (remMs <= 0L) {
+                    VpnTunnelEvents.emitEngineLog(
+                        Log.DEBUG,
+                        TAG,
+                        "${prefixAttempt(attemptId)}VPN default network settle timed out after ${maxWaitMs}ms; continuing",
+                    )
+                    return
+                }
+                if (readyLatch.await(minOf(remMs, 50L), TimeUnit.MILLISECONDS)) {
+                    break
+                }
+            }
+            val waitedMs = SystemClock.elapsedRealtime() - startMs
+            if (waitedMs > 0L) {
+                VpnTunnelEvents.emitEngineLog(
+                    Log.DEBUG,
+                    TAG,
+                    "${prefixAttempt(attemptId)}VPN default network active after ${waitedMs}ms",
+                )
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } finally {
+            if (registered) {
+                try {
+                    cm.unregisterNetworkCallback(callback)
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     private fun handleNativeTunnelReady(detail: String, worker: Thread) {
@@ -1608,6 +1719,7 @@ class TunnelVpnService : VpnService() {
         internal const val MANUAL_DNS_VIRTUAL_IPV4 = "198.18.0.1"
         internal const val DEFAULT_NATIVE_EXIT_STOPPED = 12
         internal const val PPTP_GRE_HELPER_LIB_NAME = "libpptp_gre_helper.so"
+        private const val VPN_NETWORK_READY_TIMEOUT_MS = 1_000L
 
         fun sanitizeMtu(value: Int): Int = value.coerceIn(MIN_TUN_MTU, MAX_TUN_MTU)
 
@@ -1811,7 +1923,17 @@ class TunnelVpnService : VpnService() {
                     ?.takeIf { it.isNotBlank() }
                     ?: "TUN interface ready; tunnel loop active"
             val worker = Thread.currentThread()
-            svc.mainHandler.post { svc.handleNativeTunnelReady(readyDetail, worker) }
+            if (svc.isVpnDefaultNetworkActive()) {
+                svc.mainHandler.post { svc.handleNativeTunnelReady(readyDetail, worker) }
+                return
+            }
+            Thread(
+                {
+                    svc.awaitVpnDefaultNetworkReady(worker = worker)
+                    svc.mainHandler.post { svc.handleNativeTunnelReady(readyDetail, worker) }
+                },
+                "vpn-net-ready",
+            ).apply { isDaemon = true }.start()
         }
 
         @JvmStatic

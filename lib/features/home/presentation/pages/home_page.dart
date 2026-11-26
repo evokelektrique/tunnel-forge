@@ -347,6 +347,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       context.read<ConnectivityBloc>().add(
         ConnectivityRunRequested(
           _connectivityPingRequest(settingsState, current),
+          retryOnTransientFailure: true,
         ),
       );
     } else if (_lastTunnelUp && !current.tunnelUp) {

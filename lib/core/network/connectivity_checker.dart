@@ -105,6 +105,18 @@ class ConnectivityPingRequest extends Equatable {
   final String? proxyUsername;
   final String? proxyPassword;
 
+  ConnectivityPingRequest copyWith({int? timeoutMs}) {
+    return ConnectivityPingRequest._(
+      url: url,
+      timeoutMs: timeoutMs ?? this.timeoutMs,
+      route: route,
+      proxyHost: proxyHost,
+      proxyPort: proxyPort,
+      proxyUsername: proxyUsername,
+      proxyPassword: proxyPassword,
+    );
+  }
+
   @override
   List<Object?> get props => [
     url,

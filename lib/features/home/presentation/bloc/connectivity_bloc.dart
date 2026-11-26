@@ -5,6 +5,8 @@ import 'package:equatable/equatable.dart';
 
 import 'package:tunnel_forge/core/network/connectivity_checker.dart';
 import 'package:tunnel_forge/features/home/presentation/widgets/connection_panel.dart';
+import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
+import 'package:tunnel_forge/l10n/generated/app_localizations_en.dart';
 import '../../../home/domain/log_redaction.dart';
 import '../../../home/domain/home_repositories.dart';
 import 'package:tunnel_forge/core/logging/log_entry.dart';
@@ -21,12 +23,16 @@ final class ConnectivityResetRequested extends ConnectivityEvent {
 }
 
 final class ConnectivityRunRequested extends ConnectivityEvent {
-  const ConnectivityRunRequested(this.request);
+  const ConnectivityRunRequested(
+    this.request, {
+    this.retryOnTransientFailure = false,
+  });
 
   final ConnectivityPingRequest request;
+  final bool retryOnTransientFailure;
 
   @override
-  List<Object?> get props => [request];
+  List<Object?> get props => [request, retryOnTransientFailure];
 }
 
 class ConnectivityState extends Equatable {
@@ -67,14 +73,23 @@ class ConnectivityState extends Equatable {
 }
 
 class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
-  ConnectivityBloc(this._connectivityRepository, this._logsRepository)
-    : super(const ConnectivityState()) {
+  ConnectivityBloc(
+    this._connectivityRepository,
+    this._logsRepository, {
+    Duration retryDelay = defaultRetryDelay,
+  }) : _retryDelay = retryDelay,
+       super(const ConnectivityState()) {
     on<ConnectivityResetRequested>(_onResetRequested);
     on<ConnectivityRunRequested>(_onRunRequested);
   }
 
+  static const Duration defaultRetryDelay = Duration(milliseconds: 250);
+  static const int _initialFastTimeoutMs = 2500;
+  static const int _splitTimeoutThresholdMs = 3000;
+
   final ConnectivityRepository _connectivityRepository;
   final LogsRepository _logsRepository;
+  final Duration _retryDelay;
   Completer<void>? _activeCancel;
   int _runId = 0;
 
@@ -102,6 +117,42 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
     emit(const ConnectivityState());
   }
 
+  ConnectivityPingRequest _initialAttemptRequest(
+    ConnectivityPingRequest request,
+  ) {
+    final normalizedTimeoutMs = ConnectivityCheckSettings.normalizeTimeoutMs(
+      request.timeoutMs,
+    );
+    if (normalizedTimeoutMs >= _splitTimeoutThresholdMs) {
+      return request.copyWith(timeoutMs: _initialFastTimeoutMs);
+    }
+    return request;
+  }
+
+  bool _shouldRetryTransientFailure(
+    ConnectivityPingResult result,
+    ConnectivityPingRequest request,
+  ) {
+    if (result.statusCode != null || result.error == 'Cancelled') {
+      return false;
+    }
+    return ConnectivityCheckSettings.validateUrl(
+          request.url,
+          l10n: AppLocalizationsEn(),
+        ) ==
+        null;
+  }
+
+  Future<ConnectivityPingResult?> _executePingOnce(
+    ConnectivityPingRequest request,
+    Completer<void> cancel,
+  ) {
+    return Future.any<ConnectivityPingResult?>([
+      _connectivityRepository.ping(request, cancelSignal: cancel.future),
+      cancel.future.then<ConnectivityPingResult?>((_) => null),
+    ]);
+  }
+
   Future<void> _onRunRequested(
     ConnectivityRunRequested event,
     Emitter<ConnectivityState> emit,
@@ -125,15 +176,42 @@ class ConnectivityBloc extends Bloc<ConnectivityEvent, ConnectivityState> {
       tag: 'connectivity',
     );
 
-    final ConnectivityPingResult? result;
+    ConnectivityPingResult? result;
     try {
-      result = await Future.any<ConnectivityPingResult?>([
-        _connectivityRepository.ping(
-          event.request,
-          cancelSignal: cancel.future,
-        ),
-        cancel.future.then<ConnectivityPingResult?>((_) => null),
-      ]);
+      final firstRequest = event.retryOnTransientFailure
+          ? _initialAttemptRequest(event.request)
+          : event.request;
+      result = await _executePingOnce(firstRequest, cancel);
+      if (cancel.isCompleted ||
+          runId != _runId ||
+          emit.isDone ||
+          result == null) {
+        return;
+      }
+      if ((!result.reachable || result.latencyMs == null) &&
+          event.retryOnTransientFailure &&
+          _shouldRetryTransientFailure(result, event.request)) {
+        final reason = result.error?.trim();
+        _log(
+          LogLevel.debug,
+          'Connectivity check transient failure'
+          '${reason == null || reason.isEmpty ? '' : ' (${redactLogMessage(reason)})'}'
+          '; retrying',
+          tag: 'connectivity',
+        );
+        if (_retryDelay > Duration.zero) {
+          await Future.any<void>([
+            Future<void>.delayed(_retryDelay),
+            cancel.future,
+          ]);
+        } else {
+          await Future<void>.delayed(Duration.zero);
+        }
+        if (cancel.isCompleted || runId != _runId || emit.isDone) {
+          return;
+        }
+        result = await _executePingOnce(event.request, cancel);
+      }
     } finally {
       if (identical(_activeCancel, cancel)) {
         _activeCancel = null;
