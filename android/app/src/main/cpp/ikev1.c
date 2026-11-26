@@ -622,6 +622,7 @@ static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen
     long long now_ms = ike_now_ms();
     long long total_rem = max_total_ms - (now_ms - start_ms);
     long long settle_rem = idle_settle_ms - (now_ms - last_qm3_ms);
+    /* Bound each wait by both total deadline and idle-settle window so silent peers don't stall L2TP. */
     long long rem_ms = total_rem < settle_rem ? total_rem : settle_rem;
     if (rem_ms <= 0ll)
       break;
@@ -676,16 +677,19 @@ static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen
       p += 4;
       nl -= 4;
     }
+    /* Drop truncated frames and non-ISAKMP 1.0 packets that may share the NAT-T socket. */
     if (nl < 28)
       continue;
     if (p[17] != 0x10)
       continue;
 
+    /* Informational reply (e.g. Initial-Contact/Connected) confirms peer accepted QM3. */
     if (p[18] == IKE_EXCH_INFO) {
       ike_log_isakmp_summary("Quick Mode msg3 peer reply (Informational)", p, (int)nl);
       return 0;
     }
 
+    /* Resend HASH(3) on duplicate QM2 (Libreswan retransmit) up to cap so peer exits Quick Mode. */
     if (p[18] == IKE_EXCH_QUICK && (p[19] & IKE_FLAG_ENC) && util_read_be32(p + 20) == qm_mid) {
       if (ike_is_duplicate_qm2_retransmit(p1_aes, aeskey, deskey, qm1_tail, p, (int)nl, qm_mid)) {
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,

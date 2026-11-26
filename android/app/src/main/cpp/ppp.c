@@ -939,14 +939,6 @@ static int chap_md5_response(const uint8_t chap_id, const char *password, const 
   return 0;
 }
 
-/**
- * Complete MS-CHAPv2 authentication after LCP (CHAP challenge/response/success or failure).
- *
- * Waits for CHAP Challenge (code 1), builds Response (code 2) with MS-CHAPv2 response blob, then polls for
- * Success (3) or Failure (4). Failure parses optional peer text for diagnostics.
- *
- * @return 0 on Success; -1 on I/O error, timeout, or Failure.
- */
 static int chap_result_code(const uint8_t *p, size_t len) {
   if (len < 6 || util_read_be16(p) != PROTO_CHAP)
     return 0;
@@ -978,6 +970,14 @@ static int ppp_handle_lcp_terminate_in_auth(ppp_transport_t *transport, const ui
   return 0;
 }
 
+/**
+ * Complete MS-CHAPv2 authentication after LCP (CHAP challenge/response/success or failure).
+ *
+ * Waits for CHAP Challenge (code 1), builds Response (code 2) with MS-CHAPv2 response blob, then polls for
+ * Success (3) or Failure (4). Failure parses optional peer text for diagnostics.
+ *
+ * @return 0 on Success; -1 on I/O error, timeout, or Failure.
+ */
 static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *user, const char *password,
                                        ppp_session_t *ppp) {
   uint8_t in[4096];
@@ -995,6 +995,7 @@ static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *u
     const uint8_t *p = in;
     size_t len = (size_t)n;
     ppp_strip(in, (size_t)n, &p, &len);
+    /* Abort immediately if peer tears down LCP during auth instead of waiting for timeout. */
     if (ppp_handle_lcp_terminate_in_auth(transport, p, len))
       return -1;
     if (len < 8 || util_read_be16(p) != PROTO_CHAP || p[2] != 1)
@@ -1020,6 +1021,7 @@ static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *u
       return -1;
     }
 
+    /* Derive MPPE key seed before zeroizing password materials, only when MPPE is enabled. */
     uint8_t hash_hash[16];
     int have_hash_hash = (transport->enable_mppe && transport->mppe_mode != TUNNEL_MPPE_OFF && ppp != NULL &&
                           ppp_mschapv2_nt_password_hash_hash(password, hash_hash) == 0);
@@ -1065,6 +1067,7 @@ static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *u
         mbedtls_platform_zeroize(hash_hash, sizeof(hash_hash));
         return -1;
       }
+      /* Retransmit the current Response on recv timeout because the peer may have dropped it. */
       if (n < 0) {
         if (ppp_transport_send(transport, out, o) < 0) {
           mbedtls_platform_zeroize(hash_hash, sizeof(hash_hash));
@@ -1080,6 +1083,7 @@ static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *u
         mbedtls_platform_zeroize(hash_hash, sizeof(hash_hash));
         return -1;
       }
+      /* Peer issued a fresh Challenge ID; discard old MPPE seed and restart from handle_challenge. */
       if (len >= 7 && util_read_be16(p) == PROTO_CHAP && p[2] == 1 && chap_challenge_valid(p, len, 0) &&
           p[3] != chap_id) {
         mbedtls_platform_zeroize(hash_hash, sizeof(hash_hash));
@@ -1092,6 +1096,7 @@ static int ppp_auth_mschapv2_transport(ppp_transport_t *transport, const char *u
         }
         continue;
       }
+      /* Zeroize MPPE hash_hash on every exit path once response/key derivation completes. */
       if (chap_result_code(p, len) == 3) {
         ppp_log_rx_summary(p, len, "auth-mschapv2-success");
         if (have_hash_hash && ppp != NULL) {
@@ -1147,6 +1152,7 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
     const uint8_t *p = in;
     size_t len = (size_t)n;
     ppp_strip(in, (size_t)n, &p, &len);
+    /* Abort auth early if peer sends LCP Terminate-Request instead of CHAP frames. */
     if (ppp_handle_lcp_terminate_in_auth(transport, p, len))
       return -1;
     if (len < 8 || util_read_be16(p) != PROTO_CHAP || p[2] != 1)
@@ -1157,6 +1163,7 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
     ppp_log_rx_summary(p, len, "auth-chap-md5-challenge");
     uint8_t chap_id = p[3];
     uint8_t vs = p[6];
+    /* CHAP-MD5 allows any non-zero value_size (mschap=0), unlike MS-CHAPv2's fixed 16 bytes. */
     if (!chap_challenge_valid(p, len, 0)) {
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "CHAP malformed challenge length=%u value_size=%u frame=%zu",
                         (unsigned)util_read_be16(p + 4), (unsigned)vs, len);
@@ -1193,6 +1200,7 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
     if (ppp_transport_send(transport, out, o) < 0)
       return -1;
 
+    /* Poll for CHAP Success (3) or Failure (4) and retransmit Response on timeout. */
     for (int j = 0; j < 16; j++) {
       if (ppp_now_ms() >= deadline)
         return -1;
@@ -1210,9 +1218,11 @@ static int ppp_auth_chap_md5_transport(ppp_transport_t *transport, const char *u
       ppp_log_rx_summary(p, len, "auth-result");
       if (ppp_handle_lcp_terminate_in_auth(transport, p, len))
         return -1;
+      /* Restart challenge processing if peer sends a new Challenge with a different ID. */
       if (len >= 7 && util_read_be16(p) == PROTO_CHAP && p[2] == 1 && chap_challenge_valid(p, len, 0) &&
           p[3] != chap_id)
         goto handle_challenge;
+      /* Resend the same Response when peer repeats the current Challenge ID after packet loss. */
       if (chap_repeated_challenge(p, len, chap_id)) {
         if (ppp_transport_send(transport, out, o) < 0)
           return -1;
