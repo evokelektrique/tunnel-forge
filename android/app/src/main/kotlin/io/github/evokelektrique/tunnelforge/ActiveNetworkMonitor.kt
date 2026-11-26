@@ -9,6 +9,8 @@ import android.net.NetworkRequest
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 internal enum class NetworkTransitionEvent {
     NONE,
@@ -132,6 +134,9 @@ internal class ActiveNetworkMonitor(
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val tracker = PhysicalNetworkTracker()
     private val knownNetworks = ConcurrentHashMap<Long, Network>()
+    private val initialSeedLatch = CountDownLatch(1)
+    @Volatile
+    private var seeding = false
     @Volatile
     private var registered = false
 
@@ -140,7 +145,11 @@ internal class ActiveNetworkMonitor(
             override fun onAvailable(network: Network) {
                 knownNetworks[network.networkHandle] = network
                 val tier = tierFor(connectivityManager.getNetworkCapabilities(network))
-                dispatch(tracker.onNetworkAvailable(network.networkHandle, tier))
+                val event = tracker.onNetworkAvailable(network.networkHandle, tier)
+                initialSeedLatch.countDown()
+                if (!seeding) {
+                    dispatch(event)
+                }
             }
 
             override fun onCapabilitiesChanged(
@@ -152,7 +161,11 @@ internal class ActiveNetworkMonitor(
                 }
                 knownNetworks[network.networkHandle] = network
                 val tier = tierFor(networkCapabilities)
-                dispatch(tracker.onCapabilitiesChanged(network.networkHandle, tier))
+                val event = tracker.onCapabilitiesChanged(network.networkHandle, tier)
+                initialSeedLatch.countDown()
+                if (!seeding) {
+                    dispatch(event)
+                }
             }
 
             override fun onLost(network: Network) {
@@ -167,7 +180,8 @@ internal class ActiveNetworkMonitor(
 
     fun start() {
         if (registered) return
-        seedExistingPhysicalNetworks()
+        seeding = true
+        seedActivePhysicalNetwork()
         val request =
             NetworkRequest.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -175,20 +189,23 @@ internal class ActiveNetworkMonitor(
                 .build()
         connectivityManager.registerNetworkCallback(request, callback)
         registered = true
+        // Wait briefly for initial callback when activeNetwork is still a tearing-down VPN or null.
+        if (!tracker.hasUsableNetwork()) {
+            try {
+                initialSeedLatch.await(150, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        seeding = false
     }
 
-    @Suppress("DEPRECATION")
-    private fun seedExistingPhysicalNetworks() {
-        // Check allNetworks too because activeNetwork can still point to a tearing-down VPN during restart.
-        val candidates = LinkedHashSet<Network>()
-        connectivityManager.activeNetwork?.let(candidates::add)
-        connectivityManager.allNetworks.forEach(candidates::add)
-        for (network in candidates) {
-            val caps = connectivityManager.getNetworkCapabilities(network) ?: continue
-            if (isUsablePhysicalCapabilities(caps)) {
-                knownNetworks[network.networkHandle] = network
-                tracker.onNetworkAvailable(network.networkHandle, tierFor(caps))
-            }
+    private fun seedActivePhysicalNetwork() {
+        val network = connectivityManager.activeNetwork ?: return
+        val caps = connectivityManager.getNetworkCapabilities(network) ?: return
+        if (isUsablePhysicalCapabilities(caps)) {
+            knownNetworks[network.networkHandle] = network
+            tracker.onNetworkAvailable(network.networkHandle, tierFor(caps))
         }
     }
 
