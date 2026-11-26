@@ -40,6 +40,7 @@ int tf_win32_socketpair(int domain, int type, int protocol, int sv[2]);
 int tf_win32_bind(int fd, const struct sockaddr *addr, socklen_t addrlen);
 int tf_win32_connect(int fd, const struct sockaddr *addr, socklen_t addrlen);
 int tf_win32_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen);
+int tf_win32_getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen);
 ssize_t tf_win32_send(int fd, const void *buf, size_t len, int flags);
 ssize_t tf_win32_sendto(int fd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr,
                         socklen_t addrlen);
@@ -53,6 +54,7 @@ int tf_win32_close(int fd);
 #define bind tf_win32_bind
 #define connect tf_win32_connect
 #define getsockname tf_win32_getsockname
+#define getsockopt tf_win32_getsockopt
 #define send tf_win32_send
 #define sendto tf_win32_sendto
 #define recv tf_win32_recv

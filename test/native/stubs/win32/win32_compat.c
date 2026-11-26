@@ -222,6 +222,32 @@ int tf_win32_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen) {
   return 0;
 }
 
+int tf_win32_getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen) {
+  SOCKET s = tf_win32_lookup_socket(fd);
+  if (s == INVALID_SOCKET) {
+    errno = EBADF;
+    return -1;
+  }
+  int len = optlen ? (int)(*optlen) : 0;
+  int rc = getsockopt(s, level, optname, (char *)optval, optlen ? &len : NULL);
+  if (rc != 0) {
+    errno = tf_win32_map_wsa_error(WSAGetLastError());
+    return -1;
+  }
+  if (optlen) {
+    *optlen = (socklen_t)len;
+  }
+  if (level == SOL_SOCKET && optname == SO_ERROR && optval != NULL && len >= (int)sizeof(int)) {
+    int wsa_err = 0;
+    memcpy(&wsa_err, optval, sizeof(int));
+    if (wsa_err != 0) {
+      int mapped = tf_win32_map_wsa_error(wsa_err);
+      memcpy(optval, &mapped, sizeof(int));
+    }
+  }
+  return 0;
+}
+
 ssize_t tf_win32_send(int fd, const void *buf, size_t len, int flags) {
   SOCKET s = tf_win32_lookup_socket(fd);
   if (s == INVALID_SOCKET) {
