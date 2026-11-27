@@ -34,6 +34,7 @@ import io.netty.handler.codec.socksx.v5.Socks5CommandRequest
 import io.netty.handler.codec.socksx.v5.Socks5CommandStatus
 import io.netty.handler.codec.socksx.v5.Socks5CommandType
 import io.netty.handler.codec.socksx.v5.Socks5InitialRequest
+import io.netty.handler.codec.socksx.v5.Socks5Message
 import io.netty.handler.codec.socksx.v5.Socks5AuthMethod
 import io.netty.handler.codec.socksx.v5.Socks5CommandRequestDecoder
 import io.netty.handler.codec.socksx.v5.Socks5InitialRequestDecoder
@@ -164,8 +165,12 @@ class NettyProxyServerRuntime(
     }
 
     private inner class HttpConnectHandler : SimpleChannelInboundHandler<FullHttpRequest>() {
+        private var handledRequest = false
+
         override fun channelRead0(ctx: ChannelHandlerContext, request: FullHttpRequest) {
+            handledRequest = true
             if (request.decoderResult().isFailure) {
+                warn("netty proxy reject proto=http-proxy reason=malformed-request")
                 writeHttpError(ctx, HttpResponseStatus.BAD_REQUEST, "Malformed HTTP proxy request.")
                 return
             }
@@ -182,15 +187,18 @@ class NettyProxyServerRuntime(
                 return
             }
             if (!request.method().name().equals("CONNECT", ignoreCase = true)) {
+                warn("netty proxy reject proto=http-proxy reason=method-not-supported method=${request.method().name().toLogToken()}")
                 writeHttpError(ctx, HttpResponseStatus.NOT_IMPLEMENTED, "Only HTTP CONNECT is supported by the Netty proxy frontend.")
                 return
             }
             val target = parseConnectTarget(request.uri())
             if (target == null) {
+                warn("netty proxy reject proto=http-connect reason=invalid-target")
                 writeHttpError(ctx, HttpResponseStatus.BAD_REQUEST, "Invalid CONNECT target.")
                 return
             }
             if (target.first.isUnsupportedIpv6Target()) {
+                warn("netty proxy reject proto=http-connect reason=ipv6-unsupported target=${target.first}:${target.second}")
                 writeHttpError(ctx, HttpResponseStatus.NOT_IMPLEMENTED, "IPv6 targets are not supported in proxy mode.")
                 return
             }
@@ -205,6 +213,13 @@ class NettyProxyServerRuntime(
                     ByteArray(0)
                 }
             openTunnel(ctx, connectRequest, httpConnect = true, initialClientBytes = initialBytes)
+        }
+
+        override fun channelInactive(ctx: ChannelHandlerContext) {
+            if (!handledRequest) {
+                debug("netty proxy client closed before request proto=http ${runtimeDiagnostics()}")
+            }
+            ctx.fireChannelInactive()
         }
 
         override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
@@ -226,11 +241,18 @@ class NettyProxyServerRuntime(
 
     private inner class SocksConnectHandler : SimpleChannelInboundHandler<Any>() {
         private var authenticated = !config.requiresProxyAuth()
+        private var handledCommand = false
 
         override fun channelRead0(ctx: ChannelHandlerContext, msg: Any) {
+            if (msg is Socks5Message && msg.decoderResult().isFailure) {
+                warn("netty proxy reject proto=socks5 reason=malformed-request")
+                ctx.close()
+                return
+            }
             when (msg) {
                 is Socks5InitialRequest -> {
                     if (msg.version() != SocksVersion.SOCKS5) {
+                        warn("netty proxy reject proto=socks5 reason=invalid-version")
                         ctx.close()
                         return
                     }
@@ -268,11 +290,14 @@ class NettyProxyServerRuntime(
                     }
                 }
                 is Socks5CommandRequest -> {
+                    handledCommand = true
                     if (!authenticated) {
+                        warn("netty proxy reject proto=socks5 reason=proxy-auth-required")
                         ctx.close()
                         return
                     }
                     if (msg.type() != Socks5CommandType.CONNECT) {
+                        warn("netty proxy reject proto=socks5 reason=unsupported-command cmd=${msg.type()}")
                         ctx.writeAndFlush(
                             DefaultSocks5CommandResponse(
                                 Socks5CommandStatus.COMMAND_UNSUPPORTED,
@@ -282,6 +307,7 @@ class NettyProxyServerRuntime(
                         return
                     }
                     if (msg.dstAddr().isUnsupportedIpv6Target()) {
+                        warn("netty proxy reject proto=socks5-connect reason=ipv6-unsupported target=${msg.dstAddr()}:${msg.dstPort()}")
                         ctx.writeAndFlush(
                             DefaultSocks5CommandResponse(
                                 Socks5CommandStatus.HOST_UNREACHABLE,
@@ -290,10 +316,22 @@ class NettyProxyServerRuntime(
                         ).addListener(ChannelFutureListener.CLOSE)
                         return
                     }
-                    openTunnel(ctx, ProxyConnectRequest(msg.dstAddr(), msg.dstPort(), "socks5-connect"), httpConnect = false)
+                    val request = ProxyConnectRequest(msg.dstAddr(), msg.dstPort(), "socks5-connect")
+                    debug("netty proxy request proto=socks5-connect target=${request.host}:${request.port} ${runtimeDiagnostics()}")
+                    openTunnel(ctx, request, httpConnect = false)
                 }
-                else -> ctx.close()
+                else -> {
+                    warn("netty proxy reject proto=socks5 reason=unexpected-message")
+                    ctx.close()
+                }
             }
+        }
+
+        override fun channelInactive(ctx: ChannelHandlerContext) {
+            if (!handledCommand) {
+                debug("netty proxy client closed before request proto=socks5 ${runtimeDiagnostics()}")
+            }
+            ctx.fireChannelInactive()
         }
 
         override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
@@ -348,6 +386,7 @@ class NettyProxyServerRuntime(
                         )
                         return@runOnChannelExecutor
                     }
+                    ctx.channel().config().isAutoRead = false
                     val responseFuture =
                         ctx.writeAndFlush(DefaultSocks5CommandResponse(Socks5CommandStatus.SUCCESS, Socks5AddressType.IPv4))
                     responseFuture.addListener { future ->

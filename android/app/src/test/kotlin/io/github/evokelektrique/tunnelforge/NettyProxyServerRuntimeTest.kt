@@ -3,6 +3,7 @@ package io.github.evokelektrique.tunnelforge
 import android.util.Log
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
@@ -12,6 +13,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -56,12 +58,29 @@ class NettyProxyServerRuntimeTest {
     }
 
     @Test
-    fun socksConnectUsesNettyFrontendTransport() {
+    fun socksConnectRelaysImmediatePayloadAndLogsRequest() {
         val requests = CopyOnWriteArrayList<ProxyConnectRequest>()
+        val debugLogs = CopyOnWriteArrayList<String>()
+        val payload = byteArrayOf(0x05, 0x01, 0x00, 0x04, 0x42)
+        val written = ByteArrayOutputStream()
+        val payloadReceived = CountDownLatch(1)
         val runtime =
             NettyProxyServerRuntime(
                 config = ProxyRuntimeConfig(httpEnabled = false, httpPort = 8080, socksEnabled = true, socksPort = findFreePort()),
-                transport = recordingTransport(requests),
+                transport =
+                    object : ProxyTransport {
+                        override fun openTcpSession(request: ProxyConnectRequest): ProxyTransportSession {
+                            requests.add(request)
+                            return object : ProxyTransportSession by inertSession(request) {
+                                override fun writeClientBytes(bytes: ByteArray, timeoutMs: Int): Int {
+                                    written.write(bytes)
+                                    if (written.size() >= payload.size) payloadReceived.countDown()
+                                    return bytes.size
+                                }
+                            }
+                        }
+                    },
+                levelLogger = { level, message -> if (level == Log.DEBUG) debugLogs.add(message) },
             )
         runtime.start()
         try {
@@ -80,11 +99,64 @@ class NettyProxyServerRuntimeTest {
                 output.write(byteArrayOf(0x01, 0xbb.toByte()))
                 output.flush()
 
-                assertEquals(0x05, input.read())
-                assertEquals(0x00, input.read())
+                assertArrayEquals(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0), input.readNBytes(10))
+                output.write(payload)
+                output.flush()
+                assertTrue(payloadReceived.await(2, TimeUnit.SECONDS))
+                assertArrayEquals(payload, written.toByteArray())
             }
             assertEquals(1, requests.size)
             assertEquals(ProxyConnectRequest("example.com", 443, "socks5-connect"), requests.first())
+            assertTrue(debugLogs.any { it.contains("proxy request proto=socks5-connect") && it.contains("target=example.com:443") })
+        } finally {
+            runtime.stop()
+        }
+    }
+
+    @Test
+    fun nettyFrontendRejectsUnsupportedRequestsAndMalformedSocksFrames() {
+        val requests = CopyOnWriteArrayList<ProxyConnectRequest>()
+        val warnings = CopyOnWriteArrayList<String>()
+        val runtime =
+            NettyProxyServerRuntime(
+                config = ProxyRuntimeConfig(httpEnabled = true, httpPort = findFreePort(), socksEnabled = true, socksPort = findFreePort()),
+                transport = recordingTransport(requests),
+                levelLogger = { level, message -> if (level == Log.WARN) warnings.add(message) },
+            )
+        runtime.start()
+        try {
+            for (request in listOf("GET http://example.com/" to "method-not-supported", "CONNECT [2001:db8::1]:443" to "ipv6-unsupported")) {
+                val (requestLine, reason) = request
+                Socket("127.0.0.1", runtime.exposureInfo().httpPort).use { socket ->
+                    socket.soTimeout = 2_000
+                    socket.getOutputStream().write("$requestLine HTTP/1.1\r\nHost: example.com\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+                    assertTrue(readHeaders(BufferedInputStream(socket.getInputStream())).startsWith("HTTP/1.1 501"))
+                }
+                assertTrue(warnings.any { it.contains("proto=http-") && it.contains("reason=$reason") })
+            }
+
+            val socksRequests =
+                listOf(
+                    Triple(byteArrayOf(0x05, 0x03, 0, 0x01, 0, 0, 0, 0, 0, 0), 0x07, "unsupported-command"),
+                    Triple(byteArrayOf(0x05, 0x01, 0, 0x04) + ByteArray(15) + byteArrayOf(1, 1, 0xbb.toByte()), 0x04, "ipv6-unsupported"),
+                    Triple(byteArrayOf(0x05, 0x01, 0, 0x09), null, "malformed-request"),
+                )
+            for ((request, status, reason) in socksRequests) {
+                Socket("127.0.0.1", runtime.exposureInfo().socksPort).use { socket ->
+                    socket.soTimeout = 2_000
+                    val input = socket.getInputStream()
+                    val output = socket.getOutputStream()
+                    output.write(byteArrayOf(0x05, 0x01, 0x00))
+                    assertArrayEquals(byteArrayOf(0x05, 0x00), input.readNBytes(2))
+                    output.write(request)
+                    if (status != null) {
+                        assertArrayEquals(byteArrayOf(0x05, status.toByte(), 0, 0x01, 0, 0, 0, 0, 0, 0), input.readNBytes(10))
+                    }
+                    assertEquals(-1, input.read())
+                }
+                assertTrue(warnings.any { it.contains("proto=socks5") && it.contains("reason=$reason") })
+            }
+            assertTrue(requests.isEmpty())
         } finally {
             runtime.stop()
         }
