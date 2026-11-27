@@ -325,6 +325,10 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
     return TUNNEL_EXIT_ROOT_DENIED;
   }
 
+  drain_helper_stderr(r->err_fd, stderr_buf, sizeof(stderr_buf));
+  if (stderr_buf[0] != '\0')
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "pptp root: GRE helper socket option warning: %s", stderr_buf);
+
   /* Phase 9: a non-OK status means the raw GRE socket failed; EPERM/EACCES means root was denied. */
   uint32_t helper_status = util_read_be32(reply + 4u);
   uint32_t helper_errno = util_read_be32(reply + 8u);

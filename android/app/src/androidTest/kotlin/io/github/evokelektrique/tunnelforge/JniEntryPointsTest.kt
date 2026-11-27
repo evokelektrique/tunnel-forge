@@ -26,6 +26,14 @@ class JniEntryPointsTest {
         protect.isAccessible = true
         assertTrue(protect.invoke(null, -1) is Boolean)
 
+        val bind =
+            ProxyTunnelService::class.java.getDeclaredMethod(
+                "bindSocketToPhysicalNetwork",
+                Int::class.javaPrimitiveType,
+            )
+        assertTrue(Modifier.isStatic(bind.modifiers))
+        assertEquals(false, bind.invoke(null, -1))
+
         val ready =
             TunnelVpnService::class.java.getDeclaredMethod(
                 "onNativeTunnelReady",

@@ -69,10 +69,9 @@
 #define TUNNEL_FAILURE_PPTP_CALL 7
 #define TUNNEL_FAILURE_PPTP_CDN 8
 
-/** VpnService.protect(fd) when protection is enabled; no-op if disabled or JNI missing. */
+/** Require VPN protection in VPN mode and attempt physical network binding in proxy mode. */
 int util_protect_fd(int fd);
 void engine_set_socket_protection_enabled(int enabled);
-int engine_is_socket_protection_enabled(void);
 void engine_set_pptp_runtime_config(const char *helper_path, const char *bind_iface);
 
 int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char *password, const char *psk,

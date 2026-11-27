@@ -13,6 +13,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -186,11 +187,12 @@ int main(void) {
   if ((flags & HELPER_FLAG_PROTECT_VPN) != 0u) {
     if (fwmark != 0u) {
       int mark = (int)fwmark;
-      (void)setsockopt(gre_fd, SOL_SOCKET, SO_MARK, &mark, (socklen_t)sizeof(mark));
+      if (setsockopt(gre_fd, SOL_SOCKET, SO_MARK, &mark, (socklen_t)sizeof(mark)) != 0)
+        (void)dprintf(STDERR_FILENO, "SO_MARK errno=%d\n", errno);
     }
-    if (helper_is_safe_iface(bind_iface)) {
-      (void)setsockopt(gre_fd, SOL_SOCKET, SO_BINDTODEVICE, bind_iface, (socklen_t)(strlen(bind_iface) + 1u));
-    }
+    if (helper_is_safe_iface(bind_iface) &&
+        setsockopt(gre_fd, SOL_SOCKET, SO_BINDTODEVICE, bind_iface, (socklen_t)(strlen(bind_iface) + 1u)) != 0)
+      (void)dprintf(STDERR_FILENO, "SO_BINDTODEVICE errno=%d\n", errno);
   }
 
   struct sockaddr_in peer;

@@ -452,8 +452,8 @@ static int tunnel_negotiate_pptp(const char *server, const char *user, const cha
     return TUNNEL_EXIT_PPTP_FAILED;
   }
 
-  int protect_vpn = engine_is_socket_protection_enabled();
-  int root_rc = pptp_start_gre_helper(&g_state.pptp, helper_path, protect_vpn, bind_iface);
+  /* The helper runs as UID 0, so third-party VPNs can capture its GRE traffic in proxy mode. */
+  int root_rc = pptp_start_gre_helper(&g_state.pptp, helper_path, 1, bind_iface);
   if (root_rc != TUNNEL_EXIT_OK) {
     pptp_close(&g_state.pptp, 1);
     return root_rc;

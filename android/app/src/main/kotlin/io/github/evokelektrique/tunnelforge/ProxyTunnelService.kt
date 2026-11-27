@@ -608,7 +608,7 @@ class ProxyTunnelService : Service() {
             )
             if (protocol == VpnContract.PROTOCOL_PPTP) {
                 val helperPath = File(applicationInfo.nativeLibraryDir, TunnelVpnService.PPTP_GRE_HELPER_LIB_NAME).absolutePath
-                VpnBridge.nativeSetPptpRuntimeConfig(helperPath, "")
+                VpnBridge.nativeSetPptpRuntimeConfig(helperPath, monitor.activeInterfaceName().orEmpty())
             }
             val negotiatedClientIp = IntArray(4)
             val negotiatedPrimaryDns = IntArray(4)
@@ -1347,6 +1347,13 @@ class ProxyTunnelService : Service() {
 
         @Volatile
         private var instance: ProxyTunnelService? = null
+
+        @JvmStatic
+        fun bindSocketToPhysicalNetwork(fd: Int): Boolean {
+            if (fd < 0) return false
+            val monitor = instance?.networkMonitor ?: return false
+            return monitor.bindSocketFd(fd, TAG, "bindSocketToPhysicalNetwork fd=$fd", noNetworkLogLevel = Log.WARN)
+        }
 
         @JvmStatic
         fun stopActiveSessionForModeSwitch(reason: String): Boolean {

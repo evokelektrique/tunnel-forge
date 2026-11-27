@@ -1893,31 +1893,14 @@ class TunnelVpnService : VpnService() {
                 return false
             }
             val monitor = svc.networkMonitor
-            val network = monitor?.activePhysicalNetwork()
-            if (network == null) {
+            if (monitor == null) {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
                     "protectSocketFd fd=$fd protect=true bindNet=none",
                 )
-                return true
-            }
-            val iface = monitor.interfaceNameFor(network) ?: "none"
-            try {
-                ParcelFileDescriptor.fromFd(fd).use { dupPfd ->
-                    network.bindSocket(dupPfd.fileDescriptor)
-                }
-                VpnTunnelEvents.emitEngineLog(
-                    Log.DEBUG,
-                    TAG,
-                    "protectSocketFd fd=$fd protect=true bindNet=${network.networkHandle} iface=$iface bindOk=true",
-                )
-            } catch (e: Exception) {
-                VpnTunnelEvents.emitEngineLog(
-                    Log.WARN,
-                    TAG,
-                    "protectSocketFd fd=$fd protect=true bindNet=${network.networkHandle} iface=$iface bindOk=false err=${e.javaClass.simpleName}:${e.message}",
-                )
+            } else {
+                monitor.bindSocketFd(fd, TAG, "protectSocketFd fd=$fd protect=true")
             }
             return true
         }

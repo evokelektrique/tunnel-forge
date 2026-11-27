@@ -16,14 +16,17 @@
 #define LOG_TAG "tunnel_engine"
 #define VPN_TUNNEL_EVENTS_CLASS "io/github/evokelektrique/tunnelforge/VpnTunnelEvents"
 #define TUNNEL_VPN_SERVICE_CLASS "io/github/evokelektrique/tunnelforge/TunnelVpnService"
+#define PROXY_TUNNEL_SERVICE_CLASS "io/github/evokelektrique/tunnelforge/ProxyTunnelService"
 
 static JavaVM *g_vm;
 static int g_socket_protection_enabled = 1;
 static jclass g_vpn_tunnel_events_class;
 static jclass g_tunnel_vpn_service_class;
+static jclass g_proxy_tunnel_service_class;
 static jmethodID g_emit_engine_log_from_native_mid;
 static jmethodID g_on_native_tunnel_ready_mid;
 static jmethodID g_protect_socket_fd_mid;
+static jmethodID g_bind_socket_to_physical_network_mid;
 
 typedef struct {
   const char *key;
@@ -417,12 +420,15 @@ JavaVM *engine_get_java_vm(void) { return g_vm; }
 int engine_jni_init(JNIEnv *env) {
   jclass tunnel_events_local = NULL;
   jclass vpn_service_local = NULL;
+  jclass proxy_service_local = NULL;
 
   g_vpn_tunnel_events_class = NULL;
   g_tunnel_vpn_service_class = NULL;
+  g_proxy_tunnel_service_class = NULL;
   g_emit_engine_log_from_native_mid = NULL;
   g_on_native_tunnel_ready_mid = NULL;
   g_protect_socket_fd_mid = NULL;
+  g_bind_socket_to_physical_network_mid = NULL;
 
   tunnel_events_local = (*env)->FindClass(env, VPN_TUNNEL_EVENTS_CLASS);
   if (tunnel_events_local == NULL) {
@@ -472,6 +478,27 @@ int engine_jni_init(JNIEnv *env) {
     goto fail;
   }
 
+  proxy_service_local = (*env)->FindClass(env, PROXY_TUNNEL_SERVICE_CLASS);
+  if (proxy_service_local == NULL) {
+    (*env)->ExceptionClear(env);
+    engine_log_direct(ANDROID_LOG_ERROR, "engine_jni_init: could not find ProxyTunnelService");
+    goto fail;
+  }
+  g_proxy_tunnel_service_class = (jclass)(*env)->NewGlobalRef(env, proxy_service_local);
+  (*env)->DeleteLocalRef(env, proxy_service_local);
+  proxy_service_local = NULL;
+  if (g_proxy_tunnel_service_class == NULL) {
+    engine_log_direct(ANDROID_LOG_ERROR, "engine_jni_init: could not cache ProxyTunnelService");
+    goto fail;
+  }
+  g_bind_socket_to_physical_network_mid =
+      (*env)->GetStaticMethodID(env, g_proxy_tunnel_service_class, "bindSocketToPhysicalNetwork", "(I)Z");
+  if (g_bind_socket_to_physical_network_mid == NULL) {
+    (*env)->ExceptionClear(env);
+    engine_log_direct(ANDROID_LOG_ERROR, "engine_jni_init: could not find bindSocketToPhysicalNetwork");
+    goto fail;
+  }
+
   return 0;
 
 fail:
@@ -481,6 +508,9 @@ fail:
   if (vpn_service_local != NULL) {
     (*env)->DeleteLocalRef(env, vpn_service_local);
   }
+  if (proxy_service_local != NULL) {
+    (*env)->DeleteLocalRef(env, proxy_service_local);
+  }
   engine_jni_cleanup(env);
   return -1;
 }
@@ -489,6 +519,7 @@ void engine_jni_cleanup(JNIEnv *env) {
   g_emit_engine_log_from_native_mid = NULL;
   g_on_native_tunnel_ready_mid = NULL;
   g_protect_socket_fd_mid = NULL;
+  g_bind_socket_to_physical_network_mid = NULL;
   if (g_vpn_tunnel_events_class != NULL) {
     (*env)->DeleteGlobalRef(env, g_vpn_tunnel_events_class);
     g_vpn_tunnel_events_class = NULL;
@@ -496,6 +527,10 @@ void engine_jni_cleanup(JNIEnv *env) {
   if (g_tunnel_vpn_service_class != NULL) {
     (*env)->DeleteGlobalRef(env, g_tunnel_vpn_service_class);
     g_tunnel_vpn_service_class = NULL;
+  }
+  if (g_proxy_tunnel_service_class != NULL) {
+    (*env)->DeleteGlobalRef(env, g_proxy_tunnel_service_class);
+    g_proxy_tunnel_service_class = NULL;
   }
 }
 
@@ -586,28 +621,29 @@ void engine_notify_tunnel_ready(const char *detail) {
 
 void engine_set_socket_protection_enabled(int enabled) { g_socket_protection_enabled = enabled ? 1 : 0; }
 
-int engine_is_socket_protection_enabled(void) { return g_socket_protection_enabled ? 1 : 0; }
-
 int util_protect_fd(int fd) {
-  if (!g_socket_protection_enabled) {
-    return 0;
-  }
-  if (fd < 0 || g_vm == NULL || g_tunnel_vpn_service_class == NULL || g_protect_socket_fd_mid == NULL) {
-    return -1;
+  const int require_protect = g_socket_protection_enabled;
+  const int fallback = require_protect ? -1 : 0;
+  jclass service = require_protect ? g_tunnel_vpn_service_class : g_proxy_tunnel_service_class;
+  jmethodID method = require_protect ? g_protect_socket_fd_mid : g_bind_socket_to_physical_network_mid;
+  if (fd < 0 || g_vm == NULL || service == NULL || method == NULL) {
+    return fallback;
   }
   int need_detach = 0;
   JNIEnv *env = engine_require_env(g_vm, &need_detach);
   if (env == NULL) {
-    return -1;
+    return fallback;
   }
 
-  jboolean ok = (*env)->CallStaticBooleanMethod(env, g_tunnel_vpn_service_class, g_protect_socket_fd_mid, fd);
+  jboolean ok = (*env)->CallStaticBooleanMethod(env, service, method, fd);
   if ((*env)->ExceptionCheck(env)) {
     (*env)->ExceptionClear(env);
+    if (!require_protect)
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "util_protect_fd(%d): physical network binding threw", fd);
     engine_release_env(g_vm, need_detach);
-    return -1;
+    return fallback;
   }
-  int ret = ok ? 0 : -1;
+  int ret = ok ? 0 : fallback;
   if (ret != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "util_protect_fd(%d): VpnService.protect returned false", fd);
   }

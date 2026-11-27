@@ -6,6 +6,8 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.ParcelFileDescriptor
+import android.util.Log
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
@@ -225,6 +227,30 @@ internal class ActiveNetworkMonitor(
         network?.let { connectivityManager.getLinkProperties(it)?.interfaceName }?.takeIf { it.isNotBlank() }
 
     fun activeInterfaceName(): String? = interfaceNameFor(activePhysicalNetwork())
+
+    internal fun bindSocketFd(fd: Int, tag: String, logPrefix: String, noNetworkLogLevel: Int = Log.DEBUG): Boolean {
+        val network = activePhysicalNetwork()
+        if (network == null) {
+            VpnTunnelEvents.emitEngineLog(noNetworkLogLevel, tag, "$logPrefix bindNet=none")
+            return false
+        }
+        val iface = interfaceNameFor(network) ?: "none"
+        val binding = "$logPrefix bindNet=${network.networkHandle} iface=$iface"
+        return try {
+            ParcelFileDescriptor.fromFd(fd).use { dupPfd ->
+                network.bindSocket(dupPfd.fileDescriptor)
+            }
+            VpnTunnelEvents.emitEngineLog(Log.DEBUG, tag, "$binding bindOk=true")
+            true
+        } catch (e: Exception) {
+            VpnTunnelEvents.emitEngineLog(
+                Log.WARN,
+                tag,
+                "$binding bindOk=false err=${e.javaClass.simpleName}:${e.message}",
+            )
+            false
+        }
+    }
 
     fun describeNetworkState(): String {
         val active = activePhysicalNetwork()
