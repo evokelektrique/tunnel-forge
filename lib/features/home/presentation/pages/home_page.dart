@@ -310,9 +310,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       final proxySettings = settingsState.proxySettings;
       final proxyPort = tunnelState.proxyExposure?.httpPort;
       final useProxyAuth =
-          proxySettings.authEnabled &&
-          proxySettings.authUsername.isNotEmpty &&
-          proxySettings.authPassword.isNotEmpty;
+          proxySettings.authEnabled && proxySettings.hasCompleteAuthCredentials;
       return ConnectivityPingRequest.localHttpProxy(
         url: url,
         timeoutMs: timeoutMs,
@@ -320,7 +318,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
           proxyPort ?? proxySettings.httpPort,
           fallback: ProxySettings.defaultHttpPort,
         ),
-        proxyUsername: useProxyAuth ? proxySettings.authUsername : null,
+        proxyUsername: useProxyAuth ? proxySettings.authUsername.trim() : null,
         proxyPassword: useProxyAuth ? proxySettings.authPassword : null,
       );
     }

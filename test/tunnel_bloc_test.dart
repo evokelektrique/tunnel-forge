@@ -939,6 +939,111 @@ void main() {
       ),
     ],
   );
+
+  for (final caseEntry in const [
+    (
+      label: 'empty username and password without LAN',
+      settings: ProxySettings(allowLanConnections: false, authEnabled: true),
+    ),
+    (
+      label: 'whitespace-only username without LAN',
+      settings: ProxySettings(
+        allowLanConnections: false,
+        authEnabled: true,
+        authUsername: '   ',
+        authPassword: 'secret',
+      ),
+    ),
+    (
+      label: 'empty password with LAN',
+      settings: ProxySettings(
+        allowLanConnections: true,
+        authEnabled: true,
+        authUsername: 'alice',
+      ),
+    ),
+  ]) {
+    blocTest<TunnelBloc, TunnelState>(
+      'proxy auth enabled with ${caseEntry.label} emits error toast without connecting',
+      build: () {
+        _countingTunnelRepository = _CountingTunnelRepository();
+        return TunnelBloc(_countingTunnelRepository, _FakeLogsRepository());
+      },
+      act: (bloc) {
+        bloc.add(
+          TunnelConnectRequested(
+            TunnelConnectRequest(
+              activeProfileId: 'p1',
+              profileName: 'Office',
+              server: 'vpn.example',
+              user: '',
+              password: '',
+              psk: '',
+              dnsAutomatic: true,
+              dnsServers: const [],
+              mtu: Profile.defaultVpnMtu,
+              connectionMode: ConnectionMode.proxyOnly,
+              splitTunnelSettings: const SplitTunnelSettings(),
+              proxySettings: caseEntry.settings,
+            ),
+          ),
+        );
+      },
+      expect: () => [
+        TunnelState(
+          message: HomeMessage(
+            id: 1,
+            text: AppL10n.current.proxyAuthCredentialsRequired,
+            error: true,
+          ),
+        ),
+      ],
+      verify: (_) {
+        expect(_countingTunnelRepository.connectCalls, 0);
+      },
+    );
+  }
+
+  blocTest<TunnelBloc, TunnelState>(
+    'proxy auth enabled without LAN connects when credentials are complete',
+    build: () {
+      _countingTunnelRepository = _CountingTunnelRepository();
+      return TunnelBloc(_countingTunnelRepository, _FakeLogsRepository());
+    },
+    act: (bloc) async {
+      bloc.add(
+        const TunnelConnectRequested(
+          TunnelConnectRequest(
+            activeProfileId: 'p1',
+            profileName: 'Office',
+            server: 'vpn.example',
+            user: '',
+            password: '',
+            psk: '',
+            dnsAutomatic: true,
+            dnsServers: [],
+            mtu: Profile.defaultVpnMtu,
+            connectionMode: ConnectionMode.proxyOnly,
+            splitTunnelSettings: SplitTunnelSettings(),
+            proxySettings: ProxySettings(
+              allowLanConnections: false,
+              authEnabled: true,
+              authUsername: 'alice',
+              authPassword: 'secret',
+            ),
+          ),
+        ),
+      );
+    },
+    verify: (bloc) {
+      expect(_countingTunnelRepository.connectCalls, 1);
+      final req = _countingTunnelRepository.lastRequest!;
+      expect(req.proxySettings.allowLanConnections, isFalse);
+      expect(req.proxySettings.authEnabled, isTrue);
+      expect(req.proxySettings.authUsername, 'alice');
+      expect(req.proxySettings.authPassword, 'secret');
+    },
+  );
 }
 
 class _RaceTunnelRepository extends _FakeTunnelRepository {
@@ -1091,10 +1196,12 @@ class _CountingTunnelRepository extends _FakeTunnelRepository {
   _CountingTunnelRepository({super.runtimeState});
 
   int connectCalls = 0;
+  TunnelConnectRequest? lastRequest;
 
   @override
   Future<void> connect(TunnelConnectRequest request) async {
     connectCalls += 1;
+    lastRequest = request;
   }
 }
 

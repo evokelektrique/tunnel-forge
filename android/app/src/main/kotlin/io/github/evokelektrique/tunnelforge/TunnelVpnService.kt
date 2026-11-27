@@ -320,7 +320,7 @@ class TunnelVpnService : VpnService() {
                     )
                 val proxyAllowLan = intent.getBooleanExtra(EXTRA_PROXY_ALLOW_LAN, false)
                 val proxyAuthEnabled = intent.getBooleanExtra(EXTRA_PROXY_AUTH_ENABLED, false)
-                val proxyAuthUsername = intent.getStringExtra(EXTRA_PROXY_AUTH_USERNAME).orEmpty()
+                val proxyAuthUsername = intent.getStringExtra(EXTRA_PROXY_AUTH_USERNAME)?.trim().orEmpty()
                 val proxyAuthPassword = intent.getStringExtra(EXTRA_PROXY_AUTH_PASSWORD).orEmpty()
                 val proxyConfig =
                     ProxyRuntimeConfig(
@@ -337,6 +337,14 @@ class TunnelVpnService : VpnService() {
                     AppLog.e(TAG, "${prefixAttempt(attemptId)}ACTION_START invalid proxy ports http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort}")
                     VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}ACTION_START rejected: duplicate proxy ports")
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "HTTP and SOCKS5 ports must differ.", attemptId)
+                    stopForegroundNotification()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (proxyConfig.authEnabled && (proxyConfig.authUsername.isEmpty() || proxyConfig.authPassword.isEmpty())) {
+                    AppLog.e(TAG, "${prefixAttempt(attemptId)}ACTION_START invalid proxy auth credentials")
+                    VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}ACTION_START rejected: incomplete proxy auth credentials")
+                    VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Enter both username and password so authentication can succeed.", attemptId)
                     stopForegroundNotification()
                     stopSelf()
                     return START_NOT_STICKY
@@ -379,7 +387,7 @@ class TunnelVpnService : VpnService() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"} auth=${if (proxyAuthEnabled) "on" else "off"}",
                 )
                 // TUN establish() can block; do not hold up onStartCommand after startForeground.
                 val startupThread =

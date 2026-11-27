@@ -152,7 +152,7 @@ class ProxyTunnelService : Service() {
                 val socksPort = sanitizePort(intent.getIntExtra(EXTRA_PROXY_SOCKS_PORT, DEFAULT_SOCKS_PORT), DEFAULT_SOCKS_PORT)
                 val allowLanConnections = intent.getBooleanExtra(EXTRA_PROXY_ALLOW_LAN, false)
                 val proxyAuthEnabled = intent.getBooleanExtra(EXTRA_PROXY_AUTH_ENABLED, false)
-                val proxyAuthUsername = intent.getStringExtra(EXTRA_PROXY_AUTH_USERNAME).orEmpty()
+                val proxyAuthUsername = intent.getStringExtra(EXTRA_PROXY_AUTH_USERNAME)?.trim().orEmpty()
                 val proxyAuthPassword = intent.getStringExtra(EXTRA_PROXY_AUTH_PASSWORD).orEmpty()
                 val requestedMtu = TunnelVpnService.sanitizeOptionalMtu(
                     intent.getIntExtra(EXTRA_MTU, TunnelVpnService.AUTO_TUN_MTU),
@@ -160,7 +160,7 @@ class ProxyTunnelService : Service() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"} auth=${if (proxyAuthEnabled) "on" else "off"}",
                 )
                 if (server.isNullOrBlank()) {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Invalid proxy arguments from the app.", attemptId)
@@ -170,6 +170,13 @@ class ProxyTunnelService : Service() {
                 }
                 if (httpPort == socksPort) {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "HTTP and SOCKS5 ports must differ.", attemptId)
+                    stopForegroundNotification()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (proxyAuthEnabled && (proxyAuthUsername.isEmpty() || proxyAuthPassword.isEmpty())) {
+                    VpnTunnelEvents.emitEngineLog(Log.ERROR, TAG, "${prefixAttempt(attemptId)}ACTION_START rejected: incomplete proxy auth credentials")
+                    VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Enter both username and password so authentication can succeed.", attemptId)
                     stopForegroundNotification()
                     stopSelf()
                     return START_NOT_STICKY

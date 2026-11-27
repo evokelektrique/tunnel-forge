@@ -279,4 +279,49 @@ class QuickSettingsConfigStoreTest {
         assertNotNull(explicitConfig)
         assertEquals(1400, explicitConfig!!.mtu)
     }
+
+    @Test
+    fun persistsProxyAuthIndependentlyOfLanAndDetectsIncompleteCredentials() {
+        val backing = InMemoryKeyValueStore()
+        val store = QuickSettingsConfigStore(backing, XorTestCipher())
+        val input =
+            TunnelLaunchConfig(
+                profileId = "p-auth",
+                profileName = "Loopback Auth",
+                server = "vpn.example",
+                user = "vpn-user",
+                password = "vpn-password",
+                psk = "vpn-psk",
+                secretsMissing = false,
+                dnsAutomatic = true,
+                dnsServers = emptyList(),
+                mtu = null,
+                connectionMode = VpnContract.MODE_PROXY_ONLY,
+                splitTunnelEnabled = false,
+                splitTunnelMode = VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE,
+                inclusivePackages = emptyList(),
+                exclusivePackages = emptyList(),
+                proxyHttpPort = ProxyTunnelService.DEFAULT_HTTP_PORT,
+                proxySocksPort = ProxyTunnelService.DEFAULT_SOCKS_PORT,
+                proxyAllowLan = false,
+                proxyAuthEnabled = true,
+                proxyAuthUsername = "alice",
+                proxyAuthPassword = "proxy-secret",
+            )
+
+        store.save(input)
+        val rawStored = backing.values.values.joinToString("|")
+        assertFalse(rawStored.contains("proxy-secret"))
+
+        val loaded = store.load()
+        assertNotNull(loaded)
+        assertEquals(input, loaded)
+        assertFalse(loaded!!.proxyAllowLan)
+        assertTrue(loaded.proxyAuthEnabled)
+        assertFalse(loaded.hasIncompleteProxyAuth)
+
+        assertFalse(input.copy(proxyAuthEnabled = false, proxyAuthUsername = "", proxyAuthPassword = "").hasIncompleteProxyAuth)
+        assertTrue(input.copy(proxyAuthUsername = "   ").hasIncompleteProxyAuth)
+        assertTrue(input.copy(proxyAuthPassword = "").hasIncompleteProxyAuth)
+    }
 }

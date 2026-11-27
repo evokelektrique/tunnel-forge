@@ -317,6 +317,14 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
       );
       return false;
     }
+    if (request.proxySettings.requiresAuthCredentials) {
+      _toast(emit, t.proxyAuthCredentialsRequired, error: true);
+      _logWarning(
+        'Connect blocked: proxy authentication enabled without credentials',
+        tag: 'tunnel',
+      );
+      return false;
+    }
     final splitTunnelSettings = request.splitTunnelSettings;
     if (!proxyMode &&
         splitTunnelSettings.enabled &&
@@ -423,7 +431,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'psk=$pskSummary '
         'mode=${request.connectionMode.jsonValue} splitTunnelEnabled=${splitTunnelSettings.enabled} splitTunnelMode=${splitTunnelSettings.mode.jsonValue} '
         'inclusiveApps=${splitTunnelSettings.inclusivePackages.length} exclusiveApps=${splitTunnelSettings.exclusivePackages.length} '
-        'http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort} lan=${request.proxySettings.allowLanConnections ? 'on' : 'off'} '
+        'http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort} lan=${request.proxySettings.allowLanConnections ? 'on' : 'off'} auth=${request.proxySettings.authEnabled ? 'on' : 'off'} '
         'attempt=$attemptId',
         tag: 'tunnel',
       );

@@ -342,6 +342,12 @@ class ProxySettings {
   final String authUsername;
   final String authPassword;
 
+  bool get hasCompleteAuthCredentials =>
+      authUsername.trim().isNotEmpty && authPassword.isNotEmpty;
+
+  bool get requiresAuthCredentials =>
+      authEnabled && !hasCompleteAuthCredentials;
+
   static bool isAllowedPort(int port) {
     return port >= minPort &&
         port <= maxPort &&

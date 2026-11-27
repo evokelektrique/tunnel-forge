@@ -78,6 +78,7 @@ class TunnelQuickSettingsTileService : TileService() {
 
     private fun needsAppInteractionForConnect(config: TunnelLaunchConfig): Boolean {
         if (config.secretsMissing) return true
+        if (config.hasIncompleteProxyAuth) return true
         if (config.connectionMode == VpnContract.MODE_VPN_TUNNEL && VpnService.prepare(this) != null) {
             return true
         }

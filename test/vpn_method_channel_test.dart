@@ -235,6 +235,25 @@ void main() {
       expect(args[VpnContract.argProxyAllowLan], isTrue);
     });
 
+    test('connect map includes proxy auth independently of LAN', () async {
+      final client = VpnClient();
+      await client.connect(
+        server: '10.0.0.1',
+        connectionMode: ConnectionMode.proxyOnly,
+        proxySettings: const ProxySettings(
+          allowLanConnections: false,
+          authEnabled: true,
+          authUsername: ' alice ',
+          authPassword: 'secret',
+        ),
+      );
+      final args = calls.single.arguments as Map;
+      expect(args[VpnContract.argProxyAllowLan], isFalse);
+      expect(args[VpnContract.argProxyAuthEnabled], isTrue);
+      expect(args[VpnContract.argProxyAuthUsername], 'alice');
+      expect(args[VpnContract.argProxyAuthPassword], 'secret');
+    });
+
     test('listVpnCandidateApps maps rows', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(const MethodChannel(VpnContract.channel), (

@@ -30,6 +30,9 @@ internal data class TunnelLaunchConfig(
     val displayLabel: String
         get() = profileName.ifBlank { server }
 
+    val hasIncompleteProxyAuth: Boolean
+        get() = proxyAuthEnabled && (proxyAuthUsername.isBlank() || proxyAuthPassword.isEmpty())
+
     companion object {
         fun fromMap(
             args: Map<*, *>,

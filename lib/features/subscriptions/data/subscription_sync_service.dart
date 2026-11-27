@@ -118,10 +118,9 @@ class SubscriptionSyncService {
     if (route.kind == SubscriptionRouteKind.localHttpProxy) {
       final proxySettings = await _store.loadProxySettings();
       if (proxySettings.authEnabled &&
-          proxySettings.authUsername.isNotEmpty &&
-          proxySettings.authPassword.isNotEmpty) {
+          proxySettings.hasCompleteAuthCredentials) {
         route = route.withProxyCredentials(
-          username: proxySettings.authUsername,
+          username: proxySettings.authUsername.trim(),
           password: proxySettings.authPassword,
         );
       }

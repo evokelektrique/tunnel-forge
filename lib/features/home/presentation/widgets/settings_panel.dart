@@ -591,65 +591,62 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       widget.proxySettings.copyWith(allowLanConnections: value),
                     ),
             ),
-            if (widget.proxySettings.allowLanConnections) ...[
-              const SizedBox(height: 8),
-              SwitchListTile(
-                key: const Key('proxy_auth_switch'),
-                contentPadding: EdgeInsets.zero,
-                title: _cardTitle(t.proxyAuthTitle),
-                subtitle: _cardText(
-                  t.proxyAuthSubtitle,
-                  color: widget.colorScheme.onSurfaceVariant,
-                ),
-                value: widget.proxySettings.authEnabled,
-                onChanged: widget.routingLocked
-                    ? null
-                    : (value) => widget.onProxySettingsChanged(
-                        widget.proxySettings.copyWith(authEnabled: value),
-                      ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              key: const Key('proxy_auth_switch'),
+              contentPadding: EdgeInsets.zero,
+              title: _cardTitle(t.proxyAuthTitle),
+              subtitle: _cardText(
+                t.proxyAuthSubtitle,
+                color: widget.colorScheme.onSurfaceVariant,
               ),
-              if (widget.proxySettings.authEnabled) ...[
-                const SizedBox(height: 12),
-                TextFormField(
-                  key: const Key('proxy_auth_username_field'),
-                  controller: _proxyAuthUsernameController,
-                  enabled: !widget.routingLocked,
-                  decoration: InputDecoration(labelText: t.proxyAuthUsername),
-                  onChanged: (value) => widget.onProxySettingsChanged(
-                    widget.proxySettings.copyWith(authUsername: value),
-                  ),
+              value: widget.proxySettings.authEnabled,
+              onChanged: widget.routingLocked
+                  ? null
+                  : (value) => widget.onProxySettingsChanged(
+                      widget.proxySettings.copyWith(authEnabled: value),
+                    ),
+            ),
+            if (widget.proxySettings.authEnabled) ...[
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('proxy_auth_username_field'),
+                controller: _proxyAuthUsernameController,
+                enabled: !widget.routingLocked,
+                decoration: InputDecoration(labelText: t.proxyAuthUsername),
+                onChanged: (value) => widget.onProxySettingsChanged(
+                  widget.proxySettings.copyWith(authUsername: value),
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  key: const Key('proxy_auth_password_field'),
-                  controller: _proxyAuthPasswordController,
-                  enabled: !widget.routingLocked,
-                  obscureText: _obscureProxyPassword,
-                  decoration: InputDecoration(
-                    labelText: t.proxyAuthPassword,
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscureProxyPassword
-                            ? Icons.visibility
-                            : Icons.visibility_off,
-                      ),
-                      onPressed: () => setState(
-                        () => _obscureProxyPassword = !_obscureProxyPassword,
-                      ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const Key('proxy_auth_password_field'),
+                controller: _proxyAuthPasswordController,
+                enabled: !widget.routingLocked,
+                obscureText: _obscureProxyPassword,
+                decoration: InputDecoration(
+                  labelText: t.proxyAuthPassword,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureProxyPassword
+                          ? Icons.visibility
+                          : Icons.visibility_off,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscureProxyPassword = !_obscureProxyPassword,
                     ),
                   ),
-                  onChanged: (value) => widget.onProxySettingsChanged(
-                    widget.proxySettings.copyWith(authPassword: value),
-                  ),
                 ),
-                if (widget.proxySettings.authUsername.trim().isEmpty ||
-                    widget.proxySettings.authPassword.isEmpty) ...[
-                  const SizedBox(height: 8),
-                  _cardText(
-                    t.proxyAuthCredentialsRequired,
-                    color: widget.colorScheme.error,
-                  ),
-                ],
+                onChanged: (value) => widget.onProxySettingsChanged(
+                  widget.proxySettings.copyWith(authPassword: value),
+                ),
+              ),
+              if (!widget.proxySettings.hasCompleteAuthCredentials) ...[
+                const SizedBox(height: 8),
+                _cardText(
+                  t.proxyAuthCredentialsRequired,
+                  color: widget.colorScheme.error,
+                ),
               ],
             ],
             const SizedBox(height: 12),
