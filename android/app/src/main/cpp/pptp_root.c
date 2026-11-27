@@ -346,9 +346,27 @@ int pptp_root_start(pptp_root_t *r, const char *helper_path, const uint8_t peer_
   return TUNNEL_EXIT_OK;
 }
 
+static void flush_helper_stderr(pptp_root_t *r) {
+  if (r == NULL || r->err_fd < 0)
+    return;
+  char buf[512];
+  for (;;) {
+    ssize_t n = read(r->err_fd, buf, sizeof(buf) - 1u);
+    if (n <= 0)
+      break;
+    buf[n] = '\0';
+    for (ssize_t i = 0; i < n; i++) {
+      if (buf[i] == '\r' || buf[i] == '\n')
+        buf[i] = ' ';
+    }
+    tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "pptp root: GRE helper: %s", buf);
+  }
+}
+
 void pptp_root_stop(pptp_root_t *r) {
   if (r == NULL)
     return;
+  flush_helper_stderr(r);
   if (r->to_helper_fd >= 0) {
     close(r->to_helper_fd);
     r->to_helper_fd = -1;
@@ -409,6 +427,7 @@ int pptp_root_send_gre(pptp_root_t *r, const uint8_t *gre, size_t gre_len) {
     errno = EINVAL;
     return -1;
   }
+  flush_helper_stderr(r);
   uint8_t frame[2u + HELPER_MAX_FRAME];
   util_write_be16(frame, (uint16_t)gre_len);
   memcpy(frame + 2u, gre, gre_len);
@@ -491,6 +510,7 @@ int pptp_root_read_gre(pptp_root_t *r, uint8_t *out, size_t cap) {
     errno = EINVAL;
     return -1;
   }
+  flush_helper_stderr(r);
   int buffered = pop_buffered_frame(r, out, cap);
   if (buffered != 0)
     return buffered;

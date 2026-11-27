@@ -216,6 +216,9 @@ int main(void) {
   size_t pipe_rx_len = 0u;
   uint8_t raw_buf[65536];
   uint8_t out_frame[2u + HELPER_MAX_FRAME];
+  int tx_logged_ok = 0;
+  int tx_err_count = 0;
+  int rx_logged_ok = 0;
 
   while (!g_helper_stop) {
     struct pollfd fds[2];
@@ -265,7 +268,16 @@ int main(void) {
           }
           if (pipe_rx_len < 2u + (size_t)flen)
             break;
-          (void)send(gre_fd, pipe_rx + 2u, (size_t)flen, 0);
+          ssize_t sent = send(gre_fd, pipe_rx + 2u, (size_t)flen, 0);
+          if (sent < 0) {
+            if (tx_err_count < 5) {
+              (void)dprintf(STDERR_FILENO, "gre tx error errno=%d len=%u\n", errno, (unsigned)flen);
+              tx_err_count++;
+            }
+          } else if (!tx_logged_ok) {
+            (void)dprintf(STDERR_FILENO, "gre tx first ok bytes=%zd\n", sent);
+            tx_logged_ok = 1;
+          }
           size_t consumed = 2u + (size_t)flen;
           pipe_rx_len -= consumed;
           if (pipe_rx_len > 0u)
@@ -314,6 +326,10 @@ int main(void) {
         size_t gre_len = packet_end - ihl;
         if (gre_len == 0u || gre_len > HELPER_MAX_FRAME)
           continue;
+        if (!rx_logged_ok) {
+          (void)dprintf(STDERR_FILENO, "gre rx first ok bytes=%zu\n", gre_len);
+          rx_logged_ok = 1;
+        }
         helper_write_be16(out_frame, (uint16_t)gre_len);
         memcpy(out_frame + 2u, raw_buf + ihl, gre_len);
         int wrc = helper_write_frame_nonblock(STDOUT_FILENO, out_frame, 2u + gre_len);
