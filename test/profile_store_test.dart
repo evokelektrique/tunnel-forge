@@ -304,6 +304,7 @@ void main() {
         expect(ProxySettings.isAllowedPort(1023), isFalse);
         expect(ProxySettings.isAllowedPort(1024), isTrue);
         expect(ProxySettings.isAllowedPort(1701), isFalse);
+        expect(ProxySettings.isAllowedPort(1723), isFalse);
         expect(ProxySettings.isAllowedPort(4500), isFalse);
         expect(ProxySettings.isAllowedPort(5037), isFalse);
         expect(ProxySettings.isAllowedPort(5353), isFalse);
@@ -325,6 +326,7 @@ void main() {
           ProxySettings.defaultSocksPort,
         );
         expect(ProxySettings.validatePortText('80'), contains('1–1023'));
+        expect(ProxySettings.validatePortText('1723'), contains('1723'));
         expect(ProxySettings.validatePortText('5353'), contains('5353'));
         expect(ProxySettings.validatePortText('5555'), contains('5555'));
         expect(ProxySettings.validatePortText('18080'), isNull);

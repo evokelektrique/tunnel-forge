@@ -328,6 +328,7 @@ class ProxySettings {
   static const int maxPort = 65535;
   static const Map<int, String> reservedPorts = <int, String>{
     1701: 'L2TP',
+    1723: 'PPTP',
     4500: 'IPsec NAT-T',
     5037: 'ADB',
     5353: 'mDNS',

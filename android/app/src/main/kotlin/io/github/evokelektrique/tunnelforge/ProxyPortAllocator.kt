@@ -20,7 +20,7 @@ internal object ProxyPortAllocator {
     const val RANDOM_CHECKS = 5
     const val MIN_PORT = 1024
     const val MAX_PORT = 65_535
-    val RESERVED_PORTS: Set<Int> = setOf(1701, 4500, 5037, 5353, 5554, 5555)
+    val RESERVED_PORTS: Set<Int> = setOf(1701, 1723, 4500, 5037, 5353, 5554, 5555)
     private const val LISTENER_BACKLOG = 1024
     private const val RANDOM_MIN_PORT = 20_000
     private const val RANDOM_MAX_PORT = 60_000

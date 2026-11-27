@@ -173,6 +173,7 @@ class ProxyPortAllocatorTest {
         assertFalse(ProxyPortAllocator.isAllowedPort(1023))
         assertTrue(ProxyPortAllocator.isAllowedPort(1024))
         assertFalse(ProxyPortAllocator.isAllowedPort(1701))
+        assertFalse(ProxyPortAllocator.isAllowedPort(1723))
         assertFalse(ProxyPortAllocator.isAllowedPort(4500))
         assertFalse(ProxyPortAllocator.isAllowedPort(5037))
         assertFalse(ProxyPortAllocator.isAllowedPort(5353))
@@ -198,12 +199,12 @@ class ProxyPortAllocatorTest {
         val skippedReserved =
             ProxyPortAllocator.chooseSequential(
                 requestedHttpPort = 5554,
-                requestedSocksPort = 5353,
+                requestedSocksPort = 1723,
                 bindHosts = listOf("127.0.0.1"),
                 isPortAvailable = { _, _ -> true },
             )
         assertNotNull(skippedReserved)
         assertEquals(5556, skippedReserved!!.httpPort)
-        assertEquals(5354, skippedReserved.socksPort)
+        assertEquals(1724, skippedReserved.socksPort)
     }
 }

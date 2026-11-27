@@ -76,6 +76,14 @@ void main() {
     expect(find.text(privilegedMessage), findsOneWidget);
     expect(changed, isNull);
 
+    await tester.enterText(httpField, '1723');
+    await tester.pump();
+    expect(
+      find.text('Port 1723 is reserved on Android (PPTP) and cannot be used.'),
+      findsOneWidget,
+    );
+    expect(changed, isNull);
+
     await tester.enterText(httpField, '5353');
     await tester.pump();
     expect(
