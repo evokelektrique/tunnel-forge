@@ -173,6 +173,8 @@ int ppp_mppe_encrypt(ppp_mppe_state_t *s, const uint8_t *plain, size_t plain_len
     }
   } else {
     flags = (uint8_t)(flags | MPPE_HDR_FLAG_FLUSHED);
+    if (mppe_rekey_dir(s->tx_start_key, s->tx_session_key, &s->tx_rc4, 0) != 0)
+      return -1;
   }
 
   uint16_t hdr = (uint16_t)(((uint16_t)flags << 8) | (ccount & MPPE_CCOUNT_MASK));
@@ -181,10 +183,6 @@ int ppp_mppe_encrypt(ppp_mppe_state_t *s, const uint8_t *plain, size_t plain_len
     return -1;
 
   s->tx_ccount = (uint16_t)((ccount + 1u) & MPPE_CCOUNT_MASK);
-  if (!s->stateful) {
-    if (mppe_rekey_dir(s->tx_start_key, s->tx_session_key, &s->tx_rc4, 0) != 0)
-      return -1;
-  }
   return (int)(2u + plain_len);
 }
 
@@ -210,17 +208,14 @@ int ppp_mppe_decrypt(ppp_mppe_state_t *s, const uint8_t *in, size_t in_len, uint
     uint16_t delta = (uint16_t)((pkt_ccount - s->rx_ccount) & MPPE_CCOUNT_MASK);
     if (delta > MPPE_STATELESS_MAX_SKIP)
       return PPP_MPPE_DECRYPT_ERR;
-    while (s->rx_ccount != pkt_ccount) {
+    for (uint16_t k = 0u; k <= delta; k++) {
       if (mppe_rekey_dir(s->rx_start_key, s->rx_session_key, &s->rx_rc4, 0) != 0)
         return PPP_MPPE_DECRYPT_ERR;
-      s->rx_ccount = (uint16_t)((s->rx_ccount + 1u) & MPPE_CCOUNT_MASK);
     }
     if (mbedtls_arc4_crypt(&s->rx_rc4, payload_len, in + 2u, out) != 0)
       return PPP_MPPE_DECRYPT_ERR;
     s->rx_ccount = (uint16_t)((pkt_ccount + 1u) & MPPE_CCOUNT_MASK);
     s->rx_packets_seen = 1;
-    if (mppe_rekey_dir(s->rx_start_key, s->rx_session_key, &s->rx_rc4, 0) != 0)
-      return PPP_MPPE_DECRYPT_ERR;
     *out_len = payload_len;
     return PPP_MPPE_DECRYPT_OK;
   }
