@@ -270,6 +270,9 @@ static void test_l2tp_root_ipc_and_su_probe(const char *self_path) {
   assert(l2tp_root_start(&root_td, helper_stub, 1, "wlan0") == TUNNEL_EXIT_OK);
   assert(l2tp_root_open_udp(&root_td, peer_ip, 500u, 500u, 1, local_ip, &local_port_be, &err) == 0);
   g_test_should_stop = 1;
+  const uint8_t oversized_nat_t[TF_L2TP_MAX_FRAME - 3u] = {0};
+  errno = 0;
+  assert(l2tp_root_ike_send_async(&root_td, oversized_nat_t, sizeof(oversized_nat_t), 1) == -1 && errno == EINVAL);
   const uint8_t ike_del[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
   assert(l2tp_root_ike_send_async(&root_td, ike_del, sizeof(ike_del), 1) == 0);
   root_td.xfrm_installed = 1;

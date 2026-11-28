@@ -171,6 +171,7 @@ int tf_probe_root_with_su(const char *su_override, int timeout_ms) {
   (void)tf_set_cloexec(out_pipe[0]);
   (void)tf_set_cloexec(out_pipe[1]);
 
+  /* Isolate the probe from app input and capture only the command's stdout. */
   int devnull = open("/dev/null", O_RDWR);
   if (devnull >= 0)
     (void)tf_set_cloexec(devnull);
@@ -211,6 +212,7 @@ int tf_probe_root_with_su(const char *su_override, int timeout_ms) {
     return 0;
   }
 
+  /* Drain stdout without blocking while su waits for a permission decision. */
   (void)tf_set_nonblock(out_pipe[0]);
   char out_buf[256];
   size_t got = 0u;
@@ -267,6 +269,7 @@ int tf_probe_root_with_su(const char *su_override, int timeout_ms) {
     return 0;
   }
 
+  /* Require both a successful command exit and an explicit UID of zero. */
   int status = 0;
   pid_t w;
   do {

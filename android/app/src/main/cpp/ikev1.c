@@ -442,6 +442,7 @@ static int ike_send_recv_ex(int fd, l2tp_root_t *root, const struct sockaddr *pe
   uint8_t wr[4096];
   const uint8_t *sendptr = out;
   size_t sendlen = out_len;
+  /* On UDP port 4500, the zero marker distinguishes IKE from ESP. */
   if (prefix4500) {
     if (out_len + 4 > sizeof(wr)) {
       if (out_errno != NULL)
@@ -495,6 +496,7 @@ static int ike_send_recv_ex(int fd, l2tp_root_t *root, const struct sockaddr *pe
     ssize_t n = -1;
     if (root != NULL) {
       int recv_err = 0;
+      /* Charge the actual helper wait to the retry budget, including IPC time. */
       long long t0 = ike_now_ms();
       int rn = l2tp_root_udp_recv(root, in, in_cap, wait, 0, &recv_err);
       int spent = (int)(ike_now_ms() - t0);

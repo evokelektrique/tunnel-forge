@@ -206,6 +206,7 @@ int l2tp_root_start(l2tp_root_t *r, const char *helper_path, int protect_vpn, co
   const char *su_path =
       (su_override != NULL && su_override[0] != '\0') ? su_override : tf_find_su_binary(su_buf, sizeof(su_buf));
 
+  /* Keep helper diagnostics off stdout so they cannot corrupt framed replies. */
   int in_pipe[2] = {-1, -1};
   int out_pipe[2] = {-1, -1};
   int err_pipe[2] = {-1, -1};
@@ -241,6 +242,7 @@ int l2tp_root_start(l2tp_root_t *r, const char *helper_path, int protect_vpn, co
   (void)posix_spawn_file_actions_adddup2(&actions, out_pipe[1], STDOUT_FILENO);
   (void)posix_spawn_file_actions_adddup2(&actions, err_pipe[1], STDERR_FILENO);
 
+  /* Replace the su command shell so the helper owns the protocol pipes directly. */
   char helper_cmd[540];
   snprintf(helper_cmd, sizeof(helper_cmd), "exec '%s'", helper_path);
   char *argv[] = {(char *)"su", (char *)"-c", helper_cmd, NULL};
@@ -273,6 +275,7 @@ int l2tp_root_start(l2tp_root_t *r, const char *helper_path, int protect_vpn, co
   (void)tf_set_nonblock(r->from_helper_fd);
   (void)tf_set_nonblock(r->err_fd);
 
+  /* INIT supplies socket settings and confirms the helper is ready before any UDP RPC. */
   uint8_t init[TF_L2TP_INIT_PAYLOAD_LEN];
   memset(init, 0, sizeof(init));
   init[0] = TF_L2TP_HELPER_MAGIC0;
@@ -512,9 +515,12 @@ int l2tp_root_ike_send_async(l2tp_root_t *r, const uint8_t *data, size_t len, in
   if (!r->stream_active) {
     int err = 0;
     if (nat_t) {
-      uint8_t wrapped[4u + TF_L2TP_MAX_FRAME];
-      if (len + 4u > sizeof(wrapped))
+      /* The non-ESP marker counts toward the helper's frame limit. */
+      uint8_t wrapped[TF_L2TP_MAX_FRAME];
+      if (len > sizeof(wrapped) - 4u) {
+        errno = EINVAL;
         return -1;
+      }
       memset(wrapped, 0, 4u);
       memcpy(wrapped + 4u, data, len);
       /* Teardown calls this with g_stop=1, so skip cancellation checks while awaiting send ACK. */
