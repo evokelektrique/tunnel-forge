@@ -7,6 +7,7 @@
 #include <string.h>
 
 #ifdef TF_TEST_L2TP_ROOT
+#include "../../android/app/src/main/cpp/engine.h"
 #include "../../android/app/src/main/cpp/l2tp_root.h"
 #include "../../android/app/src/main/cpp/root_detect.h"
 #include <fcntl.h>
