@@ -188,15 +188,6 @@ In PowerShell, use `Copy-Item .env.example .env`.
 
 Set exactly one of `TUNNEL_FORGE_ANDROID_KEYSTORE_PATH` or `TUNNEL_FORGE_ANDROID_KEYSTORE_BASE64`, plus the keystore password, key alias, and key password. For one-off bash variables, use `export NAME=value`. In PowerShell, use `$env:NAME = 'value'`. Signed APKs are written to `build/app/outputs/flutter-apk/`.
 
-### Coverage
-
-CI saves coverage artifacts on pushes to `main` and `release/**` for Dart, Kotlin, Go, and host native C.
-
-- For Dart, run `flutter test --coverage`.
-- For Kotlin, run `./gradlew -PtunnelForgeCoverage :app:createDebugUnitTestCoverageReport` from `android/`.
-- For Go, run `go test -race ./... -cover` from `android/gvisor/` (or `./gradlew :app:testAndroidGo` from `android/`).
-- For native C, `./gradlew :app:testNativeC` (or `.\gradlew.bat :app:testNativeC` on Windows) runs the full 15-test host suite (including the production IKE, ESP, L2TP, PPP, and MPPE tests) on Linux, macOS, and Windows.
-
 ## Security & Privacy
 
 - VPN credentials are stored on-device with `flutter_secure_storage`.
