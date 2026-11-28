@@ -458,6 +458,8 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           protocol: request.protocol,
           pppAuth: request.pppAuth,
           mppeMode: request.protocol.isPptp ? request.mppeMode : MppeMode.auto,
+          forceUserspaceVpn:
+              !request.protocol.isPptp && request.forceUserspaceVpn,
           dnsAutomatic: request.dnsAutomatic,
           dnsServers: request.dnsServers,
           mtu: request.mtu,

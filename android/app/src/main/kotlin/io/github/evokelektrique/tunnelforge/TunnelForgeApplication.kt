@@ -13,6 +13,7 @@ class TunnelForgeApplication : Application() {
         super.onCreate()
         lastConfigLocales = resources.configuration.locales
         DiagnosticLog.init(this)
+        RootAccessDetector.startAsyncProbe()
         QuickSettingsTileController.init(this)
         installUncaughtHandler()
         ExitReasonReporter.report(this)

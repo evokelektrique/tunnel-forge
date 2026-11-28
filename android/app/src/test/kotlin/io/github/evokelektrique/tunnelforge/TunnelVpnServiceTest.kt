@@ -1,5 +1,6 @@
 package io.github.evokelektrique.tunnelforge
 
+import android.util.Log
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -254,5 +255,35 @@ class TunnelVpnServiceTest {
                 stopRequested = false,
             ),
         )
+    }
+
+    @Test
+    fun l2tpRootPolicySwitchesToUserspaceQuietlyAndLogsExactInfoWhenNotRooted() {
+        val noRoot = L2tpRootPolicy.decideBackend(rootDetected = false, forceUserspaceVpn = false)
+        assertFalse(noRoot.useRoot)
+        assertEquals(Log.INFO, noRoot.logLevel)
+        assertEquals(
+            "root not detected, switching to userspace VPN for L2TP (default behavior)",
+            noRoot.logMessage,
+        )
+
+        val noRootForced = L2tpRootPolicy.decideBackend(rootDetected = false, forceUserspaceVpn = true)
+        assertFalse(noRootForced.useRoot)
+        assertEquals(Log.INFO, noRootForced.logLevel)
+        assertEquals(
+            "root not detected, switching to userspace VPN for L2TP (default behavior)",
+            noRootForced.logMessage,
+        )
+    }
+
+    @Test
+    fun l2tpRootPolicyUsesRootUnlessProfileForcesUserspace() {
+        val rootDefault = L2tpRootPolicy.decideBackend(rootDetected = true, forceUserspaceVpn = false)
+        assertTrue(rootDefault.useRoot)
+        assertEquals(Log.INFO, rootDefault.logLevel)
+
+        val rootForcedUserspace = L2tpRootPolicy.decideBackend(rootDetected = true, forceUserspaceVpn = true)
+        assertFalse(rootForcedUserspace.useRoot)
+        assertEquals(Log.INFO, rootForcedUserspace.logLevel)
     }
 }

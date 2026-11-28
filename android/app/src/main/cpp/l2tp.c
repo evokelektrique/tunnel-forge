@@ -98,6 +98,8 @@ static void recv_plain_log_stats(const char *ctx, const recv_plain_stats_t *st, 
  */
 static int recv_plain(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt, int *used_alt, uint8_t *out, size_t out_cap,
                       int timeout_ms) {
+  if (esp == NULL)
+    return -1;
   struct timeval start;
   recv_plain_stats_t stats = {0};
   if (used_alt != NULL)
@@ -124,55 +126,79 @@ static int recv_plain(int esp_fd, esp_keys_t *esp, esp_keys_t *esp_alt, int *use
     if (remaining_ms <= 0)
       return -1;
 
-    /* Poll in short slices so cancellation checks stay responsive. */
-    struct pollfd pfd = {.fd = esp_fd, .events = POLLIN};
-    int waited = 0;
-    int pr = 0;
-    while (waited < remaining_ms) {
-      if (tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp recv_plain: canceled while waiting for control packet");
-        return -1;
-      }
-      int slice_ms = remaining_ms - waited;
-      if (slice_ms > 200)
-        slice_ms = 200;
-      pr = poll(&pfd, 1, slice_ms);
-      waited += slice_ms;
-      if (pr != 0)
-        break;
-    }
-    if (pr < 0) {
-      if (errno == EINTR)
-        continue;
-      if (tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp recv_plain: canceled after poll interruption");
-        return -1;
-      }
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: poll errno=%d", errno);
-      return -1;
-    }
-    if (pr == 0) {
-      gettimeofday(&now, NULL);
-      int elapsed_after = (int)((now.tv_sec - start.tv_sec) * 1000 + (now.tv_usec - start.tv_usec) / 1000);
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
-                        "l2tp recv_plain: poll timeout (elapsed_after=%d ms last_slice=%d ms budget=%d ms)",
-                        elapsed_after, remaining_ms, timeout_ms);
-      recv_plain_log_stats("poll-timeout", &stats, elapsed_after, timeout_ms);
-      esp_log_drop_counters("l2tp recv_plain timeout", 0);
-      return -1;
-    }
-
     uint8_t raw[4096];
-    ssize_t n = recv(esp_fd, raw, sizeof(raw), 0);
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: recv errno=%d", errno);
-      return -1;
-    }
-    if (n == 0) {
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: recv EOF");
-      return -1;
+    ssize_t n;
+    if (esp->io_recv != NULL) {
+      int nr = esp->io_recv(esp->io_ctx, raw, sizeof(raw), remaining_ms);
+      if (nr == 0) {
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp recv_plain: canceled while waiting for control packet");
+          return -1;
+        }
+        gettimeofday(&now, NULL);
+        int elapsed_after = (int)((now.tv_sec - start.tv_sec) * 1000 + (now.tv_usec - start.tv_usec) / 1000);
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                          "l2tp recv_plain: poll timeout (elapsed_after=%d ms last_slice=%d ms budget=%d ms)",
+                          elapsed_after, remaining_ms, timeout_ms);
+        recv_plain_log_stats("poll-timeout", &stats, elapsed_after, timeout_ms);
+        esp_log_drop_counters("l2tp recv_plain timeout", 0);
+        return -1;
+      }
+      if (nr < 0) {
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: root stream recv failed errno=%d", errno);
+        return -1;
+      }
+      n = (ssize_t)nr;
+    } else {
+      /* Poll in short slices so cancellation checks stay responsive. */
+      struct pollfd pfd = {.fd = esp_fd, .events = POLLIN};
+      int waited = 0;
+      int pr = 0;
+      while (waited < remaining_ms) {
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp recv_plain: canceled while waiting for control packet");
+          return -1;
+        }
+        int slice_ms = remaining_ms - waited;
+        if (slice_ms > 200)
+          slice_ms = 200;
+        pr = poll(&pfd, 1, slice_ms);
+        waited += slice_ms;
+        if (pr != 0)
+          break;
+      }
+      if (pr < 0) {
+        if (errno == EINTR)
+          continue;
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "l2tp recv_plain: canceled after poll interruption");
+          return -1;
+        }
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: poll errno=%d", errno);
+        return -1;
+      }
+      if (pr == 0) {
+        gettimeofday(&now, NULL);
+        int elapsed_after = (int)((now.tv_sec - start.tv_sec) * 1000 + (now.tv_usec - start.tv_usec) / 1000);
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                          "l2tp recv_plain: poll timeout (elapsed_after=%d ms last_slice=%d ms budget=%d ms)",
+                          elapsed_after, remaining_ms, timeout_ms);
+        recv_plain_log_stats("poll-timeout", &stats, elapsed_after, timeout_ms);
+        esp_log_drop_counters("l2tp recv_plain timeout", 0);
+        return -1;
+      }
+
+      n = recv(esp_fd, raw, sizeof(raw), 0);
+      if (n < 0) {
+        if (errno == EINTR)
+          continue;
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: recv errno=%d", errno);
+        return -1;
+      }
+      if (n == 0) {
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "l2tp recv_plain: recv EOF");
+        return -1;
+      }
     }
 
     l2tp_hs_trace_evt("recv udp4500", raw, n);

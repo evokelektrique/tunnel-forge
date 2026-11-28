@@ -23,6 +23,7 @@ internal data class TunnelLaunchConfig(
     val protocol: String = VpnContract.PROTOCOL_L2TP,
     val pppAuth: String = VpnContract.PPP_AUTH_AUTO,
     val mppe: String = VpnContract.MPPE_AUTO,
+    val forceUserspaceVpn: Boolean = false,
     val proxyAuthEnabled: Boolean = false,
     val proxyAuthUsername: String = "",
     val proxyAuthPassword: String = "",
@@ -88,6 +89,9 @@ internal data class TunnelLaunchConfig(
                 } else {
                     VpnContract.MPPE_AUTO
                 }
+            val forceUserspaceVpn =
+                protocol != VpnContract.PROTOCOL_PPTP &&
+                    (args[VpnContract.ARG_FORCE_USERSPACE_VPN] as? Boolean ?: false)
             val proxyHttpPort = sanitizePort(args[VpnContract.ARG_PROXY_HTTP_PORT], ProxyTunnelService.DEFAULT_HTTP_PORT)
             val proxySocksPort = sanitizePort(args[VpnContract.ARG_PROXY_SOCKS_PORT], ProxyTunnelService.DEFAULT_SOCKS_PORT)
             val proxyAllowLan = args[VpnContract.ARG_PROXY_ALLOW_LAN] as? Boolean ?: false
@@ -116,6 +120,7 @@ internal data class TunnelLaunchConfig(
                 protocol = protocol,
                 pppAuth = pppAuth,
                 mppe = mppe,
+                forceUserspaceVpn = forceUserspaceVpn,
                 proxyAuthEnabled = proxyAuthEnabled,
                 proxyAuthUsername = proxyAuthUsername,
                 proxyAuthPassword = proxyAuthPassword,

@@ -755,7 +755,8 @@ class ProfileStore {
         a.dns2Host == b.dns2Host &&
         a.dns2Protocol == b.dns2Protocol &&
         a.mtu == b.mtu &&
-        a.subscriptionId == b.subscriptionId;
+        a.subscriptionId == b.subscriptionId &&
+        a.forceUserspaceVpn == b.forceUserspaceVpn;
   }
 
   Future<List<Subscription>> loadSubscriptions() async {

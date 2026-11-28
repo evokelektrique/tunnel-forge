@@ -118,3 +118,17 @@ if(TUNNEL_FORGE_NATIVE_PROTOCOL_TESTS OR TUNNEL_FORGE_MBEDTLS_INCLUDE_DIR)
   target_link_libraries(test_ppp_mppe PRIVATE tf_native_ppp_crypto mbedcrypto)
   add_test(NAME ppp_mppe COMMAND test_ppp_mppe)
 endif()
+
+add_executable(test_l2tp_root test_l2tp_root.c ../../android/app/src/main/cpp/l2tp_xfrm.c)
+target_link_libraries(test_l2tp_root PRIVATE tf_native_common)
+if(NOT WIN32)
+  target_sources(
+    test_l2tp_root
+    PRIVATE
+      ../../android/app/src/main/cpp/l2tp_root.c
+      ../../android/app/src/main/cpp/root_detect.c
+  )
+  target_include_directories(test_l2tp_root PRIVATE stubs)
+  target_compile_definitions(test_l2tp_root PRIVATE TF_TEST_L2TP_ROOT=1 _DEFAULT_SOURCE _GNU_SOURCE)
+endif()
+add_test(NAME l2tp_root COMMAND test_l2tp_root)

@@ -22,6 +22,7 @@ enum ProfileTransferErrorCode {
   invalidDns,
   manualDnsRequired,
   invalidIntField,
+  invalidFlagField,
   missingField,
 }
 
@@ -85,6 +86,8 @@ class ProfileTransferFormatException extends FormatException {
         t.profileTransferManualDnsRequired,
       ProfileTransferErrorCode.invalidIntField =>
         t.profileTransferInvalidIntField(field ?? ''),
+      ProfileTransferErrorCode.invalidFlagField =>
+        t.profileTransferInvalidFlagField(field ?? ''),
       ProfileTransferErrorCode.missingField => t.profileTransferMissingField(
         field ?? '',
       ),
@@ -108,6 +111,7 @@ class ProfileTransferEnvelope {
     this.protocol = TunnelProtocol.l2tp,
     this.pppAuth = PppAuthMethod.auto,
     this.mppeMode = MppeMode.auto,
+    this.forceUserspaceVpn = false,
     this.version = currentVersion,
   });
 
@@ -142,6 +146,7 @@ class ProfileTransferEnvelope {
   final String dns2Host;
   final DnsProtocol dns2Protocol;
   final int? mtu;
+  final bool forceUserspaceVpn;
 
   Profile toProfile(
     String id, {
@@ -170,6 +175,7 @@ class ProfileTransferEnvelope {
       mtu: Profile.normalizeOptionalMtu(mtu),
       favorite: favorite,
       subscriptionId: subscriptionId,
+      forceUserspaceVpn: !protocol.isPptp && forceUserspaceVpn,
     );
   }
 
@@ -190,6 +196,7 @@ class ProfileTransferEnvelope {
     'dns2Host': Profile.normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
     'dns2Protocol': dns2Protocol.jsonValue,
     if (mtu != null) 'mtu': Profile.normalizeMtu(mtu!),
+    if (!protocol.isPptp && forceUserspaceVpn) 'forceUserspaceVpn': 1,
   };
 
   String toFileJson() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -241,6 +248,9 @@ class ProfileTransferEnvelope {
     if (mtu != null) {
       addParam('mtu', '${Profile.normalizeMtu(mtu!)}');
     }
+    if (!protocol.isPptp && forceUserspaceVpn) {
+      addParam('forceUserspaceVpn', '1');
+    }
     final base = '$uriScheme://${server.trim()}';
     return params.isEmpty ? base : '$base?${params.join('&')}';
   }
@@ -265,6 +275,7 @@ class ProfileTransferEnvelope {
       dns2Host: profile.dns2Host,
       dns2Protocol: profile.dns2Protocol,
       mtu: profile.mtu,
+      forceUserspaceVpn: !profile.protocol.isPptp && profile.forceUserspaceVpn,
     );
   }
 
@@ -390,6 +401,7 @@ class ProfileTransferEnvelope {
     String? rawPppAuth;
     String? rawMppe;
     String? rawMtu;
+    String? rawForceUserspaceVpn;
     final rawDnsValues = <String>[];
 
     for (final pair in queryPairs) {
@@ -410,6 +422,8 @@ class ProfileTransferEnvelope {
           psk = pair.value;
         case 'mtu':
           rawMtu = pair.value;
+        case 'forceUserspaceVpn':
+          rawForceUserspaceVpn = pair.value;
         case 'dns':
           final trimmedDns = pair.value.trim();
           if (trimmedDns.isNotEmpty) {
@@ -491,6 +505,12 @@ class ProfileTransferEnvelope {
       mtu = Profile.normalizeMtu(parsedMtu);
     }
 
+    final parsedForceUserspaceVpn = _parseOptionalFlag(
+      rawForceUserspaceVpn,
+      'forceUserspaceVpn',
+    );
+    final forceUserspaceVpn = !protocol.isPptp && parsedForceUserspaceVpn;
+
     final dnsEntries = <DnsServerConfig>[];
     final seenDns = <String>{};
     for (final rawDns in rawDnsValues) {
@@ -548,6 +568,7 @@ class ProfileTransferEnvelope {
       dns2Host: dns2?.host ?? '',
       dns2Protocol: dns2?.protocol ?? DnsProtocol.dnsOverUdp,
       mtu: mtu,
+      forceUserspaceVpn: forceUserspaceVpn,
     );
   }
 
@@ -774,6 +795,9 @@ class ProfileTransferEnvelope {
       _requireString(map, 'dns2Protocol'),
     );
     final mtu = Profile.normalizeOptionalMtu(_optionalInt(map, 'mtu'));
+    final forceUserspaceVpn =
+        _parseOptionalFlag(map['forceUserspaceVpn'], 'forceUserspaceVpn') &&
+        !protocol.isPptp;
     if (server.trim().isEmpty) {
       throw const ProfileTransferFormatException(
         'Profile transfer server is required',
@@ -836,6 +860,7 @@ class ProfileTransferEnvelope {
       dns2Host: Profile.normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
       dns2Protocol: dns2Protocol,
       mtu: mtu,
+      forceUserspaceVpn: forceUserspaceVpn,
     );
   }
 
@@ -878,6 +903,23 @@ class ProfileTransferEnvelope {
         .replaceAll(RegExp(r'-+'), '-')
         .replaceAll(RegExp(r'^-+|-+$'), '')
         .toLowerCase();
+  }
+
+  static bool _parseOptionalFlag(Object? value, String field) {
+    if (value == null) return false;
+    if (value is bool) return value;
+    if (value is int && (value == 0 || value == 1)) return value == 1;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      if (normalized.isEmpty) return false;
+      if (normalized == '1' || normalized == 'true') return true;
+      if (normalized == '0' || normalized == 'false') return false;
+    }
+    throw ProfileTransferFormatException(
+      'Invalid boolean field: $field',
+      code: ProfileTransferErrorCode.invalidFlagField,
+      field: field,
+    );
   }
 
   static int? _optionalInt(Map<String, Object?> map, String key) {

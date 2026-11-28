@@ -641,22 +641,26 @@ void main() {
           psk: 'ignored',
           pppAuth: PppAuthMethod.mschapV2,
           mppeMode: MppeMode.off,
+          forceUserspaceVpn: true,
         );
         var args = Map<Object?, Object?>.from(calls.last.arguments as Map);
         expect(args[VpnContract.argProtocol], VpnContract.protocolPptp);
         expect(args[VpnContract.argPsk], isEmpty);
         expect(args[VpnContract.argPppAuth], VpnContract.pppAuthMschapV2);
         expect(args[VpnContract.argMppe], VpnContract.mppeOff);
+        expect(args[VpnContract.argForceUserspaceVpn], isFalse);
 
         await VpnClient().connect(
           server: 'l2tp.example',
           protocol: TunnelProtocol.l2tp,
           pppAuth: PppAuthMethod.pap,
           mppeMode: MppeMode.on,
+          forceUserspaceVpn: true,
         );
         args = Map<Object?, Object?>.from(calls.last.arguments as Map);
         expect(args[VpnContract.argPppAuth], VpnContract.pppAuthPap);
         expect(args[VpnContract.argMppe], VpnContract.mppeAuto);
+        expect(args[VpnContract.argForceUserspaceVpn], isTrue);
       },
     );
   });

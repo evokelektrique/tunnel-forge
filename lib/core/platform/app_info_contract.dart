@@ -6,6 +6,7 @@ abstract final class AppInfoContract {
   static const String getInstalledVersion = 'getInstalledVersion';
   static const String setThemeMode = 'setThemeMode';
   static const String setAppLocale = 'setAppLocale';
+  static const String isRootDetected = 'isRootDetected';
 
   static const String argVersionName = 'versionName';
   static const String argBuildNumber = 'buildNumber';

@@ -31,6 +31,7 @@
 #include <unistd.h>
 
 #define LOG_TAG "tunnel_engine"
+#define IKE_ROOT_FALLBACK (-2)
 #if defined(TUNNEL_FORGE_DEBUG_ESP_KEYMAT) && TUNNEL_FORGE_DEBUG_ESP_KEYMAT
 static unsigned s_ike_keymap_log_once;
 static unsigned s_ike_keymat_variants_log_once;
@@ -242,6 +243,13 @@ static int ike_open_udp_socket_once(const struct sockaddr_storage *peer, socklen
   if (peer->ss_family == AF_INET) {
     ike_disable_ipv4_pmtud(fd);
   }
+#ifdef __linux__
+  {
+    int buf_sz = 524288;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf_sz, (socklen_t)sizeof(buf_sz));
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf_sz, (socklen_t)sizeof(buf_sz));
+  }
+#endif
   if (util_protect_fd(fd) != 0) {
     if (out_errno != NULL)
       *out_errno = EACCES;
@@ -358,7 +366,11 @@ static int normalize_dh_value(uint8_t *buf, size_t *len, size_t capacity, size_t
  *
  * @return received payload size on success, -1 on cancellation, timeout, poll/send/recv failures.
  */
-static int ike_recv_only(int fd, uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
+static long long ike_now_ms(void);
+
+static int ike_recv_only(int fd, l2tp_root_t *root, uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
+  if (root == NULL && fd < 0)
+    return -1;
   int waited = 0;
   struct pollfd pfd = {.fd = fd, .events = POLLIN};
   while (waited < timeout_ms) {
@@ -369,18 +381,34 @@ static int ike_recv_only(int fd, uint8_t *in, size_t in_cap, int timeout_ms, int
     int slice = timeout_ms - waited;
     if (slice > 200)
       slice = 200;
-    int pr = poll(&pfd, 1, slice);
-    waited += slice;
-    if (pr < 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only: poll errno=%d", errno);
-      return -1;
-    }
-    if (pr == 0)
-      continue;
-    ssize_t n = recv(fd, in, in_cap, 0);
-    if (n <= 0) {
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only: recv ret=%zd errno=%d", n, errno);
-      return -1;
+    ssize_t n;
+    if (root != NULL) {
+      int recv_err = 0;
+      long long t0 = ike_now_ms();
+      int rn = l2tp_root_udp_recv(root, in, in_cap, slice, 0, &recv_err);
+      int spent = (int)(ike_now_ms() - t0);
+      waited += (spent > 0) ? spent : slice;
+      if (rn < 0) {
+        if (recv_err == ETIMEDOUT || recv_err == EAGAIN || recv_err == EWOULDBLOCK)
+          continue;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only(root): recv errno=%d", recv_err);
+        return -1;
+      }
+      n = (ssize_t)rn;
+    } else {
+      int pr = poll(&pfd, 1, slice);
+      waited += slice;
+      if (pr < 0) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only: poll errno=%d", errno);
+        return -1;
+      }
+      if (pr == 0)
+        continue;
+      n = recv(fd, in, in_cap, 0);
+      if (n <= 0) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_recv_only: recv ret=%zd errno=%d", n, errno);
+        return -1;
+      }
     }
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ike_recv_only: got UDP datagram %zd bytes nat_t=%d", n, prefix4500);
     if (prefix4500 && (n < 4 || util_read_be32(in) != 0u))
@@ -395,10 +423,22 @@ static int ike_recv_only(int fd, uint8_t *in, size_t in_cap, int timeout_ms, int
   return -1;
 }
 
-static int ike_send_recv_ex(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *out, size_t out_len,
-                            uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500, int *out_errno) {
+static long long ike_now_ms(void) {
+  struct timeval now;
+  gettimeofday(&now, NULL);
+  return ((long long)now.tv_sec * 1000ll) + ((long long)now.tv_usec / 1000ll);
+}
+
+static int ike_send_recv_ex(int fd, l2tp_root_t *root, const struct sockaddr *peer, socklen_t peer_len,
+                            const uint8_t *out, size_t out_len, uint8_t *in, size_t in_cap, int timeout_ms,
+                            int prefix4500, int *out_errno) {
   if (out_errno != NULL)
     *out_errno = 0;
+  if (root == NULL && fd < 0) {
+    if (out_errno != NULL)
+      *out_errno = EBADF;
+    return -1;
+  }
   uint8_t wr[4096];
   const uint8_t *sendptr = out;
   size_t sendlen = out_len;
@@ -426,79 +466,120 @@ static int ike_send_recv_ex(int fd, const struct sockaddr *peer, socklen_t peer_
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled before send");
       return -1;
     }
-    ssize_t ns = sendto(fd, sendptr, sendlen, 0, peer, peer_len);
-    if (ns != (ssize_t)sendlen) {
-      int err = errno;
-      if (out_errno != NULL)
-        *out_errno = err;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: sendto ret=%zd want=%zu errno=%d (%s) nat_t=%d", ns,
-                        sendlen, err, strerror(err), prefix4500);
-      return -1;
+    if (root != NULL) {
+      int send_err = 0;
+      if (l2tp_root_udp_send(root, sendptr, sendlen, &send_err) != 0) {
+        if (out_errno != NULL)
+          *out_errno = send_err;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv(root): send failed errno=%d (%s) nat_t=%d",
+                          send_err, strerror(send_err), prefix4500);
+        return -1;
+      }
+    } else {
+      ssize_t ns = sendto(fd, sendptr, sendlen, 0, peer, peer_len);
+      if (ns != (ssize_t)sendlen) {
+        int err = errno;
+        if (out_errno != NULL)
+          *out_errno = err;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: sendto ret=%zd want=%zu errno=%d (%s) nat_t=%d",
+                          ns, sendlen, err, strerror(err), prefix4500);
+        return -1;
+      }
     }
     int wait = (attempt < 4) ? retry_ms[attempt] : 5000;
     if (wait > remaining)
       wait = remaining;
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ike_send_recv: attempt %d/%d wait=%d ms remaining=%d ms",
                       attempt + 1, attempts, wait, remaining);
-    /* Poll in small slices so stop requests are honored promptly. */
-    int waited = 0;
-    int pr = 0;
-    struct pollfd pfd = {.fd = fd, .events = POLLIN, .revents = 0};
-    while (waited < wait) {
-      if (tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled while waiting for reply");
+
+    ssize_t n = -1;
+    if (root != NULL) {
+      int recv_err = 0;
+      long long t0 = ike_now_ms();
+      int rn = l2tp_root_udp_recv(root, in, in_cap, wait, 0, &recv_err);
+      int spent = (int)(ike_now_ms() - t0);
+      if (spent < 0)
+        spent = 0;
+      elapsed_total += spent;
+      remaining -= spent;
+      if (rn < 0) {
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv(root): canceled while waiting for reply");
+          return -1;
+        }
+        if (recv_err == ETIMEDOUT || recv_err == EAGAIN || recv_err == EWOULDBLOCK) {
+          tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ike_send_recv(root): no reply after %d ms (attempt %d)", spent,
+                            attempt + 1);
+          continue;
+        }
+        if (out_errno != NULL)
+          *out_errno = recv_err;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv(root): recv failed errno=%d (%s) nat_t=%d",
+                          recv_err, strerror(recv_err), prefix4500);
         return -1;
       }
-      int slice = wait - waited;
-      if (slice > 200)
-        slice = 200;
-      pr = poll(&pfd, 1, slice);
-      waited += slice;
-      elapsed_total += slice;
-      if (pr != 0)
-        break;
-    }
-    remaining -= waited;
-    if (pr < 0) {
-      int err = errno;
-      if (tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled after poll interruption");
+      n = (ssize_t)rn;
+    } else {
+      /* Poll in small slices so stop requests are honored promptly. */
+      int waited = 0;
+      int pr = 0;
+      struct pollfd pfd = {.fd = fd, .events = POLLIN, .revents = 0};
+      while (waited < wait) {
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled while waiting for reply");
+          return -1;
+        }
+        int slice = wait - waited;
+        if (slice > 200)
+          slice = 200;
+        pr = poll(&pfd, 1, slice);
+        waited += slice;
+        elapsed_total += slice;
+        if (pr != 0)
+          break;
+      }
+      remaining -= waited;
+      if (pr < 0) {
+        int err = errno;
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled after poll interruption");
+          return -1;
+        }
+        if (out_errno != NULL)
+          *out_errno = err;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: poll errno=%d (%s)", err, strerror(err));
         return -1;
       }
-      if (out_errno != NULL)
-        *out_errno = err;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: poll errno=%d (%s)", err, strerror(err));
-      return -1;
-    }
-    if (pr == 0) {
-      if (tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled after wait budget expired");
+      if (pr == 0) {
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ike_send_recv: canceled after wait budget expired");
+          return -1;
+        }
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ike_send_recv: no reply after %d ms (attempt %d, revents=0x%x)",
+                          waited, attempt + 1, (unsigned)pfd.revents);
+        continue;
+      }
+      if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 && (pfd.revents & POLLIN) == 0) {
+        int so_err = 0;
+        socklen_t so_len = (socklen_t)sizeof(so_err);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) != 0)
+          so_err = errno;
+        if (out_errno != NULL)
+          *out_errno = so_err != 0 ? so_err : EIO;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                          "ike_send_recv: socket error revents=0x%x so_error=%d (%s) nat_t=%d attempt=%d",
+                          (unsigned)pfd.revents, so_err, strerror(so_err), prefix4500, attempt + 1);
         return -1;
       }
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ike_send_recv: no reply after %d ms (attempt %d, revents=0x%x)",
-                        waited, attempt + 1, (unsigned)pfd.revents);
-      continue;
-    }
-    if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 && (pfd.revents & POLLIN) == 0) {
-      int so_err = 0;
-      socklen_t so_len = (socklen_t)sizeof(so_err);
-      if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) != 0)
-        so_err = errno;
-      if (out_errno != NULL)
-        *out_errno = so_err != 0 ? so_err : EIO;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
-                        "ike_send_recv: socket error revents=0x%x so_error=%d (%s) nat_t=%d attempt=%d",
-                        (unsigned)pfd.revents, so_err, strerror(so_err), prefix4500, attempt + 1);
-      return -1;
-    }
-    ssize_t n = recv(fd, in, in_cap, 0);
-    if (n <= 0) {
-      int err = (n < 0) ? errno : ECONNRESET;
-      if (out_errno != NULL)
-        *out_errno = err;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: recv ret=%zd errno=%d (%s) revents=0x%x nat_t=%d",
-                        n, err, strerror(err), (unsigned)pfd.revents, prefix4500);
-      return -1;
+      n = recv(fd, in, in_cap, 0);
+      if (n <= 0) {
+        int err = (n < 0) ? errno : ECONNRESET;
+        if (out_errno != NULL)
+          *out_errno = err;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_recv: recv ret=%zd errno=%d (%s) revents=0x%x nat_t=%d",
+                          n, err, strerror(err), (unsigned)pfd.revents, prefix4500);
+        return -1;
+      }
     }
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                       "ike_send_recv: got UDP reply %zd bytes nat_t=%d (attempt %d, elapsed~%d ms)", n, prefix4500,
@@ -517,9 +598,9 @@ static int ike_send_recv_ex(int fd, const struct sockaddr *peer, socklen_t peer_
   return -1;
 }
 
-static int ike_send_recv(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *out, size_t out_len,
-                         uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
-  return ike_send_recv_ex(fd, peer, peer_len, out, out_len, in, in_cap, timeout_ms, prefix4500, NULL);
+static int ike_send_recv(int fd, l2tp_root_t *root, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *out,
+                         size_t out_len, uint8_t *in, size_t in_cap, int timeout_ms, int prefix4500) {
+  return ike_send_recv_ex(fd, root, peer, peer_len, out, out_len, in, in_cap, timeout_ms, prefix4500, NULL);
 }
 
 static int isakmp_3des_decrypt(const uint8_t key24[24], const uint8_t iv_in[8], const uint8_t *ct, size_t ct_len,
@@ -528,8 +609,8 @@ static int isakmp_aes128_decrypt(const uint8_t key16[16], const uint8_t iv_in[16
                                  uint8_t *plain, size_t plain_cap, size_t *plain_len, uint8_t iv_out[16]);
 
 /** Send Quick Mode msg3 on the NAT-T socket (optional 4-byte RFC 3948 prefix). */
-static int ike_send_qm3_payload(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *pkt,
-                                size_t pkt_len, int prefix4500) {
+static int ike_send_qm3_payload(int fd, l2tp_root_t *root, const struct sockaddr *peer, socklen_t peer_len,
+                                const uint8_t *pkt, size_t pkt_len, int prefix4500) {
   uint8_t wr[4096];
   const uint8_t *sendptr = pkt;
   size_t sendlen = pkt_len;
@@ -542,6 +623,14 @@ static int ike_send_qm3_payload(int fd, const struct sockaddr *peer, socklen_t p
     memcpy(wr + 4, pkt, pkt_len);
     sendptr = wr;
     sendlen = pkt_len + 4;
+  }
+  if (root != NULL) {
+    int send_err = 0;
+    if (l2tp_root_udp_send(root, sendptr, sendlen, &send_err) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_send_qm3_payload(root): send failed errno=%d", send_err);
+      return -1;
+    }
+    return 0;
   }
   ssize_t ns = sendto(fd, sendptr, sendlen, 0, peer, peer_len);
   if (ns != (ssize_t)sendlen) {
@@ -593,26 +682,21 @@ static int ike_is_duplicate_qm2_retransmit(int p1_aes, const uint8_t *aeskey, co
   return 0;
 }
 
-static long long ike_now_ms(void) {
-  struct timeval now;
-  gettimeofday(&now, NULL);
-  return ((long long)now.tv_sec * 1000ll) + ((long long)now.tv_usec / 1000ll);
-}
-
 /**
  * Wait for QM3 completion: ignore duplicate server QM2 (common Libreswan retransmit), resend QM3.
  * Uses real elapsed time with a short quiet settle window so silent peers do not stall L2TP setup for 16 s,
  * and stops without consuming early ESP traffic when peer starts L2TP immediately.
  */
-static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen_t peer_len, const uint8_t *qm3_pkt,
-                                    size_t qm3_len, uint8_t *in, size_t in_cap, int prefix4500, uint32_t qm_mid,
-                                    int p1_aes, const uint8_t *aeskey, const uint8_t *deskey, const uint8_t *qm1_tail) {
+static int ike_qm3_finish_recv_loop(int fd, l2tp_root_t *root, const struct sockaddr *peer, socklen_t peer_len,
+                                    const uint8_t *qm3_pkt, size_t qm3_len, uint8_t *in, size_t in_cap, int prefix4500,
+                                    uint32_t qm_mid, int p1_aes, const uint8_t *aeskey, const uint8_t *deskey,
+                                    const uint8_t *qm1_tail) {
   const long long idle_settle_ms = 1200ll;
   const long long max_total_ms = 6000ll;
   const int slice_ms = 250;
   int resend_count = 0;
 
-  if (ike_send_qm3_payload(fd, peer, peer_len, qm3_pkt, qm3_len, prefix4500) != 0)
+  if (ike_send_qm3_payload(fd, root, peer, peer_len, qm3_pkt, qm3_len, prefix4500) != 0)
     return -1;
 
   long long start_ms = ike_now_ms();
@@ -631,42 +715,72 @@ static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen
       return -1;
     }
     int wait_ms = rem_ms < (long long)slice_ms ? (int)rem_ms : slice_ms;
-    struct pollfd pfd = {.fd = fd, .events = POLLIN};
-    int pr = poll(&pfd, 1, wait_ms);
-    if (pr < 0) {
-      if (errno == EINTR)
-        continue;
-      if (tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "Quick Mode msg3: canceled after poll interruption");
+    ssize_t n = 0;
+    if (root != NULL) {
+      int recv_err = 0;
+      int peek_n = l2tp_root_udp_recv(root, in, in_cap, wait_ms, 1, &recv_err);
+      if (peek_n < 0) {
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "Quick Mode msg3: canceled while waiting for completion");
+          return -1;
+        }
+        if (recv_err == ETIMEDOUT || recv_err == EAGAIN || recv_err == EWOULDBLOCK)
+          continue;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop(root): peek errno=%d", recv_err);
         return -1;
       }
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: poll errno=%d", errno);
-      return -1;
-    }
-    if (pr == 0)
-      continue;
-
-    /* Peek before consuming so early peer ESP/L2TP frames remain queued for l2tp_handshake(). */
-    ssize_t peek_n = recv(fd, in, in_cap, MSG_PEEK);
-    if (peek_n < 0) {
-      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+      if (prefix4500 && peek_n >= 4 && util_read_be32(in) != 0u) {
+        tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                          "Quick Mode msg3: peer started ESP traffic early (%lld ms); proceeding to L2TP",
+                          ike_now_ms() - start_ms);
+        return 0;
+      }
+      int rn = l2tp_root_udp_recv(root, in, in_cap, 0, 0, &recv_err);
+      if (rn < 0) {
+        if (recv_err == ETIMEDOUT || recv_err == EAGAIN || recv_err == EWOULDBLOCK)
+          continue;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop(root): recv errno=%d", recv_err);
+        return -1;
+      }
+      n = (ssize_t)rn;
+    } else {
+      struct pollfd pfd = {.fd = fd, .events = POLLIN};
+      int pr = poll(&pfd, 1, wait_ms);
+      if (pr < 0) {
+        if (errno == EINTR)
+          continue;
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "Quick Mode msg3: canceled after poll interruption");
+          return -1;
+        }
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: poll errno=%d", errno);
+        return -1;
+      }
+      if (pr == 0)
         continue;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: peek errno=%d", errno);
-      return -1;
-    }
-    if (prefix4500 && peek_n >= 4 && util_read_be32(in) != 0u) {
-      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
-                        "Quick Mode msg3: peer started ESP traffic early (%lld ms); proceeding to L2TP",
-                        ike_now_ms() - start_ms);
-      return 0;
-    }
 
-    ssize_t n = recv(fd, in, in_cap, 0);
-    if (n < 0) {
-      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-        continue;
-      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: recv errno=%d", errno);
-      return -1;
+      /* Peek before consuming so early peer ESP/L2TP frames remain queued for l2tp_handshake(). */
+      ssize_t peek_n = recv(fd, in, in_cap, MSG_PEEK);
+      if (peek_n < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+          continue;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: peek errno=%d", errno);
+        return -1;
+      }
+      if (prefix4500 && peek_n >= 4 && util_read_be32(in) != 0u) {
+        tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                          "Quick Mode msg3: peer started ESP traffic early (%lld ms); proceeding to L2TP",
+                          ike_now_ms() - start_ms);
+        return 0;
+      }
+
+      n = recv(fd, in, in_cap, 0);
+      if (n < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+          continue;
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ike_qm3_finish_recv_loop: recv errno=%d", errno);
+        return -1;
+      }
     }
     if (n == 0)
       continue;
@@ -695,7 +809,7 @@ static int ike_qm3_finish_recv_loop(int fd, const struct sockaddr *peer, socklen
         tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                           "Quick Mode: server msg2 retransmit while waiting for QM3 ack; resending HASH(3) (resend=%d)",
                           resend_count);
-        if (resend_count < 16 && ike_send_qm3_payload(fd, peer, peer_len, qm3_pkt, qm3_len, prefix4500) == 0) {
+        if (resend_count < 16 && ike_send_qm3_payload(fd, root, peer, peer_len, qm3_pkt, qm3_len, prefix4500) == 0) {
           resend_count++;
           last_qm3_ms = ike_now_ms();
         }
@@ -1683,6 +1797,130 @@ static int ike_install_esp_keymat(esp_keys_t *esp, const uint8_t *skeyid_d, size
 
 /* --- IKEv1 Main Mode + Quick Mode until ESP keys and udp_encap socket are ready --- */
 
+static int ike_finalize_root_transport(l2tp_root_t *root, const char *server, const uint8_t ip_peer[4],
+                                       uint16_t ike_port_us_be, uint32_t spi_i, int use4500, ike_session_t *ike,
+                                       esp_keys_t *esp) {
+  struct sockaddr_storage peer_1701;
+  socklen_t peer_1701_len = 0;
+  memset(&peer_1701, 0, sizeof(peer_1701));
+  if (resolve_udp(server, L2TP_PORT, &peer_1701, &peer_1701_len) == 0 && peer_1701.ss_family == AF_INET) {
+    int l2tp_fd = ike_open_udp_socket(&peer_1701, peer_1701_len, 0u, 0, "l2tp_xfrm", NULL);
+    if (l2tp_fd >= 0) {
+#if defined(__linux__) && defined(SO_NO_CHECK)
+      if (use4500) {
+        /* NAT-T rewrites outer IP without updating encrypted inner UDP checksum; 0 matches RFC 768 + esp_udp. */
+        int no_check = 1;
+        if (setsockopt(l2tp_fd, SOL_SOCKET, SO_NO_CHECK, &no_check, (socklen_t)sizeof(no_check)) != 0) {
+          tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: setsockopt(SO_NO_CHECK) skipped errno=%d", errno);
+        }
+      }
+#endif
+      struct sockaddr_storage lss_l2tp;
+      socklen_t lsl_l2tp = sizeof(lss_l2tp);
+      uint8_t l2tp_ip[4] = {0, 0, 0, 0};
+      uint16_t l2tp_port_be = 0u;
+      if (getsockname(l2tp_fd, (struct sockaddr *)&lss_l2tp, &lsl_l2tp) == 0 &&
+          sockaddr_to_v4((struct sockaddr *)&lss_l2tp, lsl_l2tp, l2tp_ip, &l2tp_port_be) == 0) {
+        tf_l2tp_xfrm_spec_t xspec;
+        memset(&xspec, 0, sizeof(xspec));
+        memcpy(xspec.local_ipv4, l2tp_ip, 4u);
+        memcpy(xspec.peer_ipv4, ip_peer, 4u);
+        xspec.l2tp_local_port_be = l2tp_port_be;
+        xspec.ike_local_port_be = ike_port_us_be;
+        util_write_be32((uint8_t *)&xspec.spi_out_be, esp->spi_i);
+        util_write_be32((uint8_t *)&xspec.spi_in_be, esp->spi_r);
+        /* Derive non-zero per-session XFRM reqid without colliding across reconnects. */
+        xspec.reqid = (spi_i & 0x7fffffffu) | 1u;
+        xspec.cipher = esp->cipher;
+        xspec.enc_key_len = (uint8_t)esp->enc_key_len;
+        xspec.auth_key_len = (uint8_t)esp->auth_key_len;
+        xspec.use4500 = use4500 ? 1u : 0u;
+        memcpy(xspec.enc_key_out, esp->enc_key, esp->enc_key_len);
+        memcpy(xspec.auth_key_out, esp->auth_key, esp->auth_key_len);
+        memcpy(xspec.enc_key_in, esp->enc_key + esp->enc_key_len, esp->enc_key_len);
+        memcpy(xspec.auth_key_in, esp->auth_key + 20u, esp->auth_key_len);
+
+        int encap_err = 0;
+        int xfrm_err = 0;
+        int encap_ok = (!use4500 || l2tp_root_set_encap(root, 2, &encap_err) == 0);
+        int xfrm_ok = (encap_ok && l2tp_root_xfrm_install(root, &xspec, &xfrm_err) == 0);
+        mbedtls_platform_zeroize(&xspec, sizeof(xspec));
+        if (xfrm_ok) {
+          /* Re-connect after XFRM install so l2tp_fd refreshes sk_dst_cache to the xfrm_dst bundle immediately. */
+          (void)connect(l2tp_fd, (const struct sockaddr *)&peer_1701, peer_1701_len);
+          int xfrm_ip_mtu = 0;
+#if defined(__linux__) && defined(IP_MTU)
+          socklen_t mtu_len = (socklen_t)sizeof(xfrm_ip_mtu);
+          if (getsockopt(l2tp_fd, IPPROTO_IP, IP_MTU, &xfrm_ip_mtu, &mtu_len) != 0)
+            xfrm_ip_mtu = 0;
+#endif
+          int max_tun_mtu = 1380;
+          if (xfrm_ip_mtu > 616) {
+            max_tun_mtu = xfrm_ip_mtu - 40;
+            if (max_tun_mtu > 1500)
+              max_tun_mtu = 1500;
+          }
+          uint32_t spi_i_keep = esp->spi_i;
+          uint32_t spi_r_keep = esp->spi_r;
+          mbedtls_platform_zeroize(esp->enc_key, sizeof(esp->enc_key));
+          mbedtls_platform_zeroize(esp->auth_key, sizeof(esp->auth_key));
+          esp->enc_key_len = 0u;
+          esp->auth_key_len = 0u;
+          esp->udp_encap = 0;
+          esp->spi_i = spi_i_keep;
+          esp->spi_r = spi_r_keep;
+          memcpy(&ike->peer, &peer_1701, peer_1701_len);
+          ike->peer_len = peer_1701_len;
+          ike->esp_fd = l2tp_fd;
+          ike->xfrm_max_tun_mtu = max_tun_mtu;
+          ike->root = root;
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                            "L2TP root Tier 1 active: Kernel XFRM (nat_t=%d local_port=%u ip_mtu=%d max_tun_mtu=%d)",
+                            use4500, (unsigned)ntohs(l2tp_port_be), xfrm_ip_mtu, max_tun_mtu);
+          return 0;
+        }
+        if (encap_ok && use4500)
+          (void)l2tp_root_set_encap(root, 0, NULL);
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                          "L2TP Kernel XFRM unavailable (encap_err=%d xfrm_err=%d); trying Tier 2 fallback", encap_err,
+                          xfrm_err);
+      }
+      close(l2tp_fd);
+    }
+  }
+
+  int tier2_err = 0;
+  if (!use4500) {
+    if (l2tp_root_open_raw_esp(root, ip_peer, &tier2_err) == 0 &&
+        l2tp_root_start_stream(root, (int)TF_L2TP_STREAM_RAW_ESP, &tier2_err) == 0) {
+      esp->udp_encap = 0;
+      esp->io_ctx = root;
+      esp->io_send = l2tp_root_stream_send;
+      esp->io_recv = l2tp_root_stream_recv_wait;
+      ike->esp_fd = -1;
+      ike->root = root;
+      tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                        "L2TP root Tier 2a active: root SOCK_RAW IPPROTO_ESP over helper stream");
+      return 0;
+    }
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "L2TP root Tier 2a raw ESP failed errno=%d", tier2_err);
+    return IKE_ROOT_FALLBACK;
+  }
+
+  if (l2tp_root_start_stream(root, (int)TF_L2TP_STREAM_UDP4500, &tier2_err) == 0) {
+    esp->udp_encap = 1;
+    esp->io_ctx = root;
+    esp->io_send = l2tp_root_stream_send;
+    esp->io_recv = l2tp_root_stream_recv_wait;
+    ike->esp_fd = -1;
+    ike->root = root;
+    tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "L2TP root Tier 2b active: userspace ESP-UDP 4500 over root socket");
+    return 0;
+  }
+  tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "L2TP root Tier 2b UDP 4500 stream failed errno=%d", tier2_err);
+  return IKE_ROOT_FALLBACK;
+}
+
 /**
  * Perform IKEv1 Main Mode + Quick Mode to derive ESP transport keys and connected socket state.
  *
@@ -1698,8 +1936,10 @@ static int ike_install_esp_keymat(esp_keys_t *esp, const uint8_t *skeyid_d, size
  *
  * @return 0 on success, -1 on negotiation failure or cancellation.
  */
-static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp) {
+static int ipsec_negotiate_internal(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp,
+                                    l2tp_root_t *root) {
   memset(ike, 0, sizeof(*ike));
+  ike->esp_fd = -1;
   memset(esp, 0, sizeof(*esp));
   tunnel_log("IKE begin server=%s psk_len=%zu (PSK not logged)", server, strlen(psk));
 
@@ -1805,41 +2045,78 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       ike_log_endpoint(peer_label, (struct sockaddr *)&cand, cand_len);
 
       int open_err = 0;
-      fd = ike_open_udp_socket(&cand, cand_len, st->local_bind_port, 1, st->label, &open_err);
-      if (fd < 0) {
-        stage_err[sidx] = open_err;
-        continue;
+      if (root != NULL) {
+        uint8_t cand_ip[4];
+        uint16_t cand_port_be = 0u;
+        if (sockaddr_to_v4((struct sockaddr *)&cand, cand_len, cand_ip, &cand_port_be) != 0)
+          continue;
+        if (l2tp_root_open_udp(root, cand_ip, ntohs(cand_port_be), st->local_bind_port, 1, NULL, NULL, &open_err) !=
+            0) {
+          stage_err[sidx] = open_err;
+          continue;
+        }
+        fd = -1;
+      } else {
+        fd = ike_open_udp_socket(&cand, cand_len, st->local_bind_port, 1, st->label, &open_err);
+        if (fd < 0) {
+          stage_err[sidx] = open_err;
+          continue;
+        }
       }
       memcpy(&peer_active, &cand, cand_len);
       peer_active_len = cand_len;
       p1_prefix = st->prefix4500;
       esp->udp_encap = st->prefix4500;
-      tunnel_log("IKE Main Mode msg1 (%s) -> %zu bytes (transport=%s)", st->label, o,
-                 p1_prefix ? "UDP4500+marker" : "UDP500");
+      tunnel_log("IKE Main Mode msg1 (%s) -> %zu bytes (transport=%s root=%d)", st->label, o,
+                 p1_prefix ? "UDP4500+marker" : "UDP500", root != NULL ? 1 : 0);
       int io_err = 0;
-      inlen = ike_send_recv_ex(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in),
+      inlen = ike_send_recv_ex(fd, root, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in),
                                st->timeout_ms, p1_prefix, &io_err);
       if (inlen >= 28) {
         break;
       }
       stage_err[sidx] = io_err;
-      close(fd);
-      fd = -1;
+      if (fd >= 0) {
+        close(fd);
+        fd = -1;
+      }
     }
   }
-  if (inlen < 28 || fd < 0) {
+  if (inlen < 28 || (root == NULL && fd < 0)) {
     tunnel_engine_log(
         ANDROID_LOG_ERROR, LOG_TAG,
         "IKE MM msg2: no valid reply (stages=%d udp500_primary_err=%d udp500_compat_err=%d "
         "udp4500_err=%d candidates=%zu; check router/firewall/IPsec passthrough or UDP 500 source-port policy)",
         stages_tried, stage_err[0], stage_err[1], stage_err[2], n_peers500);
     mbedtls_dhm_free(&dhm);
+    if (root != NULL && !tunnel_should_stop()) {
+      mbedtls_ctr_drbg_free(&ctr);
+      mbedtls_entropy_free(&entropy);
+      return IKE_ROOT_FALLBACK;
+    }
     goto fail_fd;
   }
 
   struct sockaddr_storage lss;
   socklen_t lsl = sizeof(lss);
-  if (getsockname(fd, (struct sockaddr *)&lss, &lsl) != 0) {
+  if (root != NULL) {
+    /* Refresh local IPv4/port from helper's connected IKE socket. */
+    uint8_t ip4[4] = {0, 0, 0, 0};
+    uint16_t p_be = 0u;
+    uint8_t peer4[4] = {0, 0, 0, 0};
+    uint16_t peer_p_be = 0u;
+    if (sockaddr_to_v4((struct sockaddr *)&peer_active, peer_active_len, peer4, &peer_p_be) != 0 ||
+        l2tp_root_connect_udp(root, peer4, ntohs(peer_p_be), ip4, &p_be, NULL) != 0) {
+      mbedtls_dhm_free(&dhm);
+      goto fail_fd;
+    }
+    memset(&lss, 0, sizeof(lss));
+    struct sockaddr_in *s4 = (struct sockaddr_in *)&lss;
+    s4->sin_family = AF_INET;
+    memcpy(&s4->sin_addr.s_addr, ip4, 4u);
+    s4->sin_port = p_be;
+    lsl = (socklen_t)sizeof(*s4);
+  } else if (getsockname(fd, (struct sockaddr *)&lss, &lsl) != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: getsockname after MM2 errno=%d", errno);
     mbedtls_dhm_free(&dhm);
     goto fail_fd;
@@ -1907,27 +2184,31 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   tunnel_log("IKE selected DH group=%u", dh_group);
   tunnel_log("IKE P1 transform from server: %s", ike->p1_aes ? "AES-128-CBC" : "3DES-CBC");
 
-  /* Refresh local/remote tuple for NAT-D (must match source port Libreswan sees). */
-  lsl = sizeof(lss);
-  if (getsockname(fd, (struct sockaddr *)&lss, &lsl) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: getsockname before MM3 errno=%d", errno);
-    mbedtls_dhm_free(&dhm);
-    goto fail_fd;
-  }
-  if (sockaddr_to_v4((struct sockaddr *)&lss, lsl, ip_us, &port_us_be) != 0 ||
-      sockaddr_to_v4((struct sockaddr *)&peer_active, peer_active_len, ip_peer, &port_peer_be) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IPv4 required for IKE (MM3 NAT-D)");
-    mbedtls_dhm_free(&dhm);
-    goto fail_fd;
+  /* Refresh local/remote tuple for NAT-D (must match source port peer sees). */
+  if (root == NULL) {
+    lsl = sizeof(lss);
+    if (getsockname(fd, (struct sockaddr *)&lss, &lsl) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: getsockname before MM3 errno=%d", errno);
+      mbedtls_dhm_free(&dhm);
+      goto fail_fd;
+    }
+    if (sockaddr_to_v4((struct sockaddr *)&lss, lsl, ip_us, &port_us_be) != 0 ||
+        sockaddr_to_v4((struct sockaddr *)&peer_active, peer_active_len, ip_peer, &port_peer_be) != 0) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IPv4 required for IKE (MM3 NAT-D)");
+      mbedtls_dhm_free(&dhm);
+      goto fail_fd;
+    }
   }
   memcpy(id_body + 4, ip_us, 4);
   tunnel_log("IKE Phase1 transport locked: %s prefix=%d", p1_prefix ? "UDP4500" : "UDP500", p1_prefix);
 
   // IKEv1 Main Mode message 3: KE, Ni, NAT-D (src), NAT-D (peer).
-  // Force NAT-T by hashing a zeroed source IP so the NAT-D check always fails. Android
-  // userspace cannot send raw ESP (IP proto 50), so UDP encapsulation on port 4500 is mandatory.
+  // Userspace mode forces NAT-T so UDP 4500 carries ESP; root mode uses real NAT-D so
+  // non-NAT paths can negotiate direct Kernel XFRM / raw ESP without UDP encapsulation.
   uint8_t h_us[20], h_peer[20];
-  {
+  if (root != NULL) {
+    natd_hash(icookie, ike->rcookie, ip_us, port_us_be, h_us);
+  } else {
     uint8_t fake_ip[4] = {0, 0, 0, 0};
     uint16_t fake_port = 0;
     natd_hash(icookie, ike->rcookie, fake_ip, fake_port, h_us);
@@ -1979,7 +2260,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   util_write_be32(pkt + len_m3, (uint32_t)o);
 
   tunnel_log("IKE Main Mode msg3 -> %zu bytes (nat_t_prefix=%d)", o, p1_prefix);
-  inlen = ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 8000, p1_prefix);
+  inlen = ike_send_recv(fd, root, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 8000,
+                        p1_prefix);
   if (inlen < 28) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM msg4: no valid reply");
     mbedtls_dhm_free(&dhm);
@@ -2057,7 +2339,17 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
         goto fail_fd;
       }
       ike_log_endpoint("IKE peer:4500", (struct sockaddr *)&peer_active, peer_active_len);
-      if (connect(fd, (struct sockaddr *)&peer_active, peer_active_len) != 0) {
+      if (root != NULL) {
+        int err = 0;
+        int float_rc = (port_us_be == htons(IKE_PORT))
+                           ? l2tp_root_open_udp(root, ip_peer, NAT_T_PORT, NAT_T_PORT, 1, ip_us, &port_us_be, &err)
+                           : l2tp_root_connect_udp(root, ip_peer, NAT_T_PORT, ip_us, &port_us_be, &err);
+        if (float_rc != 0) {
+          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE(root): float(4500) errno=%d (%s)", err, strerror(err));
+          goto fail_fd;
+        }
+        memcpy(id_body + 4, ip_us, 4);
+      } else if (connect(fd, (struct sockaddr *)&peer_active, peer_active_len) != 0) {
         int err = errno;
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: connect(4500) errno=%d (%s)", err, strerror(err));
         goto fail_fd;
@@ -2273,8 +2565,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
 
     tunnel_log("IKE Main Mode msg5 (encrypted) try=%d/%d hash_sa=%s len=%zu -> %zu bytes (nat_t_prefix=%d)",
                mm5_try + 1, mm5_attempts, sa_hash_tag, sa_hash_len, o, p1_prefix);
-    inlen =
-        ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 8000, p1_prefix);
+    inlen = ike_send_recv(fd, root, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 8000,
+                          p1_prefix);
     if (inlen >= 28 && in[18] == IKE_EXCH_MAIN) {
       sa_hash_used = sa_hash;
       sa_hash_used_len = sa_hash_len;
@@ -2556,7 +2848,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
 
   tunnel_log("IKE Quick Mode msg1 -> %zu bytes (nat_t=%d)", o, prefix);
   int qm_info_skips = 0;
-  inlen = ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 10000, prefix);
+  inlen =
+      ike_send_recv(fd, root, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), 10000, prefix);
   if (inlen < 28) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode: no reply (timeout or send error; see ike_send_recv)");
     goto fail_fd;
@@ -2644,7 +2937,7 @@ qm2_received:
       qm_info_skips++;
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
                         "Quick Mode: non-fatal Informational received, waiting for QM2 (skip %d)", qm_info_skips);
-      inlen = ike_recv_only(fd, in, sizeof(in), 2500, prefix);
+      inlen = ike_recv_only(fd, root, in, sizeof(in), 2500, prefix);
       if (inlen < 28)
         goto fail_fd;
       goto qm2_received;
@@ -2850,13 +3143,13 @@ qm2_received:
   o += c3l;
   util_write_be32(pkt + len_mark, (uint32_t)o);
   tunnel_log("IKE Quick Mode msg3 -> %zu bytes", o);
-  if (ike_qm3_finish_recv_loop(fd, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in), prefix,
-                               qm_mid, ike->p1_aes, aeskey, deskey, qm1_tail) != 0) {
+  if (ike_qm3_finish_recv_loop(fd, root, (struct sockaddr *)&peer_active, peer_active_len, pkt, o, in, sizeof(in),
+                               prefix, qm_mid, ike->p1_aes, aeskey, deskey, qm1_tail) != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "Quick Mode msg3: send or recv loop failed");
     goto fail_fd;
   }
 
-  if (!use4500) {
+  if (root == NULL && !use4500) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
                       "IKE: NAT-T was not negotiated; raw ESP requires root (impossible on Android). "
                       "This should not happen with forced NAT-D.");
@@ -2884,17 +3177,28 @@ qm2_received:
   memcpy(ike->iv_phase1, p1_last_block, sizeof(ike->iv_phase1));
   ike->nat_t = use4500 ? 1 : 0;
 
+  if (root != NULL) {
+    int root_rc = ike_finalize_root_transport(root, server, ip_peer, port_us_be, spi_i, use4500, ike, esp);
+    if (root_rc != 0) {
+      esp_keys_cleanup(esp);
+      mbedtls_ctr_drbg_free(&ctr);
+      mbedtls_entropy_free(&entropy);
+      return root_rc;
+    }
+  }
+
   mbedtls_ctr_drbg_free(&ctr);
   mbedtls_entropy_free(&entropy);
-  tunnel_log("IKE+QM ok spi_i=%08x spi_r=%08x cipher=%s udp_encap=%d", (unsigned)spi_i, (unsigned)spi_r,
-             esp->cipher == ESP_CIPHER_3DES_CBC ? "3DES-CBC" : "AES-128-CBC", esp->udp_encap);
+  tunnel_log("IKE+QM ok spi_i=%08x spi_r=%08x cipher=%s udp_encap=%d root=%d", (unsigned)spi_i, (unsigned)spi_r,
+             esp->cipher == ESP_CIPHER_3DES_CBC ? "3DES-CBC" : "AES-128-CBC", esp->udp_encap,
+             ike->root != NULL ? 1 : 0);
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE QM SA map: outbound_spi=%08x inbound_spi=%08x profile=%s",
                     (unsigned)esp->spi_i, (unsigned)esp->spi_r, esp->outbound_profile ? "alt-direction" : "primary");
   tunnel_engine_log(
       ANDROID_LOG_DEBUG, LOG_TAG,
       "IKE QM keys: inner_ip_src=%02x%02x%02x%02x inner_ip_dst=%02x%02x%02x%02x (for ESP inner UDP pseudo-hdr)",
       ip_us[0], ip_us[1], ip_us[2], ip_us[3], ip_peer[0], ip_peer[1], ip_peer[2], ip_peer[3]);
-  ike_log_endpoint("IKE QM peer (NAT-T/ESP)", (struct sockaddr *)&peer_active, peer_active_len);
+  ike_log_endpoint("IKE QM peer (NAT-T/ESP)", (struct sockaddr *)&ike->peer, ike->peer_len);
   return 0;
 
 fail_fd:
@@ -2910,18 +3214,50 @@ fail_early:
 
 /* --- Public entry: cleartext L2TP shortcut vs full IPsec negotiation --- */
 
-int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp) {
+int ikev1_connect_ex(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp,
+                     const l2tp_root_config_t *root_cfg) {
   /* Empty PSK = L2TP-only (no IPsec). */
   if (psk == NULL || psk[0] == '\0') {
     tunnel_log("ikev1_connect: empty PSK -> cleartext L2TP (no IPsec)");
     return cleartext_l2tp(server, ike, esp);
   }
+  if (root_cfg != NULL && root_cfg->use_root && root_cfg->helper_path[0] != '\0') {
+    l2tp_root_t *root = (l2tp_root_t *)calloc(1u, sizeof(l2tp_root_t));
+    if (root != NULL) {
+      l2tp_root_init(root);
+      int start_rc = l2tp_root_start(root, root_cfg->helper_path, 1, root_cfg->bind_iface);
+      if (start_rc == TUNNEL_EXIT_OK) {
+        tunnel_log("ikev1_connect: trying root L2TP/IPsec backend");
+        int nrc = ipsec_negotiate_internal(server, psk, ike, esp, root);
+        if (nrc == 0)
+          return 0;
+        l2tp_root_stop(root);
+        free(root);
+        if (nrc == IKE_ROOT_FALLBACK && !tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                            "L2TP root backend failed before tunnel setup; falling back to default userspace VPN");
+          return ipsec_negotiate_internal(server, psk, ike, esp, NULL);
+        }
+        return -1;
+      }
+      free(root);
+      if (tunnel_should_stop())
+        return -1;
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                        "L2TP root helper unavailable (rc=%d); falling back to default userspace VPN", start_rc);
+    }
+  }
   tunnel_log("ikev1_connect: IPsec+IKE path psk_len=%zu", strlen(psk));
-  return ipsec_negotiate(server, psk, ike, esp);
+  return ipsec_negotiate_internal(server, psk, ike, esp, NULL);
+}
+
+int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp) {
+  return ikev1_connect_ex(server, psk, ike, esp, NULL);
 }
 
 void ikev1_send_delete(ike_session_t *ike, const esp_keys_t *esp) {
-  if (ike == NULL || ike->esp_fd < 0 || ike->skeyid_a_len < 20u || ike->skeyid_e_len < 20u || ike->peer_len == 0) {
+  if (ike == NULL || (ike->esp_fd < 0 && ike->root == NULL) || ike->skeyid_a_len < 20u || ike->skeyid_e_len < 20u ||
+      ike->peer_len == 0) {
     return;
   }
 
@@ -3018,8 +3354,14 @@ void ikev1_send_delete(ike_session_t *ike, const esp_keys_t *esp) {
   memcpy(pkt + o, ct, ctl);
   o += ctl;
 
-  if (ike_send_qm3_payload(ike->esp_fd, (struct sockaddr *)&ike->peer, ike->peer_len, pkt, o, ike->nat_t) == 0) {
+  int sent_ok = (ike->root != NULL) ? (l2tp_root_ike_send_async(ike->root, pkt, o, ike->nat_t) == 0)
+                                    : (ike_send_qm3_payload(ike->esp_fd, NULL, (struct sockaddr *)&ike->peer,
+                                                            ike->peer_len, pkt, o, ike->nat_t) == 0);
+  if (sent_ok) {
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE: sent Informational Delete (esp=%d spi_r=%08x)", have_esp,
                       esp != NULL ? (unsigned)esp->spi_r : 0u);
+  } else {
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "IKE: Informational Delete send failed (root=%d nat_t=%d)",
+                      ike->root != NULL ? 1 : 0, ike->nat_t);
   }
 }

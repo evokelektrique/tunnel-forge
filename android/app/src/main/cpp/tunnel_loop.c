@@ -14,6 +14,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -40,6 +41,8 @@ static atomic_int g_stop;
 static pthread_mutex_t g_pptp_cfg_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_pptp_helper_path[512];
 static char g_pptp_bind_iface[24];
+static pthread_mutex_t g_l2tp_cfg_lock = PTHREAD_MUTEX_INITIALIZER;
+static l2tp_root_config_t g_l2tp_cfg;
 
 static struct {
   int protocol;
@@ -64,6 +67,22 @@ void engine_set_pptp_runtime_config(const char *helper_path, const char *bind_if
     g_pptp_bind_iface[0] = '\0';
   }
   pthread_mutex_unlock(&g_pptp_cfg_lock);
+}
+
+void engine_set_l2tp_runtime_config(const char *helper_path, const char *bind_iface, int use_root) {
+  pthread_mutex_lock(&g_l2tp_cfg_lock);
+  g_l2tp_cfg.use_root = use_root ? 1 : 0;
+  if (helper_path != NULL) {
+    snprintf(g_l2tp_cfg.helper_path, sizeof(g_l2tp_cfg.helper_path), "%s", helper_path);
+  } else {
+    g_l2tp_cfg.helper_path[0] = '\0';
+  }
+  if (bind_iface != NULL) {
+    snprintf(g_l2tp_cfg.bind_iface, sizeof(g_l2tp_cfg.bind_iface), "%s", bind_iface);
+  } else {
+    g_l2tp_cfg.bind_iface[0] = '\0';
+  }
+  pthread_mutex_unlock(&g_l2tp_cfg_lock);
 }
 
 static proxy_packet_queue_ctx_t g_proxy_queue;
@@ -340,7 +359,7 @@ static void tunnel_close_active_session(const char *reason, int send_teardown) {
     g_state.ready = 0;
     return;
   }
-  if (g_state.ike.esp_fd < 0) {
+  if (g_state.ike.esp_fd < 0 && g_state.ike.root == NULL) {
     esp_keys_cleanup(&g_state.esp);
     return;
   }
@@ -351,12 +370,19 @@ static void tunnel_close_active_session(const char *reason, int send_teardown) {
                         reason != NULL ? reason : "unknown");
     }
   }
-  if (send_teardown && g_state.esp.enc_key_len > 0) {
+  if (send_teardown && (g_state.esp.enc_key_len > 0 || g_state.ike.skeyid_e_len > 0)) {
     ikev1_send_delete(&g_state.ike, &g_state.esp);
   }
   esp_keys_cleanup(&g_state.esp);
-  close(g_state.ike.esp_fd);
-  g_state.ike.esp_fd = -1;
+  if (g_state.ike.esp_fd >= 0) {
+    close(g_state.ike.esp_fd);
+    g_state.ike.esp_fd = -1;
+  }
+  if (g_state.ike.root != NULL) {
+    l2tp_root_stop(g_state.ike.root);
+    free(g_state.ike.root);
+    g_state.ike.root = NULL;
+  }
   g_state.ready = 0;
 }
 
@@ -525,7 +551,12 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
   g_state.ike.esp_fd = -1;
   memset(&g_state.esp, 0, sizeof(g_state.esp));
 
-  if (ikev1_connect(server, psk, &g_state.ike, &g_state.esp) != 0) {
+  l2tp_root_config_t l2tp_cfg;
+  pthread_mutex_lock(&g_l2tp_cfg_lock);
+  l2tp_cfg = g_l2tp_cfg;
+  pthread_mutex_unlock(&g_l2tp_cfg_lock);
+
+  if (ikev1_connect_ex(server, psk, &g_state.ike, &g_state.esp, &l2tp_cfg) != 0) {
     if (tunnel_should_stop()) {
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "tunnel negotiate canceled during IKE");
       return TUNNEL_EXIT_STOPPED;
@@ -549,8 +580,22 @@ int tunnel_negotiate(const char *server, const char *user, const char *password,
   }
 
   memset(&g_state.ppp, 0, sizeof(g_state.ppp));
-  int ppp_rc = ppp_negotiate(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer,
-                             g_state.ike.peer_len, &g_state.l2tp, user, password, tun_mtu, ppp_auth, &g_state.ppp);
+  int effective_tun_mtu = tun_mtu;
+  if (g_state.ike.xfrm_max_tun_mtu > 0) {
+    if (effective_tun_mtu <= 0) {
+      effective_tun_mtu = (g_state.ike.xfrm_max_tun_mtu < 1380) ? g_state.ike.xfrm_max_tun_mtu : 1380;
+      tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "L2TP Kernel XFRM auto MTU=%d (max=%d)", effective_tun_mtu,
+                        g_state.ike.xfrm_max_tun_mtu);
+    } else if (effective_tun_mtu > g_state.ike.xfrm_max_tun_mtu) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                        "L2TP Kernel XFRM clamped tun_mtu=%d -> %d (avoid inner fragmentation)", effective_tun_mtu,
+                        g_state.ike.xfrm_max_tun_mtu);
+      effective_tun_mtu = g_state.ike.xfrm_max_tun_mtu;
+    }
+  }
+  int ppp_rc =
+      ppp_negotiate(g_state.ike.esp_fd, &g_state.esp, (struct sockaddr *)&g_state.ike.peer, g_state.ike.peer_len,
+                    &g_state.l2tp, user, password, effective_tun_mtu, ppp_auth, &g_state.ppp);
   if (ppp_rc != 0) {
     if (tunnel_should_stop()) {
       tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "tunnel negotiate canceled during PPP");
@@ -645,6 +690,37 @@ static int tunnel_is_fatal_pptp_errno(int err) {
   return err == EPIPE || err == EBADF || tunnel_is_fatal_socket_errno(err);
 }
 
+static ssize_t tunnel_l2tp_read_next_dgram(int esp_fd, l2tp_root_t *root, int is_stream, int burst, uint8_t *buf,
+                                           size_t cap, int *out_err) {
+  if (out_err != NULL)
+    *out_err = 0;
+  if (is_stream) {
+    int rn = l2tp_root_stream_read_nonblock(root, buf, cap);
+    if (rn < 0 && out_err != NULL)
+      *out_err = errno;
+    return (ssize_t)rn;
+  }
+  for (;;) {
+    ssize_t n = recv(esp_fd, buf, cap, burst > 0 ? MSG_DONTWAIT : 0);
+    if (n == 0) {
+      if (out_err != NULL)
+        *out_err = 0;
+      return -2;
+    }
+    if (n < 0) {
+      int recv_err = errno;
+      if (recv_err == EINTR)
+        continue;
+      if (recv_err == EAGAIN || recv_err == EWOULDBLOCK)
+        return 0;
+      if (out_err != NULL)
+        *out_err = recv_err;
+      return -1;
+    }
+    return n;
+  }
+}
+
 static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint) {
   /* Readiness guard: run loop is only valid after negotiation state is established. */
   if (!g_state.ready) {
@@ -654,6 +730,7 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
   /* Each invocation starts with cooperative stop cleared. */
   atomic_store(&g_stop, 0);
   const int is_pptp = (g_state.protocol == TUNNEL_PROTOCOL_PPTP);
+  const int is_l2tp_stream = (!is_pptp && l2tp_root_is_stream_active(g_state.ike.root));
   int vpn_dns_enabled_for_loop = 0;
   packet_endpoint_t vpn_dns_endpoint;
   /* Activate DNS intercept bridge only when TUN exists and feature flag is enabled. */
@@ -671,7 +748,8 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
   const int endpoint_fd = packet_endpoint_poll_fd(endpoint);
   const int vpn_dns_fd = vpn_dns_enabled_for_loop ? packet_endpoint_poll_fd(&vpn_dns_endpoint) : -1;
   /* Poll fds are prepared once; loop mutates only events/revents and pending state. */
-  if ((endpoint_fd >= 0 && set_nonblock(endpoint_fd) != 0) || (!is_pptp && set_nonblock(g_state.ike.esp_fd) != 0)) {
+  if ((endpoint_fd >= 0 && set_nonblock(endpoint_fd) != 0) ||
+      (!is_pptp && !is_l2tp_stream && g_state.ike.esp_fd >= 0 && set_nonblock(g_state.ike.esp_fd) != 0)) {
     tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "nonblock failed: errno=%d", errno);
   }
 
@@ -688,9 +766,11 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
                       endpoint != NULL && endpoint->name != NULL ? endpoint->name : "unknown", endpoint_fd,
                       g_state.pptp.root.from_helper_fd, g_state.pptp.ctrl_fd, g_state.ppp.mppe.enabled ? 1 : 0);
   } else {
-    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "tunnel poll loop: endpoint=%s fd=%d esp_fd=%d udp_encap=%d",
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                      "tunnel poll loop: endpoint=%s fd=%d esp_fd=%d stream=%d udp_encap=%d",
                       endpoint != NULL && endpoint->name != NULL ? endpoint->name : "unknown", endpoint_fd,
-                      g_state.ike.esp_fd, g_state.esp.udp_encap ? 1 : 0);
+                      is_l2tp_stream ? l2tp_root_stream_fd(g_state.ike.root) : g_state.ike.esp_fd, is_l2tp_stream,
+                      g_state.esp.udp_encap ? 1 : 0);
   }
   if (tun_fd >= 0) {
     engine_notify_tunnel_ready("TUN interface ready; tunnel loop active");
@@ -735,7 +815,7 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
       if (pptp_root_has_buffered_frame(&g_state.pptp.root))
         poll_timeout = 0;
     } else {
-      fds[1].fd = g_state.ike.esp_fd;
+      fds[1].fd = is_l2tp_stream ? l2tp_root_stream_fd(g_state.ike.root) : g_state.ike.esp_fd;
       fds[1].events = POLLIN;
       nfds = 2u;
       if (vpn_dns_enabled_for_loop) {
@@ -744,6 +824,8 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
         fds[2].events = POLLIN;
         nfds = 3u;
       }
+      if (is_l2tp_stream && l2tp_root_has_buffered_frame(g_state.ike.root))
+        poll_timeout = 0;
     }
     int pr = poll(fds, nfds, poll_timeout);
     if (pr < 0) {
@@ -757,20 +839,30 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
     }
 
     if (!is_pptp && pr > 0 && (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
-      int so_err = 0;
-      socklen_t so_len = sizeof(so_err);
-      if (getsockopt(g_state.ike.esp_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) != 0)
-        so_err = errno;
-      if (tunnel_is_fatal_esp_poll_event((fds[1].revents & (POLLHUP | POLLNVAL)) != 0, so_err)) {
-        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "esp socket error revents=0x%x so_error=%d", fds[1].revents,
-                          so_err);
-        exit_code = TUNNEL_EXIT_NETWORK_LOST;
-        close_reason = "esp socket error";
-        send_teardown = 0;
-        break;
+      if (is_l2tp_stream) {
+        if ((fds[1].revents & POLLIN) == 0) {
+          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "l2tp root helper pipe closed revents=0x%x", fds[1].revents);
+          exit_code = TUNNEL_EXIT_NETWORK_LOST;
+          close_reason = "l2tp helper closed";
+          send_teardown = 0;
+          break;
+        }
+      } else {
+        int so_err = 0;
+        socklen_t so_len = sizeof(so_err);
+        if (getsockopt(g_state.ike.esp_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) != 0)
+          so_err = errno;
+        if (tunnel_is_fatal_esp_poll_event((fds[1].revents & (POLLHUP | POLLNVAL)) != 0, so_err)) {
+          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "esp socket error revents=0x%x so_error=%d", fds[1].revents,
+                            so_err);
+          exit_code = TUNNEL_EXIT_NETWORK_LOST;
+          close_reason = "esp socket error";
+          send_teardown = 0;
+          break;
+        }
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp socket transient error revents=0x%x so_error=%d; continuing",
+                          fds[1].revents, so_err);
       }
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp socket transient error revents=0x%x so_error=%d; continuing",
-                        fds[1].revents, so_err);
     }
 
     if (is_pptp && pr > 0 && (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) && !(fds[1].revents & POLLIN)) {
@@ -801,18 +893,32 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
     }
 
     if (pr == 0) {
-      /* Idle tick: send NAT-T keepalive when due. */
-      if (!is_pptp && g_state.esp.udp_encap && g_state.esp.enc_key_len) {
+      /* Idle tick: send NAT-T keepalive when due (including Tier 1 XFRM NAT-T over ike_fd). */
+      const int natt_keepalive_enabled =
+          (!is_pptp && ((g_state.esp.udp_encap && g_state.esp.enc_key_len) ||
+                        (!is_l2tp_stream && g_state.ike.root != NULL && g_state.ike.nat_t)));
+      if (natt_keepalive_enabled) {
         time_t now = time(NULL);
         if (nat_t_keepalive_is_due(now, last_outbound_to_peer, NAT_T_KEEPALIVE_INTERVAL_SECS)) {
           uint8_t keepalive[1];
           const size_t keepalive_len = nat_t_keepalive_write_probe(keepalive, sizeof(keepalive));
           if (keepalive_len != 0u) {
-            ssize_t sent = send(g_state.ike.esp_fd, keepalive, keepalive_len, 0);
+            ssize_t sent = -1;
+            int send_err = 0;
+            if (g_state.esp.io_send != NULL) {
+              sent = (ssize_t)g_state.esp.io_send(g_state.esp.io_ctx, keepalive, keepalive_len);
+              send_err = errno;
+            } else if (!g_state.esp.enc_key_len && g_state.ike.root != NULL) {
+              sent = (l2tp_root_udp_send(g_state.ike.root, keepalive, keepalive_len, &send_err) == 0)
+                         ? (ssize_t)keepalive_len
+                         : -1;
+            } else {
+              sent = send(g_state.ike.esp_fd, keepalive, keepalive_len, 0);
+              send_err = errno;
+            }
             if (sent == (ssize_t)keepalive_len) {
               last_outbound_to_peer = now;
             } else {
-              int send_err = errno;
               tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "nat-t keepalive send failed sent=%zd want=%zu errno=%d",
                                 sent, keepalive_len, send_err);
               if (tunnel_is_fatal_socket_errno(send_err)) {
@@ -926,12 +1032,15 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
         send_teardown = 0;
         break;
       }
-    } else if (!is_pptp && pr > 0 && (fds[1].revents & POLLIN)) {
+    } else if (!is_pptp && ((pr > 0 && (fds[1].revents & POLLIN)) ||
+                            (is_l2tp_stream && l2tp_root_has_buffered_frame(g_state.ike.root)))) {
       /* Peer->endpoint ingress path: drain up to 64 ESP packets per wakeup, decrypt, then L2TP/PPP dispatch. */
       int l2tp_stop = 0;
       for (int burst = 0; burst < 64; burst++) {
-        ssize_t n = recv(g_state.ike.esp_fd, esp_buf, sizeof(esp_buf), burst > 0 ? MSG_DONTWAIT : 0);
-        if (n == 0) {
+        int recv_err = 0;
+        ssize_t n = tunnel_l2tp_read_next_dgram(g_state.ike.esp_fd, g_state.ike.root, is_l2tp_stream, burst, esp_buf,
+                                                sizeof(esp_buf), &recv_err);
+        if (n == -2) {
           tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "esp socket closed (EOF)");
           exit_code = TUNNEL_EXIT_NETWORK_LOST;
           close_reason = "esp socket eof";
@@ -940,13 +1049,8 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
           break;
         }
         if (n < 0) {
-          int recv_err = errno;
-          if (recv_err == EINTR)
-            continue;
-          if (recv_err == EAGAIN || recv_err == EWOULDBLOCK)
-            break;
           tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "esp recv failed errno=%d", recv_err);
-          if (tunnel_is_fatal_socket_errno(recv_err)) {
+          if (is_l2tp_stream || tunnel_is_fatal_socket_errno(recv_err)) {
             exit_code = TUNNEL_EXIT_NETWORK_LOST;
             close_reason = "esp recv network lost";
             send_teardown = 0;
@@ -954,6 +1058,8 @@ static int tunnel_run_loop_with_endpoint(int tun_fd, packet_endpoint_t *endpoint
           }
           break;
         }
+        if (n == 0)
+          break;
         if (g_state.esp.udp_encap && esp_is_nat_keepalive_probe(esp_buf, (size_t)n)) {
           continue;
         }

@@ -1,7 +1,10 @@
+import 'dart:async' show unawaited;
+
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
 import 'package:tunnel_forge/core/logging/log_entry.dart';
+import 'package:tunnel_forge/core/platform/app_info_bridge.dart';
 import 'package:tunnel_forge/l10n/app_localizations.dart';
 import 'package:tunnel_forge/features/profiles/data/profile_store.dart';
 import 'package:tunnel_forge/features/profiles/domain/profile_models.dart';
@@ -150,6 +153,24 @@ final class ProfileFormMppeModeChanged extends ProfileFormEvent {
   List<Object?> get props => [value];
 }
 
+final class ProfileFormForceUserspaceVpnChanged extends ProfileFormEvent {
+  const ProfileFormForceUserspaceVpnChanged(this.value);
+
+  final bool value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
+final class _ProfileFormRootDetectedLoaded extends ProfileFormEvent {
+  const _ProfileFormRootDetectedLoaded(this.value);
+
+  final bool value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
 final class ProfileFormSaveRequested extends ProfileFormEvent {
   const ProfileFormSaveRequested();
 }
@@ -178,6 +199,8 @@ class ProfileFormState extends Equatable {
     this.mtu = '',
     this.pppAuth = PppAuthMethod.auto,
     this.mppeMode = MppeMode.auto,
+    this.rootDetected = false,
+    this.forceUserspaceVpn = false,
     this.favorite = false,
     this.subscriptionId,
     this.messageId = 0,
@@ -204,6 +227,8 @@ class ProfileFormState extends Equatable {
   final String mtu;
   final PppAuthMethod pppAuth;
   final MppeMode mppeMode;
+  final bool rootDetected;
+  final bool forceUserspaceVpn;
   final bool favorite;
   final String? subscriptionId;
   final int messageId;
@@ -244,6 +269,8 @@ class ProfileFormState extends Equatable {
     String? mtu,
     PppAuthMethod? pppAuth,
     MppeMode? mppeMode,
+    bool? rootDetected,
+    bool? forceUserspaceVpn,
     bool? favorite,
     String? subscriptionId,
     bool clearSubscriptionId = false,
@@ -272,6 +299,8 @@ class ProfileFormState extends Equatable {
       mtu: mtu ?? this.mtu,
       pppAuth: pppAuth ?? this.pppAuth,
       mppeMode: mppeMode ?? this.mppeMode,
+      rootDetected: rootDetected ?? this.rootDetected,
+      forceUserspaceVpn: forceUserspaceVpn ?? this.forceUserspaceVpn,
       favorite: favorite ?? this.favorite,
       subscriptionId: clearSubscriptionId
           ? null
@@ -304,6 +333,8 @@ class ProfileFormState extends Equatable {
     mtu,
     pppAuth,
     mppeMode,
+    rootDetected,
+    forceUserspaceVpn,
     favorite,
     subscriptionId,
     messageId,
@@ -367,8 +398,10 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     this._profilesRepository, {
     LogsRepository? logsRepository,
     bool Function()? canSelectAsLastProfile,
+    Future<bool> Function()? isRootDetected,
   }) : _logsRepository = logsRepository,
        _canSelectAsLastProfile = canSelectAsLastProfile,
+       _isRootDetected = isRootDetected ?? _defaultRootDetector,
        super(const ProfileFormState()) {
     on<ProfileFormStarted>(_onStarted);
     on<ProfileFormDisplayNameChanged>(
@@ -421,6 +454,13 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       (event, emit) =>
           emit(state.copyWith(mppeMode: event.value, saved: false)),
     );
+    on<ProfileFormForceUserspaceVpnChanged>(
+      (event, emit) =>
+          emit(state.copyWith(forceUserspaceVpn: event.value, saved: false)),
+    );
+    on<_ProfileFormRootDetectedLoaded>(
+      (event, emit) => emit(state.copyWith(rootDetected: event.value)),
+    );
     on<ProfileFormSaveRequested>(_onSaveRequested);
     on<ProfileFormSecureStorageResetRequested>(_onSecureStorageResetRequested);
   }
@@ -428,7 +468,11 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
   final ProfilesRepository _profilesRepository;
   final LogsRepository? _logsRepository;
   final bool Function()? _canSelectAsLastProfile;
+  final Future<bool> Function() _isRootDetected;
   bool _isNewProfile = false;
+
+  static Future<bool> _defaultRootDetector() =>
+      AppInfoBridge().isRootDetected();
 
   void _log(LogLevel level, String message) {
     _logsRepository?.logDart(level, 'profile_form', message);
@@ -443,10 +487,18 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       'protocol=${profile.protocol.jsonValue} '
       'pppAuth=${profile.pppAuth.jsonValue} '
       'mppe=${profile.mppeMode.jsonValue} '
+      'forceUserspace=${profile.forceUserspaceVpn} '
       'name=${quoteLogValue(profile.displayName)} server=${profile.server} '
       'dnsAuto=${profile.dnsAutomatic} mtu=${profile.mtu?.toString() ?? 'auto'}',
     );
     _isNewProfile = false;
+  }
+
+  Future<void> _refreshRootDetection() async {
+    final detected = await _isRootDetected();
+    if (!isClosed && detected != state.rootDetected) {
+      add(_ProfileFormRootDetectedLoaded(detected));
+    }
   }
 
   Future<void> _onStarted(
@@ -479,11 +531,14 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           mtu: '',
           pppAuth: PppAuthMethod.auto,
           mppeMode: MppeMode.auto,
+          rootDetected: false,
+          forceUserspaceVpn: false,
           favorite: false,
           clearSubscriptionId: true,
           saved: false,
         ),
       );
+      unawaited(_refreshRootDetection());
       return;
     }
     final row = await _profilesRepository.loadProfileWithSecrets(profileId);
@@ -517,11 +572,15 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         mtu: profile.mtu?.toString() ?? '',
         pppAuth: profile.pppAuth,
         mppeMode: profile.mppeMode,
+        rootDetected: false,
+        forceUserspaceVpn:
+            !profile.protocol.isPptp && profile.forceUserspaceVpn,
         favorite: profile.favorite,
         subscriptionId: profile.subscriptionId,
         clearSubscriptionId: profile.subscriptionId == null,
       ),
     );
+    unawaited(_refreshRootDetection());
   }
 
   Profile? _validateAndBuildProfile(
@@ -637,6 +696,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       mtu: mtu,
       favorite: state.favorite,
       subscriptionId: state.subscriptionId,
+      forceUserspaceVpn: !state.protocol.isPptp && state.forceUserspaceVpn,
     );
   }
 

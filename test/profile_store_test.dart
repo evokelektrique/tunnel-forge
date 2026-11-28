@@ -871,6 +871,23 @@ void main() {
       expect(a, equals(b));
       expect(a.hashCode, equals(b.hashCode));
       expect(a, isNot(equals(c)));
+
+      final forced = a.copyWith(forceUserspaceVpn: true);
+      expect(forced.forceUserspaceVpn, isTrue);
+      expect(forced.toJson()['forceUserspaceVpn'], isTrue);
+      expect(a, isNot(equals(forced)));
+
+      final switchedToPptp = forced.copyWith(protocol: TunnelProtocol.pptp);
+      expect(switchedToPptp.forceUserspaceVpn, isFalse);
+      expect(switchedToPptp.toJson().containsKey('forceUserspaceVpn'), isFalse);
+
+      final parsedL2tp = Profile.tryFromJson(forced.toJson());
+      expect(parsedL2tp?.forceUserspaceVpn, isTrue);
+      final parsedPptp = Profile.tryFromJson({
+        ...switchedToPptp.toJson(),
+        'forceUserspaceVpn': true,
+      });
+      expect(parsedPptp?.forceUserspaceVpn, isFalse);
     });
 
     test(

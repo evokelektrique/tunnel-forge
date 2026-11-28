@@ -140,4 +140,52 @@ void main() {
     expect(stored.pppAuth, PppAuthMethod.mschapV2);
     expect(stored.mppeMode, MppeMode.on);
   });
+
+  test(
+    'loads rootDetected and persists forceUserspaceVpn for L2TP only',
+    () async {
+      final rootedBloc = ProfileFormBloc(
+        ProfilesRepositoryImpl(store),
+        isRootDetected: () async => true,
+      );
+      addTearDown(rootedBloc.close);
+
+      final startedFuture = rootedBloc.stream.firstWhere(
+        (state) =>
+            !state.loading && state.rootDetected && state.profileId.isNotEmpty,
+      );
+      rootedBloc.add(const ProfileFormStarted(null));
+      final started = await startedFuture;
+      expect(started.rootDetected, isTrue);
+      expect(started.forceUserspaceVpn, isFalse);
+
+      final toggledFuture = rootedBloc.stream.firstWhere(
+        (state) => state.forceUserspaceVpn,
+      );
+      rootedBloc.add(const ProfileFormForceUserspaceVpnChanged(true));
+      await toggledFuture;
+
+      final savedL2tpFuture = rootedBloc.stream.firstWhere(
+        (state) => state.saved,
+      );
+      rootedBloc.add(const ProfileFormSaveRequested());
+      await savedL2tpFuture;
+      final storedL2tp = (await store.loadProfiles()).single;
+      expect(storedL2tp.forceUserspaceVpn, isTrue);
+
+      final switchedPptpFuture = rootedBloc.stream.firstWhere(
+        (state) => state.protocol == TunnelProtocol.pptp,
+      );
+      rootedBloc.add(const ProfileFormProtocolChanged(TunnelProtocol.pptp));
+      await switchedPptpFuture;
+
+      final savedPptpFuture = rootedBloc.stream.firstWhere(
+        (state) => state.saved,
+      );
+      rootedBloc.add(const ProfileFormSaveRequested());
+      await savedPptpFuture;
+      final storedPptp = (await store.loadProfiles()).single;
+      expect(storedPptp.forceUserspaceVpn, isFalse);
+    },
+  );
 }

@@ -185,6 +185,10 @@ internal class QuickSettingsConfigStore(
             putString(KEY_PROTOCOL, config.protocol)
             putString(KEY_PPP_AUTH, config.pppAuth)
             putString(KEY_MPPE, config.mppe)
+            putBoolean(
+                KEY_FORCE_USERSPACE_VPN,
+                config.protocol != VpnContract.PROTOCOL_PPTP && config.forceUserspaceVpn,
+            )
             putString(KEY_CONNECTION_MODE, config.connectionMode)
             putBoolean(KEY_SPLIT_TUNNEL_ENABLED, config.splitTunnelEnabled)
             putString(KEY_SPLIT_TUNNEL_MODE, config.splitTunnelMode)
@@ -236,6 +240,9 @@ internal class QuickSettingsConfigStore(
             } else {
                 VpnContract.MPPE_AUTO
             }
+        val forceUserspaceVpn =
+            protocol != VpnContract.PROTOCOL_PPTP &&
+                store.getBoolean(KEY_FORCE_USERSPACE_VPN, false)
         val connectionMode =
             if (store.getString(KEY_CONNECTION_MODE) == VpnContract.MODE_PROXY_ONLY) {
                 VpnContract.MODE_PROXY_ONLY
@@ -283,6 +290,7 @@ internal class QuickSettingsConfigStore(
             protocol = protocol,
             pppAuth = pppAuth,
             mppe = mppe,
+            forceUserspaceVpn = forceUserspaceVpn,
             proxyAuthEnabled = store.getBoolean(KEY_PROXY_AUTH_ENABLED, false),
             proxyAuthUsername = store.getString(KEY_PROXY_AUTH_USERNAME).orEmpty(),
             proxyAuthPassword = decodedProxyAuthPassword,
@@ -361,6 +369,7 @@ internal class QuickSettingsConfigStore(
         private const val KEY_PROTOCOL = "protocol"
         private const val KEY_PPP_AUTH = "ppp_auth"
         private const val KEY_MPPE = "mppe"
+        private const val KEY_FORCE_USERSPACE_VPN = "force_userspace_vpn"
         private const val KEY_CONNECTION_MODE = "connection_mode"
         private const val KEY_SPLIT_TUNNEL_ENABLED = "split_tunnel_enabled"
         private const val KEY_SPLIT_TUNNEL_MODE = "split_tunnel_mode"

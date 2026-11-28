@@ -737,7 +737,8 @@ int esp_encrypt_send(int fd, esp_keys_t *k, const struct sockaddr *peer, socklen
   }
   memcpy(buf + off, mac, 12);
   off += 12;
-  ssize_t sent = sendto(fd, buf, off, 0, peer, peer_len);
+  ssize_t sent =
+      (k->io_send != NULL) ? (ssize_t)k->io_send(k->io_ctx, buf, off) : sendto(fd, buf, off, 0, peer, peer_len);
   if (s_esp_send_profile_logs < 8) {
     s_esp_send_profile_logs++;
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,

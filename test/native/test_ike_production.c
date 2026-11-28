@@ -1,5 +1,109 @@
 #include "../../android/app/src/main/cpp/ikev1.c"
 #include <assert.h>
+void l2tp_root_init(l2tp_root_t *r) {
+  if (r != NULL)
+    memset(r, 0, sizeof(*r));
+}
+int l2tp_root_start(l2tp_root_t *r, const char *helper_path, int protect_vpn, const char *bind_iface) {
+  (void)r;
+  (void)helper_path;
+  (void)protect_vpn;
+  (void)bind_iface;
+  return TUNNEL_EXIT_ROOT_UNAVAILABLE;
+}
+void l2tp_root_stop(l2tp_root_t *r) { (void)r; }
+void esp_keys_cleanup(esp_keys_t *k) { (void)k; }
+int l2tp_root_open_udp(l2tp_root_t *r, const uint8_t peer_ipv4[4], uint16_t remote_port, uint16_t bind_local_port,
+                       int allow_ephemeral_fallback, uint8_t local_ipv4_out[4], uint16_t *local_port_be_out,
+                       int *out_errno) {
+  (void)r;
+  (void)peer_ipv4;
+  (void)remote_port;
+  (void)bind_local_port;
+  (void)allow_ephemeral_fallback;
+  (void)local_ipv4_out;
+  (void)local_port_be_out;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_connect_udp(l2tp_root_t *r, const uint8_t peer_ipv4[4], uint16_t remote_port, uint8_t local_ipv4_out[4],
+                          uint16_t *local_port_be_out, int *out_errno) {
+  (void)r;
+  (void)peer_ipv4;
+  (void)remote_port;
+  (void)local_ipv4_out;
+  (void)local_port_be_out;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_udp_send(l2tp_root_t *r, const uint8_t *data, size_t len, int *out_errno) {
+  (void)r;
+  (void)data;
+  (void)len;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_udp_recv(l2tp_root_t *r, uint8_t *buf, size_t cap, int timeout_ms, int peek, int *out_errno) {
+  (void)r;
+  (void)buf;
+  (void)cap;
+  (void)timeout_ms;
+  (void)peek;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_set_encap(l2tp_root_t *r, int encap_type, int *out_errno) {
+  (void)r;
+  (void)encap_type;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_xfrm_install(l2tp_root_t *r, const tf_l2tp_xfrm_spec_t *spec, int *out_errno) {
+  (void)r;
+  (void)spec;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_open_raw_esp(l2tp_root_t *r, const uint8_t peer_ipv4[4], int *out_errno) {
+  (void)r;
+  (void)peer_ipv4;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_start_stream(l2tp_root_t *r, int mode, int *out_errno) {
+  (void)r;
+  (void)mode;
+  if (out_errno != NULL)
+    *out_errno = ENOSYS;
+  return -1;
+}
+int l2tp_root_ike_send_async(l2tp_root_t *r, const uint8_t *data, size_t len, int nat_t) {
+  (void)r;
+  (void)data;
+  (void)len;
+  (void)nat_t;
+  return -1;
+}
+int l2tp_root_stream_send(void *ctx, const uint8_t *data, size_t len) {
+  (void)ctx;
+  (void)data;
+  (void)len;
+  return -1;
+}
+int l2tp_root_stream_recv_wait(void *ctx, uint8_t *buf, size_t cap, int timeout_ms) {
+  (void)ctx;
+  (void)buf;
+  (void)cap;
+  (void)timeout_ms;
+  return -1;
+}
 int tunnel_should_stop(void) { return 0; }
 int util_protect_fd(int fd) {
   (void)fd;
@@ -261,8 +365,8 @@ int main(void) {
     assert(sendto(fd_rx, fake_esp, sizeof(fake_esp), 0, (const struct sockaddr *)&tx_addr, tx_len) ==
            (ssize_t)sizeof(fake_esp));
     const uint8_t qm3_dummy[32] = {0};
-    assert(ike_qm3_finish_recv_loop(fd_tx, (struct sockaddr *)&peer_addr, peer_len, qm3_dummy, sizeof(qm3_dummy), wire,
-                                    sizeof(wire), 1, 1u, 1, aeskey, NULL, ike.iv_phase1) == 0);
+    assert(ike_qm3_finish_recv_loop(fd_tx, NULL, (struct sockaddr *)&peer_addr, peer_len, qm3_dummy, sizeof(qm3_dummy),
+                                    wire, sizeof(wire), 1, 1u, 1, aeskey, NULL, ike.iv_phase1) == 0);
     uint8_t rx_after[64];
     ssize_t rn = recv(fd_tx, rx_after, sizeof(rx_after), MSG_DONTWAIT);
     assert(rn == (ssize_t)sizeof(fake_esp) && memcmp(rx_after, fake_esp, sizeof(fake_esp)) == 0);

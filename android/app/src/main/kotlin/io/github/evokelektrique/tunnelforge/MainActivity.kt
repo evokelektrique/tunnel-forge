@@ -177,6 +177,12 @@ class MainActivity : FlutterActivity() {
                         result.error("app_info_failed", e.message, null)
                     }
                 }
+                AppInfoContract.IS_ROOT_DETECTED -> {
+                    diagnosticsExecutor.execute {
+                        val detected = RootAccessDetector.isRootDetected()
+                        mainHandler.post { result.success(detected) }
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

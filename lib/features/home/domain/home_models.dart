@@ -97,6 +97,7 @@ class TunnelConnectRequest extends Equatable {
     this.protocol = TunnelProtocol.l2tp,
     this.pppAuth = PppAuthMethod.auto,
     this.mppeMode = MppeMode.auto,
+    this.forceUserspaceVpn = false,
     required this.dnsAutomatic,
     required this.dnsServers,
     this.mtu,
@@ -115,6 +116,7 @@ class TunnelConnectRequest extends Equatable {
   final TunnelProtocol protocol;
   final PppAuthMethod pppAuth;
   final MppeMode mppeMode;
+  final bool forceUserspaceVpn;
   final bool dnsAutomatic;
   final List<DnsServerConfig> dnsServers;
   final int? mtu;
@@ -134,6 +136,7 @@ class TunnelConnectRequest extends Equatable {
     protocol,
     pppAuth,
     mppeMode,
+    forceUserspaceVpn,
     dnsAutomatic,
     dnsServers,
     mtu,
@@ -154,6 +157,7 @@ class QuickSettingsProfileConfig extends Equatable {
     this.protocol = TunnelProtocol.l2tp,
     this.pppAuth = PppAuthMethod.auto,
     this.mppeMode = MppeMode.auto,
+    this.forceUserspaceVpn = false,
     required this.secretsMissing,
     required this.dnsAutomatic,
     required this.dnsServers,
@@ -172,6 +176,7 @@ class QuickSettingsProfileConfig extends Equatable {
   final TunnelProtocol protocol;
   final PppAuthMethod pppAuth;
   final MppeMode mppeMode;
+  final bool forceUserspaceVpn;
   final bool secretsMissing;
   final bool dnsAutomatic;
   final List<DnsServerConfig> dnsServers;
@@ -191,6 +196,7 @@ class QuickSettingsProfileConfig extends Equatable {
     protocol,
     pppAuth,
     mppeMode,
+    forceUserspaceVpn,
     secretsMissing,
     dnsAutomatic,
     dnsServers,

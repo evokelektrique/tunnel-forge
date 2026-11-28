@@ -975,5 +975,15 @@
   "tunnelFailureEngine16Title": "MPPE required by server",
   "tunnelFailureEngine16Explanation": "The PPTP server requires MPPE encryption, but MPPE is set to Off in this profile. Switch MPPE to Auto or On and try again.",
   "tunnelFailureEngine17Title": "PPP authentication rejected",
-  "tunnelFailureEngine17Explanation": "The VPN server did not accept the PPP authentication method selected in this profile. Set PPP authentication to Auto or a method the server supports."
+  "tunnelFailureEngine17Explanation": "The VPN server did not accept the PPP authentication method selected in this profile. Set PPP authentication to Auto or a method the server supports.",
+  "forceUserspaceVpnTitle": "Force userspace VPN instead of Root",
+  "forceUserspaceVpnHelp": "Use the unprivileged userspace IPsec stack for L2TP even when root access is available.",
+  "profileTransferInvalidFlagField": "Invalid boolean field: {field}",
+  "@profileTransferInvalidFlagField": {
+    "placeholders": {
+      "field": {
+        "type": "String"
+      }
+    }
+  }
 }

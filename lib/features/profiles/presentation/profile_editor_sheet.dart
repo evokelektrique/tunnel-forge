@@ -703,6 +703,37 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                               ),
                             ),
                           ],
+                          if (!state.protocol.isPptp && state.rootDetected) ...[
+                            const SizedBox(height: 12),
+                            Material(
+                              color: Colors.transparent,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                side: BorderSide(
+                                  color: theme.colorScheme.outlineVariant,
+                                ),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: SwitchListTile(
+                                key: const Key('force_userspace_vpn_switch'),
+                                value: state.forceUserspaceVpn,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                title: Text(t.forceUserspaceVpnTitle),
+                                subtitle: Text(t.forceUserspaceVpnHelp),
+                                onChanged: state.loading || state.saving
+                                    ? null
+                                    : (value) =>
+                                          context.read<ProfileFormBloc>().add(
+                                            ProfileFormForceUserspaceVpnChanged(
+                                              value,
+                                            ),
+                                          ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

@@ -31,4 +31,20 @@ class AppInfoBridge {
       // The native app-info channel is unavailable in widget tests.
     }
   }
+
+  Future<bool> isRootDetected() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    try {
+      final result = await _channel.invokeMethod<Object?>(
+        AppInfoContract.isRootDetected,
+      );
+      return result == true;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
 }

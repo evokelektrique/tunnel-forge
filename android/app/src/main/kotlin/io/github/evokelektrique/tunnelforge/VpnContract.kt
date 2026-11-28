@@ -33,6 +33,7 @@ object VpnContract {
     const val ARG_PROTOCOL = "protocol"
     const val ARG_PPP_AUTH = "pppAuth"
     const val ARG_MPPE = "mppe"
+    const val ARG_FORCE_USERSPACE_VPN = "forceUserspaceVpn"
     const val ARG_DNS_AUTOMATIC = "dnsAutomatic"
     const val ARG_DNS_SERVERS = "dnsServers"
     const val ARG_DNS_SERVER_HOST = "host"

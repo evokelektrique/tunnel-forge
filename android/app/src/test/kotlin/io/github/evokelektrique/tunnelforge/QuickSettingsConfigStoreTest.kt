@@ -324,4 +324,39 @@ class QuickSettingsConfigStoreTest {
         assertTrue(input.copy(proxyAuthUsername = "   ").hasIncompleteProxyAuth)
         assertTrue(input.copy(proxyAuthPassword = "").hasIncompleteProxyAuth)
     }
+
+    @Test
+    fun persistsForceUserspaceVpnForL2tpAndClearsForPptp() {
+        val backing = InMemoryKeyValueStore()
+        val store = QuickSettingsConfigStore(backing, XorTestCipher())
+        val l2tpInput =
+            TunnelLaunchConfig(
+                profileId = "p-l2tp",
+                profileName = "Forced L2TP",
+                server = "l2tp.example",
+                user = "alice",
+                password = "pw",
+                psk = "psk",
+                secretsMissing = false,
+                dnsAutomatic = true,
+                dnsServers = emptyList(),
+                mtu = null,
+                connectionMode = VpnContract.MODE_VPN_TUNNEL,
+                splitTunnelEnabled = false,
+                splitTunnelMode = VpnContract.SPLIT_TUNNEL_MODE_INCLUSIVE,
+                inclusivePackages = emptyList(),
+                exclusivePackages = emptyList(),
+                proxyHttpPort = ProxyTunnelService.DEFAULT_HTTP_PORT,
+                proxySocksPort = ProxyTunnelService.DEFAULT_SOCKS_PORT,
+                proxyAllowLan = false,
+                protocol = VpnContract.PROTOCOL_L2TP,
+                forceUserspaceVpn = true,
+            )
+
+        store.save(l2tpInput)
+        assertTrue(store.load()!!.forceUserspaceVpn)
+
+        store.save(l2tpInput.copy(protocol = VpnContract.PROTOCOL_PPTP))
+        assertFalse(store.load()!!.forceUserspaceVpn)
+    }
 }

@@ -2,6 +2,7 @@
 #define TUNNEL_FORGE_IKEV1_H
 
 #include "esp_udp.h"
+#include "l2tp_root.h"
 
 #include <stdint.h>
 #include <sys/socket.h>
@@ -22,8 +23,12 @@ typedef struct {
   int nat_t;
   /** Phase 1 uses AES-128-CBC instead of 3DES (same MODP2048 DH). */
   int p1_aes;
-  /** Connected UDP socket used for IKE then ESP (same fd after negotiation). */
+  /** Connected UDP socket used for IKE/XFRM L2TP or ESP (-1 when Tier 2 uses root helper stream). */
   int esp_fd;
+  /** Non-zero when Kernel XFRM caps TUN/PPP MTU to avoid inner UDP fragmentation past SP selectors. */
+  int xfrm_max_tun_mtu;
+  /** Optional heap-owned root helper session (non-NULL when root L2TP backend is active). */
+  l2tp_root_t *root;
   struct sockaddr_storage peer;
   socklen_t peer_len;
 } ike_session_t;
@@ -36,6 +41,13 @@ typedef struct {
  * Returns 0 on success; fills @p esp with SPI/keys when IPsec is used.
  */
 int ikev1_connect(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp);
+
+/**
+ * Root-capable L2TP IKEv1 connect with Kernel XFRM -> raw ESP / UDP4500 -> userspace VPN fallback.
+ * When @p root_cfg is NULL or !root_cfg->use_root, behaves identically to ikev1_connect().
+ */
+int ikev1_connect_ex(const char *server, const char *psk, ike_session_t *ike, esp_keys_t *esp,
+                     const l2tp_root_config_t *root_cfg);
 
 /**
  * Best-effort encrypted ISAKMP Informational Delete for active ESP and Phase-1 SAs.

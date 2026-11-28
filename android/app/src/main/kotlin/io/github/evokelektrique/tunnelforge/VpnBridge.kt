@@ -85,6 +85,9 @@ object VpnBridge {
     external fun nativeSetPptpRuntimeConfig(helperPath: String, bindInterface: String)
 
     @JvmStatic
+    external fun nativeSetL2tpRuntimeConfig(helperPath: String, bindInterface: String, useRoot: Boolean)
+
+    @JvmStatic
     external fun nativeFailure(): IntArray
 
     /** Read on the same worker that negotiated/ran the native tunnel. */
@@ -171,4 +174,7 @@ object VpnBridge {
 
     @JvmStatic
     external fun nativeStopTunnel()
+
+    @JvmStatic
+    external fun nativeProbeRootAccess(timeoutMs: Int): Boolean
 }

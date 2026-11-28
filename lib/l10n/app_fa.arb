@@ -520,5 +520,8 @@
   "tunnelFailureEngine16Title": "سرور به رمزگذاری MPPE نیاز دارد",
   "tunnelFailureEngine16Explanation": "سرور PPTP رمزگذاری MPPE را الزامی می‌داند، اما MPPE در این پروفایل خاموش است. MPPE را روی خودکار یا روشن بگذارید و دوباره امتحان کنید.",
   "tunnelFailureEngine17Title": "احراز هویت PPP رد شد",
-  "tunnelFailureEngine17Explanation": "سرور وی‌پی‌ان روش احراز هویت PPP انتخاب‌شده در این پروفایل را نپذیرفت. احراز هویت PPP را روی خودکار یا روشی که سرور پشتیبانی می‌کند قرار دهید."
+  "tunnelFailureEngine17Explanation": "سرور وی‌پی‌ان روش احراز هویت PPP انتخاب‌شده در این پروفایل را نپذیرفت. احراز هویت PPP را روی خودکار یا روشی که سرور پشتیبانی می‌کند قرار دهید.",
+  "forceUserspaceVpnTitle": "استفاده اجباری از وی‌پی‌ان فضای کاربر به‌جای روت",
+  "forceUserspaceVpnHelp": "استفاده از پشته IPsec فضای کاربر برای L2TP حتی زمانی که دسترسی روت وجود دارد.",
+  "profileTransferInvalidFlagField": "مقدار بولی نامعتبر برای فیلد: {field}"
 }

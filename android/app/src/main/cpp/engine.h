@@ -73,6 +73,8 @@
 int util_protect_fd(int fd);
 void engine_set_socket_protection_enabled(int enabled);
 void engine_set_pptp_runtime_config(const char *helper_path, const char *bind_iface);
+void engine_set_l2tp_runtime_config(const char *helper_path, const char *bind_iface, int use_root);
+int engine_probe_root_access(int timeout_ms);
 
 int tunnel_loop_run(int tun_fd, const char *server, const char *user, const char *password, const char *psk,
                     int tun_mtu, int protocol, int ppp_auth, int mppe_mode);

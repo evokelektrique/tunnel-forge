@@ -38,6 +38,7 @@ abstract final class VpnContract {
   static const String argProtocol = 'protocol';
   static const String argPppAuth = 'pppAuth';
   static const String argMppe = 'mppe';
+  static const String argForceUserspaceVpn = 'forceUserspaceVpn';
   static const String argDnsAutomatic = 'dnsAutomatic';
   static const String argDnsServers = 'dnsServers';
   static const String argDnsServerHost = 'host';

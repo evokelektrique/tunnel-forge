@@ -629,6 +629,7 @@ class Profile {
     this.mtu,
     this.favorite = false,
     this.subscriptionId,
+    this.forceUserspaceVpn = false,
   });
 
   /// Maximum number of profiles a user can mark as favorites.
@@ -669,6 +670,9 @@ class Profile {
   /// Null for local profiles; otherwise the owning [Subscription.id].
   final String? subscriptionId;
 
+  /// When true on rooted devices, L2TP uses the userspace IPsec backend instead of root.
+  final bool forceUserspaceVpn;
+
   static bool isIncompatiblePppAuthAndMppe(
     TunnelProtocol protocol,
     PppAuthMethod pppAuth,
@@ -686,6 +690,7 @@ class Profile {
     MppeMode? mppeMode,
     String? subscriptionId,
     bool clearSubscriptionId = false,
+    bool? forceUserspaceVpn,
   }) {
     final nextProtocol = protocol ?? this.protocol;
     return Profile(
@@ -708,6 +713,9 @@ class Profile {
       subscriptionId: clearSubscriptionId
           ? null
           : (subscriptionId ?? this.subscriptionId),
+      forceUserspaceVpn: nextProtocol.isPptp
+          ? false
+          : (forceUserspaceVpn ?? this.forceUserspaceVpn),
     );
   }
 
@@ -903,6 +911,7 @@ class Profile {
     'favorite': favorite,
     if (subscriptionId != null && subscriptionId!.isNotEmpty)
       'subscriptionId': subscriptionId,
+    if (!protocol.isPptp && forceUserspaceVpn) 'forceUserspaceVpn': true,
   };
 
   static Profile? tryFromJson(Object? raw) {
@@ -950,6 +959,10 @@ class Profile {
     final subscriptionId = rawSubId is String && rawSubId.trim().isNotEmpty
         ? rawSubId.trim()
         : null;
+    final forceUserspaceVpn =
+        !protocol.isPptp &&
+        m['forceUserspaceVpn'] is bool &&
+        (m['forceUserspaceVpn'] as bool);
     return Profile(
       id: id,
       displayName: displayName,
@@ -966,6 +979,7 @@ class Profile {
       mtu: mtu,
       favorite: favorite,
       subscriptionId: subscriptionId,
+      forceUserspaceVpn: forceUserspaceVpn,
     );
   }
 
@@ -986,7 +1000,8 @@ class Profile {
         dns2Protocol == other.dns2Protocol &&
         mtu == other.mtu &&
         favorite == other.favorite &&
-        subscriptionId == other.subscriptionId;
+        subscriptionId == other.subscriptionId &&
+        forceUserspaceVpn == other.forceUserspaceVpn;
   }
 
   @override
@@ -1006,5 +1021,6 @@ class Profile {
     mtu,
     favorite,
     subscriptionId,
+    forceUserspaceVpn,
   );
 }

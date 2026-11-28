@@ -296,6 +296,9 @@ class TunnelVpnService : VpnService() {
                     } else {
                         VpnContract.MPPE_AUTO
                     }
+                val forceUserspaceVpn =
+                    protocol != VpnContract.PROTOCOL_PPTP &&
+                        intent.getBooleanExtra(EXTRA_FORCE_USERSPACE_VPN, false)
                 val dnsAutomatic = intent.getBooleanExtra(EXTRA_DNS_AUTOMATIC, true)
                 val dnsServers = manualDnsServersFromIntent(intent)
                 val requestedMtu = sanitizeOptionalMtu(intent.getIntExtra(EXTRA_MTU, AUTO_TUN_MTU))
@@ -387,7 +390,7 @@ class TunnelVpnService : VpnService() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"} auth=${if (proxyAuthEnabled) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe forceUserspace=$forceUserspaceVpn server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"} auth=${if (proxyAuthEnabled) "on" else "off"}",
                 )
                 // TUN establish() can block; do not hold up onStartCommand after startForeground.
                 val startupThread =
@@ -402,6 +405,7 @@ class TunnelVpnService : VpnService() {
                                 protocol,
                                 pppAuth,
                                 mppe,
+                                forceUserspaceVpn,
                                 dnsAutomatic,
                                 dnsServers,
                                 requestedMtu,
@@ -670,6 +674,7 @@ class TunnelVpnService : VpnService() {
         protocol: String,
         pppAuth: String,
         mppe: String,
+        forceUserspaceVpn: Boolean,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         requestedMtu: Int?,
@@ -859,6 +864,7 @@ class TunnelVpnService : VpnService() {
                         protocol = protocol,
                         pppAuth = pppAuth,
                         mppe = mppe,
+                        forceUserspaceVpn = forceUserspaceVpn,
                         dnsAutomatic = dnsAutomatic,
                         dnsServers = dnsServers,
                         requestedMtu = requestedMtu,
@@ -975,6 +981,7 @@ class TunnelVpnService : VpnService() {
         protocol: String,
         pppAuth: String,
         mppe: String,
+        forceUserspaceVpn: Boolean,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         requestedMtu: Int?,
@@ -991,10 +998,14 @@ class TunnelVpnService : VpnService() {
             "${prefixAttempt(attemptId)}active_network ${monitor.describeNetworkState()}",
         )
         emitServerDnsDiagnostics(attemptId, server)
-        if (protocol == VpnContract.PROTOCOL_PPTP) {
-            val helperPath = File(applicationInfo.nativeLibraryDir, PPTP_GRE_HELPER_LIB_NAME).absolutePath
-            VpnBridge.nativeSetPptpRuntimeConfig(helperPath, monitor.activeInterfaceName().orEmpty())
-        }
+        L2tpRootPolicy.configureForAttempt(
+            nativeLibraryDir = applicationInfo.nativeLibraryDir,
+            bindInterface = monitor.activeInterfaceName().orEmpty(),
+            protocol = protocol,
+            forceUserspaceVpn = forceUserspaceVpn,
+            attemptPrefix = prefixAttempt(attemptId),
+            tag = TAG,
+        )
         val negotiatedClientIp = IntArray(4)
         val negotiatedPrimaryDns = IntArray(4)
         val negotiatedSecondaryDns = IntArray(4)
@@ -1700,6 +1711,7 @@ class TunnelVpnService : VpnService() {
         const val EXTRA_PROTOCOL = "protocol"
         const val EXTRA_PPP_AUTH = "pppAuth"
         const val EXTRA_MPPE = "mppe"
+        const val EXTRA_FORCE_USERSPACE_VPN = "forceUserspaceVpn"
         const val EXTRA_DNS_AUTOMATIC = "dnsAutomatic"
         const val EXTRA_DNS_SERVER_1_HOST = "dnsServer1Host"
         const val EXTRA_DNS_SERVER_1_PROTOCOL = "dnsServer1Protocol"

@@ -131,6 +131,8 @@ static long long ppp_now_ms(void) {
  */
 static int recv_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *l2tp,
                     uint8_t *out, size_t cap, int ms) {
+  if (esp == NULL)
+    return -1;
   struct timeval start;
   gettimeofday(&start, NULL);
   for (;;) {
@@ -148,36 +150,50 @@ static int recv_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, so
     int slice_ms = ms - elapsed_ms;
     if (slice_ms <= 0)
       return -1;
-    struct pollfd pfd = {.fd = esp_fd, .events = POLLIN};
-    int waited = 0;
-    int pr = 0;
-    while (waited < slice_ms) {
-      if (tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp recv canceled while waiting for frame");
-        return -1;
-      }
-      int poll_slice_ms = slice_ms - waited;
-      if (poll_slice_ms > 200)
-        poll_slice_ms = 200;
-      pr = poll(&pfd, 1, poll_slice_ms);
-      waited += poll_slice_ms;
-      if (pr != 0)
-        break;
-    }
-    if (pr <= 0) {
-      if (pr < 0 && errno == EINTR && tunnel_should_stop()) {
-        tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp recv canceled after poll interruption");
-        return -1;
-      }
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv timeout/poll failure slice_ms=%d pr=%d", slice_ms, pr);
-      return -1;
-    }
-
     uint8_t raw[4096];
-    ssize_t n = recv(esp_fd, raw, sizeof(raw), 0);
-    if (n <= 0) {
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv socket failure n=%zd errno=%d", n, errno);
-      return -1;
+    ssize_t n;
+    if (esp->io_recv != NULL) {
+      int nr = esp->io_recv(esp->io_ctx, raw, sizeof(raw), slice_ms);
+      if (nr == 0) {
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv root stream timeout slice_ms=%d", slice_ms);
+        return -1;
+      }
+      if (nr < 0) {
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv root stream failure errno=%d", errno);
+        return -1;
+      }
+      n = (ssize_t)nr;
+    } else {
+      struct pollfd pfd = {.fd = esp_fd, .events = POLLIN};
+      int waited = 0;
+      int pr = 0;
+      while (waited < slice_ms) {
+        if (tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp recv canceled while waiting for frame");
+          return -1;
+        }
+        int poll_slice_ms = slice_ms - waited;
+        if (poll_slice_ms > 200)
+          poll_slice_ms = 200;
+        pr = poll(&pfd, 1, poll_slice_ms);
+        waited += poll_slice_ms;
+        if (pr != 0)
+          break;
+      }
+      if (pr <= 0) {
+        if (pr < 0 && errno == EINTR && tunnel_should_stop()) {
+          tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp recv canceled after poll interruption");
+          return -1;
+        }
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv timeout/poll failure slice_ms=%d pr=%d", slice_ms, pr);
+        return -1;
+      }
+
+      n = recv(esp_fd, raw, sizeof(raw), 0);
+      if (n <= 0) {
+        tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp recv socket failure n=%zd errno=%d", n, errno);
+        return -1;
+      }
     }
 
     if (esp->udp_encap && (nat_t_keepalive_is_probe(raw, (size_t)n) || (n >= 4 && util_read_be32(raw) == 0u)))

@@ -6,6 +6,7 @@ object AppInfoContract {
     const val GET_INSTALLED_VERSION = "getInstalledVersion"
     const val SET_THEME_MODE = "setThemeMode"
     const val SET_APP_LOCALE = "setAppLocale"
+    const val IS_ROOT_DETECTED = "isRootDetected"
 
     const val ARG_VERSION_NAME = "versionName"
     const val ARG_BUILD_NUMBER = "buildNumber"

@@ -234,6 +234,8 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
             protocol: row.profile.protocol,
             pppAuth: row.profile.pppAuth,
             mppeMode: row.profile.mppeMode,
+            forceUserspaceVpn:
+                !row.profile.protocol.isPptp && row.profile.forceUserspaceVpn,
             secretsMissing: row.secretsMissing,
             dnsAutomatic: row.profile.dnsAutomatic,
             dnsServers: row.profile.dnsAutomatic
@@ -638,6 +640,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       protocol: profile.protocol,
       pppAuth: profile.pppAuth,
       mppeMode: profile.mppeMode,
+      forceUserspaceVpn: !profile.protocol.isPptp && profile.forceUserspaceVpn,
       dnsAutomatic: profile.dnsAutomatic,
       dnsServers: dnsServers,
       mtu: profile.mtu,

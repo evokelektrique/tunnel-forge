@@ -145,6 +145,9 @@ class ProxyTunnelService : Service() {
                     } else {
                         VpnContract.MPPE_AUTO
                     }
+                val forceUserspaceVpn =
+                    protocol != VpnContract.PROTOCOL_PPTP &&
+                        intent.getBooleanExtra(EXTRA_FORCE_USERSPACE_VPN, false)
                 val dnsAutomatic = intent.getBooleanExtra(EXTRA_DNS_AUTOMATIC, true)
                 val dnsServers = TunnelVpnService.manualDnsServersFromIntent(intent)
                 val profileName = intent.getStringExtra(EXTRA_PROFILE_NAME)?.trim().orEmpty()
@@ -160,7 +163,7 @@ class ProxyTunnelService : Service() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"} auth=${if (proxyAuthEnabled) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted protocol=$protocol pppAuth=$pppAuth mppe=$mppe forceUserspace=$forceUserspaceVpn server=${server?.trim().orEmpty()} userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=${requestedMtu?.toString() ?: "auto"} http=$httpPort socks=$socksPort lan=${if (allowLanConnections) "on" else "off"} auth=${if (proxyAuthEnabled) "on" else "off"}",
                 )
                 if (server.isNullOrBlank()) {
                     VpnTunnelEvents.emit(VpnContract.TUNNEL_FAILED, "Invalid proxy arguments from the app.", attemptId)
@@ -213,6 +216,7 @@ class ProxyTunnelService : Service() {
                             protocol = protocol,
                             pppAuth = pppAuth,
                             mppe = mppe,
+                            forceUserspaceVpn = forceUserspaceVpn,
                             dnsAutomatic = dnsAutomatic,
                             dnsServers = dnsServers,
                             profileName = profileName,
@@ -342,6 +346,7 @@ class ProxyTunnelService : Service() {
         protocol: String,
         pppAuth: String,
         mppe: String,
+        forceUserspaceVpn: Boolean,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         profileName: String,
@@ -458,6 +463,7 @@ class ProxyTunnelService : Service() {
                         protocol = protocol,
                         pppAuth = pppAuth,
                         mppe = mppe,
+                        forceUserspaceVpn = forceUserspaceVpn,
                         dnsAutomatic = dnsAutomatic,
                         dnsServers = dnsServers,
                         proxyConfig = proxyConfig,
@@ -586,6 +592,7 @@ class ProxyTunnelService : Service() {
         protocol: String,
         pppAuth: String,
         mppe: String,
+        forceUserspaceVpn: Boolean,
         dnsAutomatic: Boolean,
         dnsServers: List<DnsServerConfig>,
         proxyConfig: ProxyRuntimeConfig,
@@ -613,10 +620,14 @@ class ProxyTunnelService : Service() {
                 TAG,
                 "${prefixAttempt(attemptId)}active_network ${monitor.describeNetworkState()}",
             )
-            if (protocol == VpnContract.PROTOCOL_PPTP) {
-                val helperPath = File(applicationInfo.nativeLibraryDir, TunnelVpnService.PPTP_GRE_HELPER_LIB_NAME).absolutePath
-                VpnBridge.nativeSetPptpRuntimeConfig(helperPath, monitor.activeInterfaceName().orEmpty())
-            }
+            L2tpRootPolicy.configureForAttempt(
+                nativeLibraryDir = applicationInfo.nativeLibraryDir,
+                bindInterface = monitor.activeInterfaceName().orEmpty(),
+                protocol = protocol,
+                forceUserspaceVpn = forceUserspaceVpn,
+                attemptPrefix = prefixAttempt(attemptId),
+                tag = TAG,
+            )
             val negotiatedClientIp = IntArray(4)
             val negotiatedPrimaryDns = IntArray(4)
             val negotiatedSecondaryDns = IntArray(4)
@@ -1318,6 +1329,7 @@ class ProxyTunnelService : Service() {
         const val EXTRA_PROTOCOL = "protocol"
         const val EXTRA_PPP_AUTH = "pppAuth"
         const val EXTRA_MPPE = "mppe"
+        const val EXTRA_FORCE_USERSPACE_VPN = "forceUserspaceVpn"
         const val EXTRA_DNS_AUTOMATIC = "dnsAutomatic"
         const val EXTRA_DNS_SERVER_1_HOST = TunnelVpnService.EXTRA_DNS_SERVER_1_HOST
         const val EXTRA_DNS_SERVER_1_PROTOCOL = TunnelVpnService.EXTRA_DNS_SERVER_1_PROTOCOL

@@ -67,6 +67,10 @@ typedef struct {
   uint8_t ip_dst[4];
   /** Lazily initialized per-direction cipher/HMAC contexts; reset on struct copy, freed on close. */
   esp_crypto_cache_t cache;
+  /** Optional framed transport hooks for Tier 2 root ESP-over-helper-pipe fallback (NULL on direct sockets). */
+  void *io_ctx;
+  int (*io_send)(void *ctx, const uint8_t *data, size_t len);
+  int (*io_recv)(void *ctx, uint8_t *buf, size_t cap, int timeout_ms);
 } esp_keys_t;
 
 /** Reset cached crypto metadata after shallow struct copy without freeing the source contexts. */

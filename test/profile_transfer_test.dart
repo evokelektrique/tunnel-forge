@@ -959,5 +959,116 @@ void main() {
         );
       },
     );
+
+    test(
+      'round-trips forceUserspaceVpn in .tfp and tf:// and validates flag syntax',
+      () {
+        const l2tpForced = ProfileTransferEnvelope(
+          protocol: TunnelProtocol.l2tp,
+          forceUserspaceVpn: true,
+          displayName: 'Forced L2TP',
+          server: 'l2tp.example.com',
+          user: 'alice',
+          password: 'pw',
+          psk: 'psk',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+        );
+
+        final uri = l2tpForced.toTfUri();
+        expect(uri, contains('forceUserspaceVpn=1'));
+        expect(
+          ProfileTransferEnvelope.fromTfUri(uri).forceUserspaceVpn,
+          isTrue,
+        );
+
+        final jsonMap = l2tpForced.toJson();
+        expect(jsonMap['forceUserspaceVpn'], 1);
+        final decodedJson = ProfileTransferEnvelope.fromFileJson(
+          l2tpForced.toFileJson(),
+        );
+        expect(decodedJson.forceUserspaceVpn, isTrue);
+        expect(decodedJson.toProfile('p1').forceUserspaceVpn, isTrue);
+
+        // Omitted when false or PPTP.
+        const l2tpDefault = ProfileTransferEnvelope(
+          displayName: 'Default L2TP',
+          server: 'l2tp.example.com',
+          user: 'alice',
+          password: 'pw',
+          psk: 'psk',
+          dnsAutomatic: true,
+          dns1Host: '',
+          dns1Protocol: DnsProtocol.dnsOverUdp,
+          dns2Host: '',
+          dns2Protocol: DnsProtocol.dnsOverUdp,
+        );
+        expect(l2tpDefault.toTfUri(), isNot(contains('forceUserspaceVpn')));
+        expect(l2tpDefault.toJson().containsKey('forceUserspaceVpn'), isFalse);
+
+        // Accepts true/false/0/1/empty variants; PPTP ignores valid values.
+        expect(
+          ProfileTransferEnvelope.fromTfUri(
+            'tf://l2tp.example.com?forceUserspaceVpn=TRUE',
+          ).forceUserspaceVpn,
+          isTrue,
+        );
+        expect(
+          ProfileTransferEnvelope.fromTfUri(
+            'tf://l2tp.example.com?forceUserspaceVpn=false',
+          ).forceUserspaceVpn,
+          isFalse,
+        );
+        expect(
+          ProfileTransferEnvelope.fromTfUri(
+            'tf://l2tp.example.com?forceUserspaceVpn=',
+          ).forceUserspaceVpn,
+          isFalse,
+        );
+        expect(
+          ProfileTransferEnvelope.fromTfUri(
+            'tf://pptp.example.com?protocol=pptp&forceUserspaceVpn=1',
+          ).forceUserspaceVpn,
+          isFalse,
+        );
+        expect(
+          ProfileTransferEnvelope.fromJsonMap({
+            ...l2tpDefault.toJson(),
+            'forceUserspaceVpn': true,
+          }).forceUserspaceVpn,
+          isTrue,
+        );
+
+        // Rejects invalid flag values in both URI and JSON.
+        expect(
+          () => ProfileTransferEnvelope.fromTfUri(
+            'tf://l2tp.example.com?forceUserspaceVpn=maybe',
+          ),
+          throwsA(
+            isA<ProfileTransferFormatException>().having(
+              (e) => e.code,
+              'code',
+              ProfileTransferErrorCode.invalidFlagField,
+            ),
+          ),
+        );
+        expect(
+          () => ProfileTransferEnvelope.fromJsonMap({
+            ...l2tpDefault.toJson(),
+            'forceUserspaceVpn': 2,
+          }),
+          throwsA(
+            isA<ProfileTransferFormatException>().having(
+              (e) => e.code,
+              'code',
+              ProfileTransferErrorCode.invalidFlagField,
+            ),
+          ),
+        );
+      },
+    );
   });
 }

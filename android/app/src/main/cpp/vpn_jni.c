@@ -116,6 +116,18 @@ static void native_set_pptp_runtime_config(JNIEnv *env, jclass clazz, jstring jh
     (*env)->ReleaseStringUTFChars(env, jbind_iface, bind_iface);
 }
 
+static void native_set_l2tp_runtime_config(JNIEnv *env, jclass clazz, jstring jhelper_path, jstring jbind_iface,
+                                           jboolean juse_root) {
+  (void)clazz;
+  const char *helper_path = jhelper_path != NULL ? (*env)->GetStringUTFChars(env, jhelper_path, NULL) : NULL;
+  const char *bind_iface = jbind_iface != NULL ? (*env)->GetStringUTFChars(env, jbind_iface, NULL) : NULL;
+  engine_set_l2tp_runtime_config(helper_path, bind_iface, juse_root == JNI_TRUE ? 1 : 0);
+  if (helper_path != NULL)
+    (*env)->ReleaseStringUTFChars(env, jhelper_path, helper_path);
+  if (bind_iface != NULL)
+    (*env)->ReleaseStringUTFChars(env, jbind_iface, bind_iface);
+}
+
 static jint native_start_loop(JNIEnv *env, jclass clazz, jint tun_fd) {
   (void)env;
   (void)clazz;
@@ -375,6 +387,12 @@ static void native_stop_tunnel(JNIEnv *env, jclass clazz) {
   tunnel_loop_stop();
 }
 
+static jboolean native_probe_root_access(JNIEnv *env, jclass clazz, jint timeout_ms) {
+  (void)env;
+  (void)clazz;
+  return engine_probe_root_access((int)timeout_ms) ? JNI_TRUE : JNI_FALSE;
+}
+
 static int register_vpn_bridge(JNIEnv *env) {
   static const JNINativeMethod methods[] = {
       {"nativeFailure", "()[I", (void *)native_failure},
@@ -382,6 +400,8 @@ static int register_vpn_bridge(JNIEnv *env) {
        (void *)native_negotiate},
       {"nativeSetSocketProtectionEnabled", "(Z)V", (void *)native_set_socket_protection_enabled},
       {"nativeSetPptpRuntimeConfig", "(Ljava/lang/String;Ljava/lang/String;)V", (void *)native_set_pptp_runtime_config},
+      {"nativeSetL2tpRuntimeConfig", "(Ljava/lang/String;Ljava/lang/String;Z)V",
+       (void *)native_set_l2tp_runtime_config},
       {"nativeStartLoop", "(I)I", (void *)native_start_loop},
       {"nativeStartProxyLoop", "()I", (void *)native_start_proxy_loop},
       {"nativeGvisorStart", "([II)I", (void *)native_gvisor_start},
@@ -402,6 +422,7 @@ static int register_vpn_bridge(JNIEnv *env) {
       {"nativeReadVpnDnsQuery", "(I)[B", (void *)native_read_vpn_dns_query},
       {"nativeQueueVpnDnsResponse", "([B)I", (void *)native_queue_vpn_dns_response},
       {"nativeStopTunnel", "()V", (void *)native_stop_tunnel},
+      {"nativeProbeRootAccess", "(I)Z", (void *)native_probe_root_access},
   };
   jclass bridge_class = (*env)->FindClass(env, VPN_BRIDGE_CLASS);
   if (bridge_class == NULL) {
